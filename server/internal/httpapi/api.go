@@ -76,6 +76,7 @@ func (a *API) Handler() http.Handler {
 		}
 	}))
 	mux.HandleFunc("GET /v1/camps/{camp}/events", a.authorize(a.events))
+	a.sessionRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -85,7 +86,11 @@ func (a *API) Handler() http.Handler {
 			return
 		}
 		if r.Method != "GET" && r.Method != "HEAD" && r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+			maximum := int64(64 << 10)
+			if strings.HasSuffix(r.URL.Path, "/transcript") {
+				maximum = 2 << 20
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, maximum)
 			if r.ContentLength != 0 && strings.Split(r.Header.Get("Content-Type"), ";")[0] != "application/json" {
 				problem(w, 415, "json_required")
 				return
@@ -118,6 +123,8 @@ func fail(w http.ResponseWriter, err error) bool {
 		problem(w, 409, "request_conflict")
 	case errors.Is(err, camp.ErrCursor):
 		problem(w, 409, "snapshot_required")
+	case errors.Is(err, camp.ErrRevision):
+		problem(w, 409, "revision_conflict")
 	case errors.Is(err, camp.ErrInput):
 		problem(w, 400, "invalid_input")
 	default:
@@ -129,6 +136,11 @@ func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if err := d.Decode(target); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			problem(w, 413, "body_too_large")
+			return false
+		}
 		problem(w, 400, "invalid_json")
 		return false
 	}
@@ -152,7 +164,13 @@ func (a *API) authorize(next authorizedHandler) http.HandlerFunc {
 			return
 		}
 		if r.Method != "GET" {
-			if fail(w, a.Auth.Limit(r.Context(), "write:"+u.UserID, 100)) {
+			maximum := 100
+			scope := "write:" + u.UserID
+			if strings.HasSuffix(r.URL.Path, "/transcript") {
+				maximum = 12000
+				scope = "transcript:" + u.DeviceID
+			}
+			if fail(w, a.Auth.Limit(r.Context(), scope, maximum)) {
 				return
 			}
 		}

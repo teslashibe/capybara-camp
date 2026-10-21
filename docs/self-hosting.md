@@ -1,8 +1,8 @@
 # Self-hosting Capybara Camp
 
 These are V1 development templates. The current server implements Camp sign-in,
-devices, membership, projects and ordered events. Shared transcripts, remote
-execution, memory and skills are still being built. Do not treat these templates
+devices, membership, projects, selected session sharing, versioned transcripts
+and ordered events. Remote execution, memory and skills are still being built. Do not treat these templates
 as the completed V1 release or a production deployment sign-off.
 
 Every collaborating Mac connects to the same HTTPS service origin and Camp.
