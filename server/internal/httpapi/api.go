@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,10 +20,13 @@ import (
 )
 
 type API struct {
-	Pool   *pgxpool.Pool
-	Auth   *auth.Service
-	Camps  *camp.Store
-	Origin string
+	Pool        *pgxpool.Pool
+	Auth        *auth.Service
+	Camps       *camp.Store
+	Origin      string
+	streamMu    sync.Mutex
+	streams     map[string]int
+	streamCount int
 }
 type authorizedHandler func(http.ResponseWriter, *http.Request, auth.Actor)
 
@@ -77,6 +81,7 @@ func (a *API) Handler() http.Handler {
 	}))
 	mux.HandleFunc("GET /v1/camps/{camp}/events", a.authorize(a.events))
 	a.sessionRoutes(mux)
+	a.requestRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -89,6 +94,9 @@ func (a *API) Handler() http.Handler {
 			maximum := int64(64 << 10)
 			if strings.HasSuffix(r.URL.Path, "/transcript") {
 				maximum = 2 << 20
+			}
+			if strings.HasSuffix(r.URL.Path, "/requests") {
+				maximum = 128 << 10
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, maximum)
 			if r.ContentLength != 0 && strings.Split(r.Header.Get("Content-Type"), ";")[0] != "application/json" {
@@ -125,6 +133,8 @@ func fail(w http.ResponseWriter, err error) bool {
 		problem(w, 409, "snapshot_required")
 	case errors.Is(err, camp.ErrRevision):
 		problem(w, 409, "revision_conflict")
+	case errors.Is(err, camp.ErrTransition):
+		problem(w, 409, "request_state_changed")
 	case errors.Is(err, camp.ErrInput):
 		problem(w, 400, "invalid_input")
 	default:
@@ -166,9 +176,13 @@ func (a *API) authorize(next authorizedHandler) http.HandlerFunc {
 		if r.Method != "GET" {
 			maximum := 100
 			scope := "write:" + u.UserID
-			if strings.HasSuffix(r.URL.Path, "/transcript") {
+			if strings.HasSuffix(r.URL.Path, "/transcript") || (r.Method == "PUT" && strings.Contains(r.URL.Path, "/sessions/")) {
 				maximum = 12000
-				scope = "transcript:" + u.DeviceID
+				scope = "sync:" + u.DeviceID
+			}
+			if strings.Contains(r.URL.Path, "/requests/") {
+				maximum = 1200
+				scope = "requests:" + u.DeviceID
 			}
 			if fail(w, a.Auth.Limit(r.Context(), scope, maximum)) {
 				return
@@ -277,6 +291,11 @@ func (a *API) accept(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 	}
 }
 func (a *API) events(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+	if !a.reserveStream(u.DeviceID) {
+		problem(w, 429, "too_many_streams")
+		return
+	}
+	defer a.releaseStream(u.DeviceID)
 	after := int64(0)
 	raw := r.Header.Get("Last-Event-ID")
 	if raw == "" {
@@ -342,4 +361,28 @@ func (a *API) events(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 			return
 		}
 	}
+}
+
+func (a *API) reserveStream(device string) bool {
+	a.streamMu.Lock()
+	defer a.streamMu.Unlock()
+	if a.streams == nil {
+		a.streams = make(map[string]int)
+	}
+	if a.streamCount >= 128 || a.streams[device] >= 4 {
+		return false
+	}
+	a.streams[device]++
+	a.streamCount++
+	return true
+}
+func (a *API) releaseStream(device string) {
+	a.streamMu.Lock()
+	defer a.streamMu.Unlock()
+	if a.streams[device] <= 1 {
+		delete(a.streams, device)
+	} else {
+		a.streams[device]--
+	}
+	a.streamCount--
 }

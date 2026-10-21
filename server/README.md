@@ -2,9 +2,10 @@
 
 V1 is under development. This first slice implements email-code sign-in,
 revocable native-device credentials, Camp membership, invitation acceptance,
-projects, selected session sharing, versioned transcripts, atomic command
-receipts and an ordered event stream. It does not yet implement execution
-requests, planning, memory or skills. Do not deploy it as the complete V1 product.
+projects, selected session sharing, versioned transcripts, durable prompt
+requests, atomic command receipts and an ordered event stream. Native execution,
+planning, memory and skills are still being built. Do not deploy it as the
+complete V1 product.
 
 ## Run locally
 
@@ -52,6 +53,11 @@ Use `Authorization: Bearer <device-token>` after sign-in.
 | `GET /v1/camps/{camp}/sessions/{id}` | Current authorized metadata |
 | `POST /v1/camps/{camp}/sessions/{id}/transcript` | Expected transcript revision and up to 200 changed messages |
 | `GET /v1/camps/{camp}/sessions/{id}/transcript` | Pinned `revision`, `before` ordinal and `limit`; returns a bounded message page |
+| `POST /v1/camps/{camp}/sessions/{id}/requests` | Prompt, model, effort, speed and pinned source references |
+| `GET /v1/camps/{camp}/requests` | Latest 100 requests created by or addressed to this user |
+| `GET /v1/camps/{camp}/requests/{id}` | Current request state; excludes its worker lease token |
+| `POST /v1/camps/{camp}/requests/claim` | Claim one eligible request on its owning device |
+| `POST /v1/camps/{camp}/requests/{id}/actions` | Approve, start, heartbeat, cancel, finish or reconcile |
 
 Every Camp mutation requires a UUID `Idempotency-Key`. Reusing the same key for
 the same operation and payload returns its original result; a changed operation
@@ -97,5 +103,40 @@ code, then removes that container. An explicit `CAMP_TEST_DATABASE_URL` instead
 uses isolated schemas in the supplied test database. Never set it to production.
 
 The tests exercise code replay/concurrency, device revocation, invitations,
-three-member permissions, ordered events, command retries and stream revocation.
+three-member permissions, ordered events, command retries, bounded streams,
+lease expiry, cancellation races and source revocation. HTTP tests cover the
+request lifecycle; these are not evidence of a real CLI execution yet.
 Plain `go test ./...` skips PostgreSQL tests when that variable is absent.
+
+
+## Prompt request lifecycle
+
+A request freezes the prompt, model settings, target device, permission revision
+and pinned source transcript revisions. Another person's session requires both
+permission to request work and owner approval. Both participants need source
+access, and a shared destination cannot silently receive private context.
+Sharing or project-permission changes cancel queued work and request cancellation
+of active work. Titles and new transcript messages do not invalidate approval.
+
+Requests move through `pending_approval`, `queued`, `claimed` and `started`.
+`cancel_requested` asks the owner to interrupt the CLI. `completed`, `failed` and
+`cancelled` are terminal. Each mutation has a monotonic revision; clients discard
+older responses and events. A late Cancel is a no-op and cannot emit a second
+completion event.
+
+The 60-second claim lease should be renewed every 15 seconds with a new
+idempotency key. Expiry before Start can return a request to the queue. Expiry
+after Start becomes `outcome_unknown`, which blocks another execution of that
+session. Cancellation cannot remove that fence. Reconciliation requires the
+original lease and evidence of the observed result.
+
+Only the assigned device receives the claim token. Before invoking a provider,
+the native worker must persist its local attempt and acknowledge Start. It must
+not launch another CLI because a network response was lost. Repeated commands
+preserve their committed effect and return current state; a replayed expired
+claim cannot authorize work. Sources are checked again before starting.
+
+The server does not run CLIs or guarantee exactly-once provider work. Native
+outbox persistence, streaming and provider reconciliation remain required before
+this queue can execute real prompts. Externally owned terminal sessions remain
+queued until safely released. One bounded recovery loop checks expired leases.

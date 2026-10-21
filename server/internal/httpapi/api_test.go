@@ -52,6 +52,9 @@ func TestHTTPAuthorizationAndRevokedStream(t *testing.T) {
 		if token != "" {
 			r.Header.Set("Authorization", "Bearer "+token)
 		}
+		if method != "GET" {
+			r.Header.Set("Idempotency-Key", uuid.NewString())
+		}
 		if body != "" {
 			r.Header.Set("Content-Type", "application/json")
 		}
@@ -86,6 +89,36 @@ func TestHTTPAuthorizationAndRevokedStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var openStreams []*http.Response
+	for i := 0; i < 4; i++ {
+		stream := request("GET", "/v1/camps/"+c.ID+"/events", tokens[owner.UserID], "", "")
+		defer stream.Body.Close()
+		if stream.StatusCode != 200 {
+			t.Fatalf("opening stream %d: %d", i, stream.StatusCode)
+		}
+		openStreams = append(openStreams, stream)
+	}
+	excess := request("GET", "/v1/camps/"+c.ID+"/events", tokens[owner.UserID], "", "")
+	excess.Body.Close()
+	if excess.StatusCode != 429 {
+		t.Fatalf("stream limit missing: %d", excess.StatusCode)
+	}
+	for _, stream := range openStreams {
+		stream.Body.Close()
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		a.streamMu.Lock()
+		count := a.streams[owner.DeviceID]
+		a.streamMu.Unlock()
+		if count == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("disconnected streams retained")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	inv, err := a.Camps.Invite(ctx, owner, c.ID, uuid.NewString(), member.Email, "viewer")
 	if err != nil {
 		t.Fatal(err)
@@ -118,5 +151,51 @@ func TestHTTPAuthorizationAndRevokedStream(t *testing.T) {
 	}
 	if len(body) != 1 || body["error"] != "not_available" {
 		t.Fatalf("unexpected public error: %v", body)
+	}
+	project, err := a.Camps.CreateProject(ctx, owner, c.ID, uuid.NewString(), "Test project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := a.Camps.RegisterProfile(ctx, owner, uuid.NewString(), camp.ProfileInput{LocalID: strings.Repeat("b", 64), Provider: "Codex", Label: "Test profile"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := uuid.NewString()
+	sessionBody, _ := json.Marshal(camp.SessionInput{ProjectID: project.ID, ProfileID: profile.ID, LocalSessionID: uuid.NewString(), Title: "HTTP session", State: "idle", Stage: "Ready", Shared: true})
+	res = request("PUT", "/v1/camps/"+c.ID+"/sessions/"+sessionID, tokens[owner.UserID], string(sessionBody), "")
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("publish status: %d", res.StatusCode)
+	}
+	res = request("POST", "/v1/camps/"+c.ID+"/sessions/"+sessionID+"/requests", tokens[owner.UserID], `{"prompt":"HTTP request","model":"selected-model","speed":"fast"}`, "")
+	var queued camp.Request
+	if err = json.NewDecoder(res.Body).Decode(&queued); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 201 || queued.State != "queued" || queued.Revision != 1 {
+		t.Fatalf("queue response: %d %+v", res.StatusCode, queued)
+	}
+	res = request("POST", "/v1/camps/"+c.ID+"/requests/claim", tokens[owner.UserID], "", "")
+	var claimed camp.Request
+	if err = json.NewDecoder(res.Body).Decode(&claimed); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 200 || claimed.LeaseToken == "" || claimed.ID != queued.ID {
+		t.Fatal("claim did not deliver the request")
+	}
+	path := "/v1/camps/" + c.ID + "/requests/" + queued.ID + "/actions"
+	for _, action := range []camp.RequestAction{{Action: "start", LeaseToken: claimed.LeaseToken}, {Action: "cancel"}, {Action: "finish", LeaseToken: claimed.LeaseToken, Outcome: "cancelled", Evidence: "Confirmed provider cancellation"}} {
+		encoded, _ := json.Marshal(action)
+		res = request("POST", path, tokens[owner.UserID], string(encoded), "")
+		var current camp.Request
+		if err = json.NewDecoder(res.Body).Decode(&current); err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != 200 || current.LeaseToken != "" {
+			t.Fatalf("action %s: %d %+v", action.Action, res.StatusCode, current)
+		}
 	}
 }

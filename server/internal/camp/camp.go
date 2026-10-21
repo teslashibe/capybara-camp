@@ -336,6 +336,9 @@ func (s *Store) RemoveMember(ctx context.Context, a auth.Actor, id, requestID, u
 	if _, err = tx.Exec(ctx, `DELETE FROM invitations WHERE camp_id=$1 AND email=(SELECT email FROM users WHERE id=$2) AND accepted_at IS NULL`, id, user); err != nil {
 		return err
 	}
+	if err = s.invalidateMemberRequests(ctx, tx, a, id, user); err != nil {
+		return err
+	}
 	if err = emit(ctx, tx, a, id, "member.removed", map[string]string{"user_id": user}); err != nil {
 		return err
 	}

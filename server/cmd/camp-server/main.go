@@ -44,6 +44,25 @@ func run() error {
 		return err
 	}
 	a := &httpapi.API{Pool: pool, Auth: auth.New(pool, cfg.AuthSecret, cfg.PublicURL, resend.New(cfg.ResendKey, cfg.EmailFrom)), Camps: camp.New(pool, cfg.AuthSecret), Origin: cfg.PublicURL}
+	maintenanceDone := make(chan struct{})
+	go func() {
+		defer close(maintenanceDone)
+		tick := time.NewTicker(10 * time.Second)
+		defer tick.Stop()
+		for {
+			work, stop := context.WithTimeout(ctx, 5*time.Second)
+			if err := a.Camps.ReapRequests(work); err != nil && ctx.Err() == nil {
+				log.Print("Request recovery will retry")
+			}
+			stop()
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+	defer func() { cancel(); <-maintenanceDone }()
 	srv := &http.Server{Addr: cfg.Address, Handler: a.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
 	done := make(chan error, 1)
 	go func() { done <- srv.ListenAndServe() }()

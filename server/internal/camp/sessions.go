@@ -60,6 +60,7 @@ type Session struct {
 	ExternalOwner      bool      `json:"external_owner"`
 	Revision           int64     `json:"revision"`
 	TranscriptRevision int64     `json:"transcript_revision"`
+	PermissionRevision int64     `json:"permission_revision"`
 	UpdatedAt          time.Time `json:"updated_at"`
 }
 type MessageInput struct {
@@ -122,13 +123,13 @@ func (s *Store) RegisterProfile(ctx context.Context, a auth.Actor, requestID str
 }
 
 const sessionColumns = `s.id,s.camp_id,s.project_id,s.profile_id,p.provider,p.label,s.owner_user_id,s.owner_device_id,s.local_session_id,
- s.title,s.model,s.state,s.stage,s.shared,s.allow_requests,s.external_owner,s.revision,s.transcript_revision,s.updated_at`
+ s.title,s.model,s.state,s.stage,s.shared,s.allow_requests,s.external_owner,s.revision,s.transcript_revision,s.permission_revision,s.updated_at`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanSession(row rowScanner) (Session, error) {
 	var s Session
-	err := row.Scan(&s.ID, &s.CampID, &s.ProjectID, &s.ProfileID, &s.Provider, &s.ProfileLabel, &s.OwnerUserID, &s.OwnerDeviceID, &s.LocalSessionID, &s.Title, &s.Model, &s.State, &s.Stage, &s.Shared, &s.AllowRequests, &s.ExternalOwner, &s.Revision, &s.TranscriptRevision, &s.UpdatedAt)
+	err := row.Scan(&s.ID, &s.CampID, &s.ProjectID, &s.ProfileID, &s.Provider, &s.ProfileLabel, &s.OwnerUserID, &s.OwnerDeviceID, &s.LocalSessionID, &s.Title, &s.Model, &s.State, &s.Stage, &s.Shared, &s.AllowRequests, &s.ExternalOwner, &s.Revision, &s.TranscriptRevision, &s.PermissionRevision, &s.UpdatedAt)
 	return s, err
 }
 func (s *Store) readSession(ctx context.Context, q interface {
@@ -204,7 +205,7 @@ func (s *Store) PublishSession(ctx context.Context, a auth.Actor, campID, reques
 		if input.ExpectedRevision != previous.Revision {
 			return result, ErrRevision
 		}
-		_, err = tx.Exec(ctx, `UPDATE sessions SET project_id=$2,title=$3,model=$4,state=$5,stage=$6,shared=$7,allow_requests=$8,external_owner=$9,revision=revision+1,updated_at=now() WHERE id=$1`, input.ID, input.ProjectID, input.Title, input.Model, input.State, input.Stage, input.Shared, input.AllowRequests, input.ExternalOwner)
+		_, err = tx.Exec(ctx, `UPDATE sessions SET permission_revision=permission_revision+CASE WHEN project_id IS DISTINCT FROM $2 OR shared IS DISTINCT FROM $7 OR allow_requests IS DISTINCT FROM $8 THEN 1 ELSE 0 END,project_id=$2,title=$3,model=$4,state=$5,stage=$6,shared=$7,allow_requests=$8,external_owner=$9,revision=revision+1,updated_at=now() WHERE id=$1`, input.ID, input.ProjectID, input.Title, input.Model, input.State, input.Stage, input.Shared, input.AllowRequests, input.ExternalOwner)
 		if err != nil {
 			return result, err
 		}
@@ -215,6 +216,11 @@ func (s *Store) PublishSession(ctx context.Context, a auth.Actor, campID, reques
 	}
 	if isNew && result.OwnerDeviceID != a.DeviceID {
 		return Session{}, ErrDenied
+	}
+	if !isNew && result.PermissionRevision != previous.PermissionRevision {
+		if err = s.invalidateSessionRequests(ctx, tx, a, campID, result.ID); err != nil {
+			return result, err
+		}
 	}
 	kind := "session.updated"
 	if !input.Shared {
