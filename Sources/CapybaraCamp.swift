@@ -211,6 +211,14 @@ final class TranscriptWatch {
     let sharing: CampSharing
     let mentions: SessionMentions
     let planning: LocalPlanning
+    let notifications: CampNotifications
+    @Published var notificationSheet = false
+    @Published var notificationPlanVersion: Int?
+    @Published var notificationMessageID: String?
+    var cloudRestoreFinished = false
+    var hasImportedSessions = false
+    private var externalRuns: [String: String] = [:]
+    private var backgroundPoll: Task<Void, Never>?
     @Published var shareSheet: CampSession?
     @Published var contextInspection: ContextInspection?
     @Published var reviewingPlan: String?
@@ -344,6 +352,7 @@ final class TranscriptWatch {
         self.stateDirectory = stateDirectory
         self.mentions = SessionMentions(directory: stateDirectory)
         self.planning = LocalPlanning(directory: stateDirectory, makeProcess: conversationProcess)
+        self.notifications = CampNotifications(directory: stateDirectory)
         self.conversationProcess = conversationProcess
         #if CAMP_DEVELOPMENT
         cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"), vault: ProcessInfo.processInfo.environment["CAMP_DEV_EPHEMERAL_CREDENTIALS"] == "1" ? MemoryCampCredentials() : CampKeychain(), allowLoopback: true)
@@ -353,6 +362,8 @@ final class TranscriptWatch {
         cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"))
         #endif
         sharing = CampSharing(cache: cloud.cache)
+        notifications.seedPlans(planning.tickets)
+        notifications.openRequested = { [weak self] in Task { await self?.openPendingNotification() } }
         try? FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         if let index = LocalSessionIndex.read(directory: stateDirectory) {
             sessions = index.sessions; sources = index.sources; selectedID = sessions.first?.id
@@ -388,14 +399,21 @@ final class TranscriptWatch {
         cloud.worker.execute = { [weak self] local, request, prompt, history, contexts, completed in
             guard let self else { return nil }
             let references = request.sources.map { SessionReference(id: "camp:" + $0.sessionId, scope: self.cloud.scope?.key, cloud: $0) }
-            guard self.start(local, prompt: prompt, model: request.model, tuning: ModelTuning(effort: request.effort, speed: request.speed), history: history, contexts: contexts, references: references, completion: completed) else { return nil }
+            guard self.start(local, prompt: prompt, model: request.model, tuning: ModelTuning(effort: request.effort, speed: request.speed), history: history, contexts: contexts, references: references, notifyCompletion: false, completion: completed) else { return nil }
             return self.conversations[local.id]
         }
         cloud.worker.requestUpdated = { [weak cloud] value in Task { await cloud?.acceptWorkerRequest(value) } }
         cloud.requestChanged = { [weak cloud] value in cloud?.worker.changed(value) }
+        cloud.requestsObserved = { [weak self] values, scope, live in
+            guard let self else { return }
+            self.notifications.observeRequests(values, scope: scope, live: live) { self.cloudSessions[$0]?.title }
+        }
         cloud.sessionsChanged = { [weak self] sessions, projects, scope in
             guard let self else { return }
+            if scope == nil, let previous = self.notifications.scope { self.notifications.prune(scope: previous, allowed: []) }
+            self.notifications.setScope(scope)
             self.applyCloud(sessions, projects: projects)
+            if let scope { self.notifications.prune(scope: scope, allowed: Set(sessions.map { "camp:" + $0.id })) }
             if let scope, let actor = self.cloud.credential?.actor, let client = self.cloud.client, let token = self.cloud.credential?.token {
                 let transport = AuthenticatedCampPublisher(client: client, token: token)
                 self.sharing.attach(scope: scope, actor: actor, transport: transport)
@@ -433,6 +451,7 @@ final class TranscriptWatch {
         planning.changed = { [weak self] structural in
             guard let self else { return }
             if structural { self.syncPlans() }
+            if structural { self.notifications.observePlans(self.planning.tickets) }
         }
         syncPlans()
     }
@@ -548,6 +567,17 @@ final class TranscriptWatch {
         observeHistory()
         if Date() >= nextImportCheck { refresh(background: true) }
     }
+    func startBackgroundObservation() {
+        guard backgroundPoll == nil else { return }
+        Task { [weak self] in await self?.restoreCloudAndNotification() }
+        backgroundPoll = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                guard let self else { return }; self.pollUpdates()
+            }
+        }
+    }
+    deinit { backgroundPoll?.cancel() }
     func observeHistory() {
         guard view == "Chat", let s = selected else { transcriptWatch.stop(); return }
         guard !s.isCloud, s.provider != "Planning" else { transcriptWatch.stop(); return }
@@ -602,6 +632,7 @@ final class TranscriptWatch {
             }
         }
         let previousActivity = activity
+        for (id, live) in next where live.state == "running" && previousActivity[id]?.state != "running" { externalRuns[id] = UUID().uuidString }
         if activity != next { activity = next }
         for (id, previous) in previousActivity where previous.state == "running" && next[id]?.state != "running" {
             let ticket = planning.tickets.first { plan in
@@ -609,7 +640,11 @@ final class TranscriptWatch {
                 return execution.executor.session.sourceID + ":" + execution.providerSessionID == id
             }
             move(ticket?.id ?? id, .attention)
+            if next[id]?.state == "idle", let run = externalRuns[id], let session = sessions.first(where: { $0.id == (ticket?.id ?? id) }) {
+                notifications.record(key: "external:" + run, sessionID: session.id, title: session.title, kind: "finished")
+            }
         }
+        externalRuns = externalRuns.filter { next[$0.key]?.state == "running" }
         modelCatalogs = result.models
         activityError = result.errors.values.sorted().joined(separator: " · ")
         var indexes = Dictionary(uniqueKeysWithValues: sessions.enumerated().map { ($0.element.id, $0.offset) })
@@ -652,6 +687,7 @@ final class TranscriptWatch {
         }
     }
     func applyImport(_ result: ImportResult) {
+        hasImportedSessions = true
         let failedRoots = Set(result.failedRoots ?? [])
         let importedIDs = Set(result.sessions.map(\.id))
         // A temporary read failure must not remove chats or interrupt the open one.
@@ -666,6 +702,7 @@ final class TranscriptWatch {
             updatedSources.append(old)
         }
         if sources != updatedSources { sources = updatedSources }
+        notifications.prune(scope: nil, allowed: Set(updated.filter { !$0.isCloud }.map(\.id)))
         if indexChanged { sharing.localChanged() }
         if indexChanged {
             let snapshot = ImportResult(sessions: updated.filter { !$0.isCloud && !$0.isPlan }, sources: updatedSources, errors: [])
@@ -676,6 +713,7 @@ final class TranscriptWatch {
         checkPlanningSources(); planning.drain()
         if selectedID == nil { selectedID = sessions.first?.id }
         observeHistory()
+        if notifications.pendingOpen != nil { Task { await openPendingNotification() } }
     }
     func refresh(background: Bool = false) {
         guard !scanning else { if !background { refreshPending = true }; return }
@@ -703,6 +741,7 @@ final class TranscriptWatch {
     }
     func open(_ session: CampSession) {
         reviewingPlan = nil
+        notificationPlanVersion = nil; notificationMessageID = nil
         if selectedID != session.id {
             if let previous = selectedID { drafts[previous] = draft }
             draft = drafts[session.id] ?? ""
@@ -838,7 +877,7 @@ final class TranscriptWatch {
     }
     @discardableResult
     func start(_ s: CampSession, prompt: String, model: String, tuning: ModelTuning, queuedID: String? = nil,
-               history: [Message]? = nil, contexts: [SessionContext] = [], references: [SessionReference] = [], completion: ((ConversationResult) -> Void)? = nil) -> Bool {
+               history: [Message]? = nil, contexts: [SessionContext] = [], references: [SessionReference] = [], notifyCompletion: Bool = true, completion: ((ConversationResult) -> Void)? = nil) -> Bool {
         let s = planning.ticket(s.id)?.session ?? s
         let execution = planning.ticket(s.id)?.implementation
         guard !s.isCloud, s.provider != "Planning", conversations[s.id] == nil else { banner = "This session already has a running turn"; return false }
@@ -888,6 +927,10 @@ final class TranscriptWatch {
             if result.state != "completed" { self.pauseQueue(s.id, true); self.markUncertainQueue(queuedID) }
             else if let queuedID { self.queuedPrompts.removeAll { $0.id == queuedID }; self.saveQueue() }
             self.move(s.id, .attention)
+            if notifyCompletion, result.state != "cancelled" {
+                self.notifications.record(key: "turn:" + attempt, sessionID: s.id, title: s.title,
+                    kind: result.state == "completed" ? "finished" : "attention", messageID: run.messages.last(where: { $0.role == "assistant" })?.id)
+            }
             if visible { self.loadHistory() }
             completion?(result)
             self.sharing.localChanged()
@@ -1006,7 +1049,8 @@ struct Mascot: View {
     }
 }
 struct RootView: View {
-    @StateObject var store = CampStore()
+    @ObservedObject var store: CampStore
+    @Environment(\.openWindow) private var openWindow
     @State private var showCamp = false
     var body: some View {
         HStack(spacing: 0) {
@@ -1024,9 +1068,13 @@ struct RootView: View {
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }.foregroundStyle(campInk).background(campCream)
         .frame(minWidth: 1060, minHeight: 720)
-        .onAppear { store.refresh() }
-        .task { await store.cloud.restore() }
-        .task { while !Task.isCancelled { try? await Task.sleep(for: .seconds(5)); if !Task.isCancelled { store.pollUpdates() } } }
+        .onAppear {
+            store.refresh(); store.startBackgroundObservation()
+            AppDelegate.reopen = { openWindow(id: "camp") }
+            AppDelegate.prepareToQuit = { [weak store] in await store?.notifications.flush() }
+        }
+        .sheet(isPresented: $store.notificationSheet) { CampNotificationsView(store: store, notices: store.notifications) }
+        .overlay(alignment: .topTrailing) { CampNotificationToast(store: store, notices: store.notifications).padding(22) }
         .onChange(of: store.view) { _, value in store.observeHistory(); if value == "Chat" { store.loadHistory() } }
         .sheet(isPresented: $store.sourceSheet) { SourcesView(store: store) }
         .sheet(isPresented: $showCamp) { CampConnectionView(cloud: store.cloud) }
@@ -1078,6 +1126,7 @@ struct RootView: View {
                 Spacer()
                 Button("Plan together") { store.newPlan() }
                 CampConnectionButton(cloud: store.cloud) { showCamp = true }
+                CampNotificationButton(notices: store.notifications) { store.notificationSheet = true }
             }
             HStack {
                 Picker("View", selection: $store.view) { Text("Board").tag("Board"); Text("Chat").tag("Chat") }.pickerStyle(.segmented).frame(width: 180)
@@ -1262,7 +1311,7 @@ struct ChatView: View {
                             VStack(alignment: .leading, spacing: 22) {
                                 if s.isCloud ? store.remoteHasMore : store.historyTotal > store.messages.count { Button("Load earlier messages") { store.loadHistory(more: true) }.font(.caption) }
                                 if store.loading { ProgressView().controlSize(.small) }
-                                ForEach(store.messages) { m in MessageView(message: m) }
+                                ForEach(store.messages) { m in MessageView(message: m).id(m.id) }
                                 if store.runningID == s.id { MessageView(message: Message(id: "live", role: "assistant", text: store.liveText.isEmpty ? "Thinking…" : store.liveText)) }
                                 Color.clear.frame(height: 1).id("bottom")
                                     .background(GeometryReader { geometry in
@@ -1271,8 +1320,10 @@ struct ChatView: View {
                             }.padding(25)
                         }.coordinateSpace(name: "transcript")
                         .onReceive(store.$messages) { new in
-                            DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo("bottom", anchor: .bottom) } }
+                            let target = store.notificationMessageID.flatMap { id in new.contains(where: { $0.id == id }) ? id : nil } ?? "bottom"
+                            DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo(target, anchor: .bottom) } }
                         }
+                        .onChange(of: store.notificationMessageID) { _, id in if let id, store.messages.contains(where: { $0.id == id }) { proxy.scrollTo(id, anchor: .bottom) } }
                         .onChange(of: store.liveText) { _, _ in
                             DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo("bottom", anchor: .bottom) } }
                         }
@@ -1451,7 +1502,19 @@ struct SourcesView: View {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    @MainActor static var reopen: (() -> Void)?
+    @MainActor static var prepareToQuit: (() async -> Void)?
+    private var quitting = false
+    func applicationWillFinishLaunching(_ notification: Notification) { MacNoticeDelivery.shared.install() }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { if !flag { Self.reopen?() }; return true }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !quitting else { return .terminateLater }
+        guard let prepare = Self.prepareToQuit else { return .terminateNow }
+        quitting = true
+        Task { await prepare(); sender.reply(toApplicationShouldTerminate: true) }
+        return .terminateLater
+    }
     func applicationWillTerminate(_ notification: Notification) {
         for process in Bridge.activeProcesses.values where process.isRunning { process.terminate() }
     }
@@ -1459,8 +1522,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 #if !CAMP_TESTING
 @main struct CapybaraCampApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
+    @StateObject private var store = CampStore()
     var body: some Scene {
-        Window("Capybara Camp", id: "camp") { RootView().preferredColorScheme(.light) }
+        Window("Capybara Camp", id: "camp") { RootView(store: store).preferredColorScheme(.light) }
             .windowStyle(.hiddenTitleBar).defaultSize(width: 1370, height: 860)
     }
 }

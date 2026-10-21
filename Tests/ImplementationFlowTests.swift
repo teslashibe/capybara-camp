@@ -77,7 +77,7 @@ import Foundation
         precondition(store.planningProfiles("Claude").count == 1)
         let external = execution.messages + [Message(id: "terminal-user", role: "user", text: "Continued in terminal"), Message(id: "terminal-assistant", role: "assistant", text: "Streaming from terminal")]
         store.implementationTranscriptReader = { source, _ in
-            precondition(source.id == mirror.id, "Read the physical provider session while retaining the logical card")
+            precondition(source.sessionID == mirror.sessionID && source.root == mirror.root, "Read the physical provider session while retaining the logical card")
             return Transcript(messages: external, total: external.count)
         }
         store.loadHistory(silent: true)

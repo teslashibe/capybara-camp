@@ -11,12 +11,12 @@ python3 -m unittest discover -s Tests -v
 swiftc -parse-as-library -emit-library -emit-module -enable-testing -D CAMP_TESTING \
   -swift-version 5 -module-name CampTestSupport \
   -emit-module-path build/test-support/CampTestSupport.swiftmodule \
-  -framework SwiftUI -framework AppKit -framework Security -lsqlite3 Sources/*.swift \
+  -framework SwiftUI -framework AppKit -framework Security -framework UserNotifications -lsqlite3 Sources/*.swift \
   -Xlinker -install_name -Xlinker @rpath/libCampTestSupport.dylib \
   -o build/test-support/libCampTestSupport.dylib
 WORK="$(mktemp -d "$ROOT/build/.camp-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-for suite in CampStateTests CampCloudTests CampSharingTests LocalConversationTests CampWorkerTests SessionMentionsTests LocalPlanningTests ExecutionApprovalTests ImplementationFlowTests; do
+for suite in CampStateTests CampCloudTests CampSharingTests LocalConversationTests CampWorkerTests SessionMentionsTests LocalPlanningTests ExecutionApprovalTests ImplementationFlowTests CampNotificationTests; do
   printf '%s\n' '@testable import CampTestSupport' > "$WORK/$suite.swift"
   cat "Tests/$suite.swift" >> "$WORK/$suite.swift"
   swiftc -parse-as-library -swift-version 5 -I build/test-support -L build/test-support \

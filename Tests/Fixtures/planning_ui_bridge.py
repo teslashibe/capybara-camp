@@ -59,6 +59,7 @@ elif action == 'conversation':
                 emit(dict(type='cancelled')); sys.exit(0)
             if control.get('type') == 'approval' and control.get('id') == ident:
                 if control.get('allow'):
+                    time.sleep(min(10, max(0, float(os.environ.get('CAMP_FIXTURE_COMPLETION_DELAY', '0')))))
                     (root/'implementation-proof.txt').write_text('Implemented with '+request['model'])
                     emit(dict(type='approvalResolved', requestID=ident))
                     emit(dict(type='text', text='Implementation completed with '+request['model']+'\n\nThe synthetic change was approved and the original planning history is retained'))

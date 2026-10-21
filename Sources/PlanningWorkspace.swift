@@ -106,6 +106,7 @@ struct PlanningWorkspace: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var profiles: [String: [CampSession]] = [:]
     @State private var reviewedUnknown = false
+    @State private var expandedVersions: Set<Int> = []
     var plan: LocalPlan? { planning.ticket(id) }
     var body: some View {
         if let plan {
@@ -176,8 +177,10 @@ struct PlanningWorkspace: View {
                     footer(plan)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .task(id: "\(id):\(plan.current.number)") {
-                brief = plan.current.brief; section = "Plans"
+            .task(id: "\(id):\(plan.current.number):\(store.notificationPlanVersion ?? 0)") {
+                brief = plan.current.brief
+                section = store.notificationPlanVersion.map { $0 == plan.current.number ? "Combined plan" : "History" } ?? "Plans"
+                if let version = store.notificationPlanVersion { expandedVersions.insert(version) }
                 reviewedUnknown = false
                 profiles = ["Codex": store.planningProfiles("Codex"), "Claude": store.planningProfiles("Claude")]
             }
@@ -251,7 +254,7 @@ struct PlanningWorkspace: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 ForEach(plan.versions.reversed()) { version in
-                    DisclosureGroup("Version \(version.number) · \(version.state.replacingOccurrences(of: "_", with: " "))") {
+                    DisclosureGroup("Version \(version.number) · \(version.state.replacingOccurrences(of: "_", with: " "))", isExpanded: Binding(get: { expandedVersions.contains(version.number) }, set: { expanded in if expanded { expandedVersions.insert(version.number) } else { expandedVersions.remove(version.number) } })) {
                         VStack(alignment: .leading, spacing: 18) {
                             Text(version.brief).font(.system(size: 12)).textSelection(.enabled)
                             ForEach(version.planners, id: \.session.id) { planner in Text("\(planner.session.provider) · \(planner.model) · \(ModelMenu.effortName(planner.tuning.effort)) effort · \(ModelMenu.speedName(planner.tuning.speed))").font(.system(size: 10)).foregroundStyle(campMuted) }

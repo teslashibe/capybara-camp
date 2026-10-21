@@ -21,6 +21,7 @@ import SwiftUI
     var sessionsChanged: (([CloudSession], [CloudProject], CloudScope?) -> Void)?
     var transcriptChanged: ((String) -> Void)?
     var requestChanged: ((CloudRequest) -> Void)?
+    var requestsObserved: (([CloudRequest], CloudScope, Bool) -> Void)?
     private(set) var credential: CloudCredential?
     private(set) var scope: CloudScope?
     private(set) var cache: CampCache?
@@ -138,6 +139,7 @@ import SwiftUI
                 projects = snapshot.projects; members = snapshot.members
             } else { projects = []; members = [] }
             sessionsChanged?(sessions, projects, scope)
+            requestsObserved?(requests, scope, false)
         } catch { self.error = error.localizedDescription }
     }
     private func synchronize(scope: CloudScope, generation token: UUID) async throws {
@@ -262,6 +264,7 @@ import SwiftUI
             self.sessions = self.sessionIndex.values.sorted { $0.updatedAt > $1.updatedAt }
             self.requests = self.requestIndex.values.sorted { $0.createdAt > $1.createdAt }
             self.sessionsChanged?(self.sessions, self.projects, self.scope)
+            if let scope = self.scope { self.requestsObserved?(self.requests, scope, true) }
         }
     }
     private func clearVisible() {
