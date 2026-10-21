@@ -69,9 +69,49 @@ struct CloudRequest: Codable, Identifiable, Equatable, Sendable {
 }
 struct CloudEvent: Codable, Sendable {
     struct Payload: Codable, Sendable {
-        var sessionId: String?; var requestId: String?; var revision: Int64?; var transcriptRevision: Int64?; var state: String?; var automatic: Bool?
+        var sessionId: String?; var requestId: String?; var revision: Int64?; var transcriptRevision: Int64?; var state: String?; var automatic: Bool?; var planId: String?
     }
     var cursor: Int64; var kind: String; var actorId: String; var payload: Payload
+}
+struct CloudNotification: Codable, Equatable, Identifiable, Sendable {
+    var id: String
+    var kind: String
+    var title: String
+    var sessionId: String?
+    var requestId: String?
+    var planId: String?
+    var planVersion: Int?
+    var revision: Int64
+    var read: Bool
+    var createdAt: Date
+    var valid: Bool {
+        UUID(uuidString: id) != nil && revision > 0 && title.utf8.count <= 2000 && ["finished", "attention", "plan"].contains(kind) &&
+        ((sessionId.flatMap(UUID.init(uuidString:)) != nil && requestId.flatMap(UUID.init(uuidString:)) != nil && planId == nil && planVersion == nil && kind != "plan") ||
+         (planId.flatMap(UUID.init(uuidString:)) != nil && (planVersion ?? 0) > 0 && sessionId == nil && requestId == nil && kind != "finished"))
+    }
+    func key(scope: CloudScope) -> String {
+        if let requestId { return "request:\(scope.key):\(requestId)" }
+        return "cloud-plan:\(scope.key):\(planId ?? ""):\(planVersion ?? 0)"
+    }
+}
+struct CloudNotificationPage: Codable, Sendable { var notifications: [CloudNotification]; var next: String; var unread: Int }
+struct CloudNotificationAction: Codable, Sendable { var ids: [String]; var action: String }
+struct CloudPlanningResult: Codable, Sendable {
+    struct Planner: Codable, Sendable { var slot: Int; var sessionId: String; var provider: String; var model: String; var effort: String; var speed: String }
+    struct Step: Codable, Identifiable, Sendable { var ordinal: Int; var slot: Int; var phase: String; var state: String; var output: String; var id: Int { ordinal } }
+    struct Version: Codable, Sendable { var version: Int; var state: String; var brief: String; var planners: [Planner]; var steps: [Step]; var sources: [CloudSourceRef] }
+    var id: String; var title: String; var projectId: String; var version: Version
+    var referencedSessions: Set<String> { Set(version.planners.map(\.sessionId) + version.sources.map(\.sessionId)) }
+    var valid: Bool {
+        UUID(uuidString: id) != nil && UUID(uuidString: projectId) != nil && title.utf8.count <= 2000 &&
+        version.version > 0 && version.brief.utf8.count <= 8192 && version.planners.count == 2 &&
+        Set(version.planners.map(\.provider)) == ["Codex", "Claude"] && Set(version.planners.map(\.slot)) == [0, 1] &&
+        version.planners.allSatisfy { $0.model.utf8.count <= 200 && UUID(uuidString: $0.sessionId) != nil } &&
+        version.sources.count <= 20 && version.sources.allSatisfy { UUID(uuidString: $0.sessionId) != nil } && version.steps.count <= 5 &&
+        Set(version.steps.map(\.id)).count == version.steps.count && version.steps.allSatisfy {
+            $0.output.utf8.count <= 8192 && (0...1).contains($0.slot) && (0..<5).contains($0.ordinal) && ["draft", "review", "merge"].contains($0.phase)
+        }
+    }
 }
 struct CloudInvitation: Codable, Sendable { var id: String; var token: String; var expiresAt: Date }
 

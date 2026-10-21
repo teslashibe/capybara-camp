@@ -215,6 +215,8 @@ final class TranscriptWatch {
     @Published var notificationSheet = false
     @Published var notificationPlanVersion: Int?
     @Published var notificationMessageID: String?
+    @Published var sharedPlanResult: CloudPlanningResult?
+    var sharedPlanScope: CloudScope?
     var cloudRestoreFinished = false
     var hasImportedSessions = false
     private var externalRuns: [String: String] = [:]
@@ -404,16 +406,29 @@ final class TranscriptWatch {
         }
         cloud.worker.requestUpdated = { [weak cloud] value in Task { await cloud?.acceptWorkerRequest(value) } }
         cloud.requestChanged = { [weak cloud] value in cloud?.worker.changed(value) }
-        cloud.requestsObserved = { [weak self] values, scope, live in
-            guard let self else { return }
-            self.notifications.observeRequests(values, scope: scope, live: live) { self.cloudSessions[$0]?.title }
+        cloud.notificationsChanged = { [weak self] values, scope, live in self?.notifications.applyCloud(values, scope: scope, live: live) }
+        cloud.planningChanged = { [weak self] id in
+            guard let self, self.sharedPlanResult?.id == id else { return }
+            self.sharedPlanResult = nil; self.view = "Board"
+            self.banner = "This plan changed. Open its current result from Notifications"
+        }
+        notifications.cloudAction = { [weak cloud] scope, ids, action in
+            guard let cloud else { throw CampCloudError.cacheUnavailable }
+            try await cloud.queueNotificationAction(scope: scope, ids: ids, action: action)
         }
         cloud.sessionsChanged = { [weak self] sessions, projects, scope in
             guard let self else { return }
             if scope == nil, let previous = self.notifications.scope { self.notifications.prune(scope: previous, allowed: []) }
             self.notifications.setScope(scope)
             self.applyCloud(sessions, projects: projects)
-            if let scope { self.notifications.prune(scope: scope, allowed: Set(sessions.map { "camp:" + $0.id })) }
+            if let result = self.sharedPlanResult,
+               self.sharedPlanScope != scope || !result.referencedSessions.isSubset(of: Set(sessions.map(\.id))) {
+                self.sharedPlanResult = nil; self.view = "Board"
+            }
+            if let scope {
+                let plans = self.notifications.entries.filter { $0.scope == scope && $0.cloudPlanID != nil }.map(\.sessionID)
+                self.notifications.prune(scope: scope, allowed: Set(sessions.map { "camp:" + $0.id } + plans))
+            }
             if let scope, let actor = self.cloud.credential?.actor, let client = self.cloud.client, let token = self.cloud.credential?.token {
                 let transport = AuthenticatedCampPublisher(client: client, token: token)
                 self.sharing.attach(scope: scope, actor: actor, transport: transport)
@@ -740,6 +755,7 @@ final class TranscriptWatch {
         }
     }
     func open(_ session: CampSession) {
+        sharedPlanResult = nil
         reviewingPlan = nil
         notificationPlanVersion = nil; notificationMessageID = nil
         if selectedID != session.id {
@@ -1063,6 +1079,7 @@ struct RootView: View {
                         .font(.system(size: 12)).padding(14).background(Color(hex: 0xF5E7D4))
                 }
                 if store.view == "Board" { BoardView(store: store) }
+                else if let result = store.sharedPlanResult { SharedPlanningResultView(store: store, result: result) }
                 else if let id = store.selectedID, let plan = store.planning.ticket(id), plan.implementation == nil || store.reviewingPlan == id { PlanningWorkspace(store: store, planning: store.planning, id: id) }
                 else { ChatView(store: store) }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1122,7 +1139,7 @@ struct RootView: View {
     var header: some View {
         VStack(alignment: .leading, spacing: 19) {
             HStack {
-                VStack(alignment: .leading, spacing: 5) { Text(store.view == "Board" ? "Your Camp for big ideas" : store.selected?.title ?? "Choose a session").font(.system(size: 23, weight: .semibold)).lineLimit(1); Text(store.view == "Board" ? "\(store.filtered.count.formatted()) \(store.filtered.count == 1 ? "session" : "sessions") · Pick up where you left off" : "\(store.selected?.provider ?? "") · \(store.selected?.project ?? "")").font(.system(size: 12)).foregroundStyle(campMuted) }
+                VStack(alignment: .leading, spacing: 5) { Text(store.view == "Board" ? "Your Camp for big ideas" : store.sharedPlanResult?.title ?? store.selected?.title ?? "Choose a session").font(.system(size: 23, weight: .semibold)).lineLimit(1); Text(store.view == "Board" ? "\(store.filtered.count.formatted()) \(store.filtered.count == 1 ? "session" : "sessions") · Pick up where you left off" : store.sharedPlanResult != nil ? "Planning · Shared Camp" : "\(store.selected?.provider ?? "") · \(store.selected?.project ?? "")").font(.system(size: 12)).foregroundStyle(campMuted) }
                 Spacer()
                 Button("Plan together") { store.newPlan() }
                 CampConnectionButton(cloud: store.cloud) { showCamp = true }

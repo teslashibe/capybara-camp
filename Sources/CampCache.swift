@@ -164,6 +164,15 @@ actor CampCache {
     func requests(_ scope: CloudScope) throws -> [CloudRequest] {
         try rows("SELECT body FROM requests WHERE scope=? ORDER BY rowid DESC LIMIT 1000", [.text(scope.key)]) { try CampWire.decoder().decode(CloudRequest.self, from: blob($0, 0)) }.sorted { $0.createdAt > $1.createdAt }
     }
+    func notifications(_ scope: CloudScope) throws -> [CloudNotification] {
+        guard let data = try metadata("notifications:" + scope.key) else { return [] }
+        return try CampWire.decoder().decode([CloudNotification].self, from: data)
+    }
+    func saveNotifications(_ values: [CloudNotification], scope: CloudScope, expectedEpoch: Int64) throws {
+        try checkEpoch(scope, expectedEpoch)
+        guard values.count <= 1000, values.allSatisfy(\.valid), Set(values.map(\.id)).count == values.count else { throw CampCloudError.invalidResponse }
+        try setMetadata("notifications:" + scope.key, CampWire.encoder().encode(values))
+    }
     func saveTranscript(_ transcript: CloudTranscript, scope: CloudScope, sessionId: String, before: Int64 = 0, expectedPermissionRevision: Int64? = nil, expectedEpoch: Int64? = nil) throws {
         guard transcript.revision >= 0, before >= 0, transcript.messages.count <= 200 else { throw CampCloudError.invalidResponse }
         let floor = transcript.hasMore ? transcript.before : 0
@@ -199,9 +208,10 @@ actor CampCache {
         try execute("INSERT INTO outbox(id,scope,method,path,body,state,created) VALUES(?,?,?,?,?,'pending',?)", [.text(id), .text(scope.key), .text(method), .text(path), .blob(body), .integer(Int64(Date().timeIntervalSince1970 * 1000))])
         return id
     }
-    func outbox(_ scope: CloudScope, pendingOnly: Bool = false) throws -> [CloudOutboxItem] {
+    func outbox(_ scope: CloudScope, pendingOnly: Bool = false, limit: Int = 100) throws -> [CloudOutboxItem] {
+        guard (1...1000).contains(limit) else { throw CampCloudError.invalidResponse }
         let suffix = pendingOnly ? " AND state='pending'" : ""
-        return try rows("SELECT id,scope,method,path,body,state,error FROM outbox WHERE scope=?" + suffix + " ORDER BY created,rowid LIMIT 100", [.text(scope.key)]) {
+        return try rows("SELECT id,scope,method,path,body,state,error FROM outbox WHERE scope=?" + suffix + " ORDER BY created,rowid LIMIT ?", [.text(scope.key), .integer(Int64(limit))]) {
             CloudOutboxItem(id: text($0, 0), scope: text($0, 1), method: text($0, 2), path: text($0, 3), body: blob($0, 4), state: text($0, 5), error: text($0, 6))
         }
     }
@@ -276,6 +286,7 @@ actor CampCache {
             for table in ["sessions", "requests", "messages", "tombstones", "outbox", "share_bindings", "published_message_hashes"] { try execute("DELETE FROM \(table) WHERE scope=?", [.text(scope.key)]) }
             try execute("DELETE FROM metadata WHERE key=?", [.text("cursor:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("snapshot:" + scope.key)])
+            try execute("DELETE FROM metadata WHERE key=?", [.text("notifications:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("worker-claim:" + scope.key)])
             for var attempt in try attempts(scope) {
                 if ["completed", "failed", "cancelled"].contains(attempt.state) {

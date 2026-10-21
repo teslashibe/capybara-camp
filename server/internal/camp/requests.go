@@ -295,7 +295,10 @@ func emitRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, r Request, kind s
 		return err
 	}
 	_, err := tx.Exec(ctx, `UPDATE events SET session_id=$2,plan_id=NULLIF($3,'')::uuid WHERE camp_id=$1 AND cursor=(SELECT event_cursor FROM camps WHERE id=$1)`, r.CampID, r.SessionID, r.PlanID)
-	return err
+	if err != nil {
+		return err
+	}
+	return notifyRequest(ctx, tx, a, r)
 }
 
 // ClaimRequest never starts a provider. The worker must durably mark its local

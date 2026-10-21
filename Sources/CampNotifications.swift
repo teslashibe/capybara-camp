@@ -13,6 +13,8 @@ struct CampNotice: Codable, Equatable, Identifiable, Sendable {
     var read = false
     var planVersion: Int?
     var messageID: String?
+    var cloudID: String?
+    var cloudPlanID: String?
     var summary: String {
         switch kind { case "plan": return "Plan ready to review"; case "attention": return "Task needs attention"; default: return "Task finished" }
     }
@@ -25,16 +27,10 @@ struct CampNoticePreferences: Codable, Equatable {
     var toasts = true
 }
 
-private struct NoticeWatch: Codable, Equatable {
-    var id: String
-    var sessionID: String
-    var scope: CloudScope
-}
 private struct NoticeArchive: Codable {
     var version = 1
     var entries: [CampNotice] = []
     var seen: [String] = []
-    var watching: [NoticeWatch] = []
     var preferences = CampNoticePreferences()
 }
 
@@ -121,6 +117,7 @@ extension NoticeDelivery { func updateBadge(_ count: Int) async {} }
     @Published private(set) var scope: CloudScope?
     @Published var pendingOpen: String? { didSet { if pendingOpen != nil { openRequested?() } } }
     var openRequested: (() -> Void)?
+    var cloudAction: ((CloudScope, [String], String) async throws -> Void)?
     @Published private(set) var error = ""
     @Published private(set) var permissionBusy = false
     private var archive = NoticeArchive()
@@ -149,7 +146,7 @@ extension NoticeDelivery { func updateBadge(_ count: Int) async {} }
                 let size = (try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.intValue ?? Int.max
                 guard size <= 4 << 20 else { throw CampError.message("Notification history exceeds its storage limit") }
                 archive = try JSONDecoder().decode(NoticeArchive.self, from: Data(contentsOf: file))
-                guard archive.version == 1, archive.entries.count <= 1000, archive.seen.count <= 4096, archive.watching.count <= 1024,
+                guard archive.version == 1, archive.entries.count <= 1000, archive.seen.count <= 4096,
                       Set(archive.entries.map(\.id)).count == archive.entries.count,
                       archive.entries.allSatisfy({ $0.id.count == 64 && $0.title.utf8.count <= 1024 && $0.sessionID.utf8.count <= 512 && ["finished", "attention", "plan"].contains($0.kind) }) else { throw CampError.message("Notification history is invalid") }
             } catch { archive = NoticeArchive(); readable = false; self.error = "Notification history could not be opened" }
@@ -222,7 +219,7 @@ extension NoticeDelivery { func updateBadge(_ count: Int) async {} }
         let id = PublishMessage.hash(Data(key.utf8))
         guard !seen.contains(id), ["finished", "attention", "plan"].contains(kind), sessionID.utf8.count <= 512 else { return false }
         var next = archive
-        remembered(id, in: &next); next.watching.removeAll { $0.id == id }
+        remembered(id, in: &next)
         let notice = CampNotice(id: id, sessionID: sessionID, scope: scope, title: String(title.prefix(200)), kind: kind, created: Date(), planVersion: planVersion, messageID: messageID)
         next.entries.insert(notice, at: 0)
         let removed = next.entries.dropFirst(1000).map(\.id)
@@ -268,50 +265,72 @@ extension NoticeDelivery { func updateBadge(_ count: Int) async {} }
                    kind: plan.current.state == "ready" ? "plan" : "attention", planVersion: plan.current.number)
         }
     }
-    func observeRequests(_ requests: [CloudRequest], scope: CloudScope, live: Bool = false, title: (String) -> String?) {
-        guard self.scope == scope else { return }
-        for request in requests {
-            let key = "request:\(scope.key):\(request.id)", id = PublishMessage.hash(Data(key.utf8))
-            if seen.contains(id) {
-                if request.state == "completed", let index = archive.entries.firstIndex(where: { $0.id == id && $0.kind == "attention" }) {
-                    var next = archive; next.entries[index].kind = "finished"; _ = persist(next)
-                }
-                continue
-            }
-            let sessionID = "camp:" + request.sessionId
-            let terminal = ["completed", "failed", "cancelled", "outcome_unknown"].contains(request.state)
-            let followed = archive.watching.contains { $0.id == id }
-            if terminal && (followed || live) && request.state != "cancelled", let label = title(sessionID) {
-                record(key: key, sessionID: sessionID, title: label, kind: request.state == "completed" ? "finished" : "attention", scope: scope, notify: live)
-            } else if terminal {
-                var next = archive; remembered(id, in: &next); next.watching.removeAll { $0.id == id }; _ = persist(next)
-            } else if !followed, title(sessionID) != nil {
-                var next = archive; next.watching.append(NoticeWatch(id: id, sessionID: sessionID, scope: scope))
-                next.watching = Array(next.watching.suffix(1024)); _ = persist(next)
-            }
+    func applyCloud(_ values: [CloudNotification], scope: CloudScope, live: Bool) {
+        guard self.scope == scope, values.count <= 1000, values.allSatisfy(\.valid) else { return }
+        var next = archive, alerts: [CampNotice] = []
+        let incoming = values.map { value -> CampNotice in
+            let id = PublishMessage.hash(Data(value.key(scope: scope).utf8))
+            let notice = CampNotice(id: id, sessionID: value.sessionId.map { "camp:" + $0 } ?? "camp-plan:" + (value.planId ?? ""),
+                scope: scope, title: value.title, kind: value.kind, created: value.createdAt, read: value.read,
+                planVersion: value.planVersion, cloudID: value.id, cloudPlanID: value.planId)
+            if !seen.contains(id) && live && !value.read { alerts.append(notice) }
+            remembered(id, in: &next)
+            return notice
+        }
+        let keep = Set(incoming.filter { !$0.read }.map(\.id))
+        let removed = next.entries.filter { $0.scope == scope && !keep.contains($0.id) }.map(\.id)
+        next.entries.removeAll { $0.scope == scope }
+        next.entries += incoming
+        next.entries = Array(next.entries.sorted { $0.created > $1.created }.prefix(1000))
+        if persist(next) {
+            delivery.remove(removed)
+            if let toast, removed.contains(toast.id) { dismissToast() }
+            for notice in alerts { pendingAlerts.append((revision, notice, deliveryGeneration)) }
         }
     }
     func prune(scope: CloudScope?, allowed: Set<String>) {
         let removed = archive.entries.filter { $0.scope == scope && !allowed.contains($0.sessionID) }.map(\.id)
         var next = archive
         next.entries.removeAll { removed.contains($0.id) }
-        next.watching.removeAll { $0.scope == scope && !allowed.contains($0.sessionID) }
-        guard next.entries != archive.entries || next.watching != archive.watching else { return }
+        guard next.entries != archive.entries else { return }
         if persist(next) { deliveryGeneration = UUID(); delivery.remove(removed); if let toast, removed.contains(toast.id) { dismissToast() } }
     }
-    func markRead(_ id: String) {
+    func markRead(_ id: String) async {
+        let originalScope = scope
+        guard let notice = archive.entries.first(where: { $0.id == id }), !notice.read else { return }
+        if let scope = notice.scope, let remote = notice.cloudID {
+            do { guard let cloudAction else { return }; try await cloudAction(scope, [remote], "read") }
+            catch { self.error = "Could not queue the shared read receipt"; return }
+        }
+        guard scope == originalScope else { return }
         var next = archive
         guard let index = next.entries.firstIndex(where: { $0.id == id && ($0.scope == nil || $0.scope == scope) }) else { return }
         next.entries[index].read = true
         if persist(next) { delivery.remove([id]); if toast?.id == id { dismissToast() } }
     }
-    func markAllRead() {
+    func markAllRead() async {
+        let originalScope = scope
         let ids = Set(visible.filter { !$0.read }.map(\.id)); var next = archive
+        let shared = visible.filter { !$0.read }.compactMap(\.cloudID)
+        if !shared.isEmpty, let scope {
+            do { guard let cloudAction else { return }; try await cloudAction(scope, shared, "read") }
+            catch { self.error = "Could not queue the shared read receipts"; return }
+            next = archive
+        }
+        guard scope == originalScope else { return }
         for index in next.entries.indices where ids.contains(next.entries[index].id) { next.entries[index].read = true }
         if persist(next) { delivery.remove(Array(ids)); dismissToast() }
     }
-    func clearRead() {
+    func clearRead() async {
+        let originalScope = scope
         let ids = Set(visible.filter(\.read).map(\.id)); var next = archive
+        let shared = visible.filter(\.read).compactMap(\.cloudID)
+        if !shared.isEmpty, let scope {
+            do { guard let cloudAction else { return }; try await cloudAction(scope, shared, "archive") }
+            catch { self.error = "Could not queue the shared inbox change"; return }
+            next = archive
+        }
+        guard scope == originalScope else { return }
         next.entries.removeAll { ids.contains($0.id) }
         if persist(next) { delivery.remove(Array(ids)) }
     }
@@ -371,6 +390,22 @@ extension CampStore {
             }
             guard let client = cloud.client, let credential = cloud.credential else { return }
             do {
+                if let remoteID = notice.cloudID {
+                    let current = try await client.get(CloudNotification.self, path: "/v1/camps/\(scope.campId)/notifications/\(remoteID)", token: credential.token)
+                    guard current.valid, current.id == remoteID,
+                          PublishMessage.hash(Data(current.key(scope: scope).utf8)) == notice.id,
+                          current.planId == notice.cloudPlanID,
+                          current.planId != nil || "camp:" + (current.sessionId ?? "") == notice.sessionID,
+                          cloud.scope == scope, cloud.credential?.token == credential.token else { throw CampCloudError.invalidResponse }
+                    if let planID = current.planId, let version = current.planVersion {
+                        let result = try await client.get(CloudPlanningResult.self, path: "/v1/camps/\(scope.campId)/planning/\(planID)?version=\(version)", token: credential.token)
+                        guard result.valid, result.id == planID, result.version.version == version, cloud.scope == scope, notifications.pendingOpen == id else { return }
+                        notificationSheet = false; sharedPlanScope = scope; sharedPlanResult = result; view = "Chat"
+                        await notifications.markRead(id); notifications.pendingOpen = nil
+                        AppDelegate.reopen?(); NSApp?.activate(ignoringOtherApps: true)
+                        return
+                    }
+                }
                 let nativeID = String(notice.sessionID.dropFirst(5))
                 _ = try await client.get(CloudSession.self, path: "/v1/camps/\(scope.campId)/sessions/\(nativeID)", token: credential.token)
                 guard cloud.scope == scope, notifications.pendingOpen == id else { return }
@@ -389,7 +424,7 @@ extension CampStore {
             reviewingPlan = session.id; notificationPlanVersion = version
         }
         notificationMessageID = notice.messageID
-        notifications.markRead(id); notifications.pendingOpen = nil
+        await notifications.markRead(id); notifications.pendingOpen = nil
         AppDelegate.reopen?()
         NSApp?.activate(ignoringOtherApps: true)
     }
@@ -452,8 +487,8 @@ struct CampNotificationsView: View {
             HStack {
                 Picker("Show", selection: $showRead) { Text("All").tag(true); Text("Unread").tag(false) }.pickerStyle(.segmented).frame(width: 200)
                 Spacer()
-                Button("Mark all read") { notices.markAllRead() }.disabled(notices.unread == 0)
-                Button("Clear read") { notices.clearRead() }.disabled(!notices.visible.contains(where: \.read))
+                Button("Mark all read") { Task { await notices.markAllRead() } }.disabled(notices.unread == 0)
+                Button("Clear read") { Task { await notices.clearRead() } }.disabled(!notices.visible.contains(where: \.read))
             }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
@@ -473,7 +508,7 @@ struct CampNotificationsView: View {
                                 }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                             }.buttonStyle(.plain)
                             if !notice.read {
-                                Button { notices.markRead(notice.id) } label: { Image(systemName: "circle.fill").font(.system(size: 7)).frame(width: 28, height: 28) }
+                                Button { Task { await notices.markRead(notice.id) } } label: { Image(systemName: "circle.fill").font(.system(size: 7)).frame(width: 28, height: 28) }
                                     .buttonStyle(.plain).help("Mark read").accessibilityLabel("Mark read")
                             }
                         }.padding(12).background(.white.opacity(0.7)).clipShape(RoundedRectangle(cornerRadius: 8))

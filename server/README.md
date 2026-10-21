@@ -3,7 +3,8 @@
 V1 is under development. This first slice implements email-code sign-in,
 revocable native-device credentials, Camp membership, invitation acceptance,
 projects, selected session sharing, versioned transcripts, durable prompt
-requests, atomic command receipts and an ordered event stream. Native execution,
+requests, atomic command receipts, recipient notification history with shared
+read receipts and an ordered event stream. Native execution,
 planning, memory and skills are still being built. Do not deploy it as the
 complete V1 product.
 
@@ -47,6 +48,9 @@ Use `Authorization: Bearer <device-token>` after sign-in.
 | `POST /v1/invitations/accept` | `{token}`; verifies the signed-in email |
 | `DELETE /v1/camps/{camp}/members/{user}` | Owner-only removal of a non-owner member |
 | `GET /v1/camps/{camp}/events` | SSE, with `Last-Event-ID` or `after` cursor |
+| `GET /v1/camps/{camp}/notifications` | Recipient inbox, `limit` up to 100 and optional `before` cursor |
+| `GET /v1/camps/{camp}/notifications/{id}` | Authorized saved completion target |
+| `POST /v1/camps/{camp}/notifications/actions` | `{ids, action}`; `read` or `archive`, up to 1,000 IDs, with `Idempotency-Key` |
 | `POST /v1/profiles` | `{local_id, provider, label}`; `local_id` is a SHA-256 hex identifier, never a filesystem path |
 | `GET /v1/camps/{camp}/sessions` | Authorized search with `q`, `limit` and opaque `before` cursor; returns `sessions` and `next` |
 | `PUT /v1/camps/{camp}/sessions/{id}` | Owner-device metadata, explicit sharing and expected revision |

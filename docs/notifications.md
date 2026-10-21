@@ -18,7 +18,7 @@ the same store. Quit flushes pending notification writes before stopping local
 CLI processes.
 
 History is bounded to 1,000 entries or 30 days and shown in pages of 50. An
-owner-only local file retains inbox/read state, watched shared requests and up
+owner-only local file retains inbox/read state and up
 to 4,096 completion fingerprints. One serial writer coalesces pending snapshots
 off the UI thread. An alert is eligible for delivery only after its entry is
 saved. A failed save leaves a visible error and suppresses desktop delivery.
@@ -28,17 +28,30 @@ ambiguous desktop-delivery result.
 Shared entries are partitioned by server, Camp and signed-in person. Switching
 scope removes old desktop alerts. Losing access removes affected local inbox
 entries and pending alerts. Opening a shared result makes a fresh authorized
-session read before navigation. Opening an alert never approves execution.
-Initial historical snapshots do not replay old alerts. A watched request that
-finishes during a disconnect produces one inbox entry on reconnect without
+notification and destination read before navigation. Opening an alert never approves execution.
+Initial historical snapshots do not replay old alerts. A request that
+finishes during a disconnect appears in the inbox on reconnect without
 replaying a desktop alert. Live fast completions do not require a separately
 rendered started state.
 
-The native inbox is a development slice. Server-owned recipient notifications
-and synchronized read receipts across Macs remain to be implemented. Shared
-result links currently open the authorized parent session; linking an older
+The Go service stores one notification per completion and recipient in the
+same transaction as the completed result. Chat recipients are the requesting
+person and session owner; planning recipients are its creator and planner
+owners. A person with several devices has one shared read/archive state. Other
+people keep their own state. The event stream carries only an inbox-change
+signal; clients fetch authorized entries. Read and archive commands use the
+durable native outbox and idempotent server receipts, including offline changes.
+
+Schema 6 is additive. Apply its migration before starting the matching server.
+Each recipient's cloud inbox is bounded to 1,000 entries or 30 days. Current
+membership and access to the destination and a plan's pinned source sessions
+are checked on every read and change, including a repeated command. Signing out
+clears the scoped local cache. Plan notifications open their saved version with
+both provider drafts, reviews and the combined plan. Chat result links currently
+open the authorized parent session; linking an older
 completion to an exact transcript revision, child or memory result remains part
-of the corresponding feature integration. Fully quit delivery is out of scope;
+of the corresponding feature integration. Native shared-planning execution is
+still in development. Fully quit delivery is out of scope;
 an APNs service is not included.
 
 Validation uses a fake desktop adapter for persistence, duplicate suppression,
@@ -48,6 +61,13 @@ foreground toast, unread badge, retained entries and navigation to a combined pl
 was enabled for the development-signed test app after the initial request was
 denied. Actual desktop-banner presentation and the complete closed-window
 workflow remain unverified; they are release gates, not inferred from API success.
+
+The shared-inbox check used the real Go API and disposable PostgreSQL, one native
+Mac client and a second authenticated device connection on the same Mac. It
+verified live completions without refresh, read receipts in both directions,
+archiving, and opening the saved shared plan with both provider drafts. This
+does not substitute for the release's two-physical-Mac test. The PostgreSQL race
+suite checks recipient isolation, source revocation, replay and bounded history.
 
 API references: [notification authorization](https://developer.apple.com/documentation/usernotifications/unusernotificationcenter/requestauthorization(options:completionhandler:))
 and [notification delegate](https://developer.apple.com/documentation/usernotifications/unusernotificationcenterdelegate).

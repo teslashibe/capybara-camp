@@ -21,7 +21,8 @@ import SwiftUI
     var sessionsChanged: (([CloudSession], [CloudProject], CloudScope?) -> Void)?
     var transcriptChanged: ((String) -> Void)?
     var requestChanged: ((CloudRequest) -> Void)?
-    var requestsObserved: (([CloudRequest], CloudScope, Bool) -> Void)?
+    var notificationsChanged: (([CloudNotification], CloudScope, Bool) -> Void)?
+    var planningChanged: ((String) -> Void)?
     private(set) var credential: CloudCredential?
     private(set) var scope: CloudScope?
     private(set) var cache: CampCache?
@@ -34,6 +35,8 @@ import SwiftUI
     private var publishTask: Task<Void, Never>?
     private var flushTask: Task<Void, Never>?
     private var booted = false
+    private var notificationTask: Task<Void, Never>?
+    private var notificationsDirty = false
     private var sessionIndex: [String: CloudSession] = [:]
     private var requestIndex: [String: CloudRequest] = [:]
     private var lastRenewal = Date.distantPast
@@ -44,7 +47,7 @@ import SwiftUI
         do { cache = try CampCache(directory: directory) }
         catch { self.error = "The local Camp cache could not be opened" }
     }
-    deinit { streamTask?.cancel(); publishTask?.cancel(); flushTask?.cancel() }
+    deinit { streamTask?.cancel(); publishTask?.cancel(); flushTask?.cancel(); notificationTask?.cancel() }
 
     func restore() async {
         guard !booted else { return }; booted = true
@@ -105,7 +108,7 @@ import SwiftUI
     }
     func selectCamp(_ id: String) async {
         guard let credential, let client, UUID(uuidString: id) != nil else { return }
-        streamTask?.cancel(); flushTask?.cancel(); publishTask?.cancel()
+        streamTask?.cancel(); flushTask?.cancel(); publishTask?.cancel(); notificationTask?.cancel(); notificationTask = nil; notificationsDirty = false
         flushTask = nil; publishTask = nil
         let token = UUID(); generation = token; selectedCampId = id
         let selected = CloudScope(origin: client.endpoint.origin, userId: credential.actor.userId, campId: id)
@@ -139,7 +142,10 @@ import SwiftUI
                 projects = snapshot.projects; members = snapshot.members
             } else { projects = []; members = [] }
             sessionsChanged?(sessions, projects, scope)
-            requestsObserved?(requests, scope, false)
+            let notifications = try await cache.notifications(scope)
+            let visible = try await overlayNotificationActions(notifications, scope: scope)
+            guard self.scope == scope, generation == token else { return }
+            notificationsChanged?(visible, scope, false)
         } catch { self.error = error.localizedDescription }
     }
     private func synchronize(scope: CloudScope, generation token: UUID) async throws {
@@ -162,6 +168,7 @@ import SwiftUI
         try await cache.saveSnapshot(snapshot, scope: scope, expectedEpoch: epoch)
         projects = snapshot.projects; members = snapshot.members
         await loadCached(scope: scope)
+        try await refreshNotifications(scope: scope, generation: token, live: false)
         worker.scan()
     }
     private func startStream(scope: CloudScope, generation token: UUID) {
@@ -223,7 +230,9 @@ import SwiftUI
             requestIndex = requestIndex.filter { $0.value.sessionId != id }
         }
         if event.kind == "transcript.updated", let id = event.payload.sessionId { transcriptChanged?(id) }
-        if event.payload.sessionId == nil {
+        if event.kind == "planning.changed", let id = event.payload.planId { planningChanged?(id) }
+        if event.kind == "notification.changed" || event.kind.hasPrefix("session.") || event.kind.hasPrefix("planning.") || event.kind.hasPrefix("member.") { scheduleNotifications(generation: token) }
+        if event.payload.sessionId == nil && event.kind != "notification.changed" {
             let snapshot = try await client.get(CloudSnapshot.self, path: "/v1/camps/\(scope.campId)/snapshot", token: credential.token)
             guard generation == token else { throw CancellationError() }
             projects = snapshot.projects; members = snapshot.members
@@ -264,12 +273,81 @@ import SwiftUI
             self.sessions = self.sessionIndex.values.sorted { $0.updatedAt > $1.updatedAt }
             self.requests = self.requestIndex.values.sorted { $0.createdAt > $1.createdAt }
             self.sessionsChanged?(self.sessions, self.projects, self.scope)
-            if let scope = self.scope { self.requestsObserved?(self.requests, scope, true) }
         }
     }
     private func clearVisible() {
         sessions = []; projects = []; members = []; requests = []; pending = []
         sessionIndex = [:]; requestIndex = [:]; sessionsChanged?([], [], nil)
+    }
+    private func overlayNotificationActions(_ values: [CloudNotification], scope: CloudScope) async throws -> [CloudNotification] {
+        guard let cache else { throw CampCloudError.cacheUnavailable }
+        var read = Set<String>(), archived = Set<String>()
+        for item in try await cache.outbox(scope, limit: 1000) where item.path == "/v1/camps/\(scope.campId)/notifications/actions" && ["pending", "sending"].contains(item.state) {
+            let action = try CampWire.decoder().decode(CloudNotificationAction.self, from: item.body)
+            if action.action == "read" { read.formUnion(action.ids) }
+            if action.action == "archive" { archived.formUnion(action.ids) }
+        }
+        return values.filter { !archived.contains($0.id) }.map { value in var value = value; if read.contains(value.id) { value.read = true }; return value }
+    }
+    private func refreshNotifications(scope: CloudScope, generation token: UUID, live: Bool) async throws {
+        guard let client, let credential, let cache else { throw CampCloudError.cacheUnavailable }
+        let epoch = cacheEpoch
+        var values: [CloudNotification] = [], before = "", seen = Set<String>()
+        repeat {
+            guard generation == token else { throw CancellationError() }
+            let page = try await client.get(CloudNotificationPage.self, path: "/v1/camps/\(scope.campId)/notifications?limit=100" + (before.isEmpty ? "" : "&before=" + before), token: credential.token)
+            guard page.unread >= 0, page.unread <= 1000, page.notifications.count <= 100,
+                  page.notifications.allSatisfy(\.valid), page.next.isEmpty || UUID(uuidString: page.next) != nil else { throw CampCloudError.invalidResponse }
+            values += page.notifications; before = page.next
+            guard values.count <= 1000, before.isEmpty || seen.insert(before).inserted else { throw CampCloudError.invalidResponse }
+        } while !before.isEmpty
+        guard generation == token else { throw CancellationError() }
+        try await cache.saveNotifications(values, scope: scope, expectedEpoch: epoch)
+        let visible = try await overlayNotificationActions(values, scope: scope)
+        guard generation == token else { throw CancellationError() }
+        notificationsChanged?(visible, scope, live)
+    }
+    private func scheduleNotifications(generation token: UUID) {
+        notificationsDirty = true
+        guard notificationTask == nil else { return }
+        notificationTask = Task { [weak self] in
+            var backoff = 0.1
+            defer { if self?.generation == token { self?.notificationTask = nil } }
+            while let self, self.generation == token, self.notificationsDirty, !Task.isCancelled {
+                self.notificationsDirty = false
+                do {
+                    try await Task.sleep(for: .seconds(backoff))
+                    guard let scope = self.scope else { return }
+                    try await self.refreshNotifications(scope: scope, generation: token, live: true)
+                    backoff = 0.1
+                } catch is CancellationError { return }
+                catch CampCloudError.server(let status, _) where [401, 403, 404].contains(status) {
+                    guard self.generation == token, let scope = self.scope else { return }
+                    self.error = status == 401 ? "Reconnect to Camp to sync notifications" : "Shared notifications are unavailable on this server"
+                    self.notificationsChanged?([], scope, false)
+                    return
+                } catch CampCloudError.invalidResponse {
+                    guard self.generation == token else { return }
+                    self.error = "The server returned an invalid notification list"
+                    return
+                }
+                catch {
+                    guard self.generation == token else { return }
+                    self.error = "Notifications are waiting to sync"
+                    self.notificationsDirty = true; backoff = min(15, max(0.5, backoff * 2))
+                }
+            }
+        }
+    }
+    func queueNotificationAction(scope expectedScope: CloudScope, ids: [String], action: String) async throws {
+        guard let scope, scope == expectedScope, let cache, !ids.isEmpty, ids.count <= 1000,
+              Set(ids).count == ids.count, ids.allSatisfy({ UUID(uuidString: $0) != nil }), ["read", "archive"].contains(action) else { throw CampCloudError.invalidResponse }
+        let token = generation
+        _ = try await cache.enqueue(scope: scope, method: "POST", path: "/v1/camps/\(scope.campId)/notifications/actions",
+            body: CampWire.encoder().encode(CloudNotificationAction(ids: ids, action: action)), expectedEpoch: cacheEpoch)
+        let queued = try await cache.outbox(scope)
+        guard generation == token, self.scope == scope else { throw CancellationError() }
+        pending = queued; flush()
     }
     private func renewIfNeeded() async throws {
         guard let client, var saved = credential,
@@ -359,8 +437,10 @@ import SwiftUI
                             if self?.generation == token, self?.accepts(session) == true { self?.sessionIndex[session.id] = session }
                         }
                         try await cache.acknowledge(item.id)
+                        if item.path == "/v1/camps/\(scope.campId)/notifications/actions", self?.generation == token { self?.scheduleNotifications(generation: token) }
                     } catch CampCloudError.server(let status, let code) where status == 409 || status == 400 || status == 404 {
                         try await cache.markOutbox(item.id, state: status == 409 ? "conflict" : "failed", error: code)
+                        if item.path == "/v1/camps/\(scope.campId)/notifications/actions", self?.generation == token { self?.scheduleNotifications(generation: token) }
                     } catch {
                         try await cache.markOutbox(item.id, state: "pending")
                         throw error
@@ -392,7 +472,7 @@ import SwiftUI
             catch CampCloudError.server(401, _) {} // Already revoked on the server.
             try vault.remove(origin: credential.origin)
             if let scope { try await cache?.clear(scope) }
-            generation = UUID(); streamTask?.cancel(); flushTask?.cancel(); publishTask?.cancel()
+            generation = UUID(); streamTask?.cancel(); flushTask?.cancel(); publishTask?.cancel(); notificationTask?.cancel(); notificationTask = nil
             self.credential = nil; self.scope = nil; signedIn = false; camps = []; status = "Local on this Mac"; error = ""; clearVisible()
         } catch { self.error = "Could not revoke the Camp login. Reconnect and try signing out again" }
     }

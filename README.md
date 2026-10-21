@@ -70,8 +70,9 @@ prompt queue and live events. The Swift client includes a scoped SQLite cache,
 an offline outbox, Camp connection controls and shared transcript viewing.
 The owner-Mac worker can execute shared chat requests. Local five-step plans can
 continue into implementation with a separate executor choice on the same ticket.
-Completion notifications include a native inbox, foreground toasts and optional
-macOS alerts. See [notifications](docs/notifications.md) for the current delivery
+Completion notifications include a native inbox, foreground toasts, optional
+macOS alerts and server-owned read receipts across a person's devices.
+See [notifications](docs/notifications.md) for the current delivery
 and cross-device boundaries.
 Shared planning execution, cloud runners, memory and skills are still in
 development. These features are not included in v0.0.1. See [planning](docs/planning.md),

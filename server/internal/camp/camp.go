@@ -365,6 +365,7 @@ func (s *Store) Events(ctx context.Context, a auth.Actor, id string, after int64
 	// Authorization and event reads share the same statement snapshot.
 	rows, err := s.pool.Query(ctx, `SELECT e.cursor,e.kind,e.actor_id,e.payload FROM events e
 	 JOIN memberships m ON m.camp_id=e.camp_id AND m.user_id=$1 WHERE e.camp_id=$2 AND e.cursor>$3
+	 AND (e.recipient_user_id IS NULL OR e.recipient_user_id=$1)
 	 AND (e.session_id IS NULL OR EXISTS(SELECT 1 FROM sessions s WHERE s.id=e.session_id AND (s.shared OR s.owner_user_id=$1))
 	 OR EXISTS(SELECT 1 FROM event_recipients r WHERE r.camp_id=e.camp_id AND r.cursor=e.cursor AND r.user_id=$1))
 	 AND (e.plan_id IS NULL OR EXISTS(SELECT 1 FROM planning_tickets p WHERE p.id=e.plan_id AND (p.shared OR p.creator_user_id=$1 OR EXISTS(SELECT 1 FROM planning_participants x WHERE x.plan_id=p.id AND x.version=p.active_version AND x.owner_user_id=$1)))) ORDER BY e.cursor LIMIT 250`, a.UserID, id, after)

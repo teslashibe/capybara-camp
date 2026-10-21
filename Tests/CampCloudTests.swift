@@ -47,6 +47,19 @@ import SQLite3
         check(try vault.read(origin: scope.origin) == nil, "credential removed")
 
         let cache = try CampCache(directory: root)
+        let notice = CloudNotification(id: UUID().uuidString, kind: "finished", title: "Synthetic result", sessionId: UUID().uuidString, requestId: UUID().uuidString, revision: 1, read: false, createdAt: Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970)))
+        try await cache.saveNotifications([notice], scope: scope, expectedEpoch: 0)
+        check(try await cache.notifications(scope) == [notice], "notification inbox persists")
+        check(try await cache.notifications(otherUser).isEmpty, "notification recipient isolation")
+        do { try await cache.saveNotifications([notice, notice], scope: scope, expectedEpoch: 0); preconditionFailure("duplicate notification accepted") }
+        catch { assertions += 1 }
+        let plan = CloudPlanningResult(id: UUID().uuidString, title: "Shared plan", projectId: UUID().uuidString,
+            version: .init(version: 1, state: "ready", brief: "Test plan", planners: [
+                .init(slot: 0, sessionId: UUID().uuidString, provider: "Codex", model: "fixture", effort: "high", speed: "standard"),
+                .init(slot: 1, sessionId: UUID().uuidString, provider: "Claude", model: "fixture", effort: "high", speed: "fast")
+            ], steps: [.init(ordinal: 4, slot: 0, phase: "merge", state: "completed", output: "Combined plan")], sources: []))
+        let decodedPlan = try CampWire.decoder().decode(CloudPlanningResult.self, from: CampWire.encoder().encode(plan))
+        check(decodedPlan.valid && decodedPlan.referencedSessions.count == 2, "shared plan uses server ordinal and phase contract")
         var value = session(scope)
         try await cache.ingest(scope: scope, cursor: 1, session: value)
         check(try await cache.cursor(scope) == 1, "cursor persisted")
@@ -119,6 +132,9 @@ import SQLite3
         try await cache.clear(scope)
         let nextEpoch = try await cache.epoch(scope)
         check(nextEpoch == 1, "revocation increments durable cache epoch")
+        check(try await cache.notifications(scope).isEmpty, "revocation clears notification content")
+        do { try await cache.saveNotifications([notice], scope: scope, expectedEpoch: 0); preconditionFailure("stale response restored notification content") }
+        catch { assertions += 1 }
         do { try await cache.ingest(scope: scope, session: value, expectedEpoch: 0); preconditionFailure("revoked response restored cached session") }
         catch { assertions += 1 }
         do { _ = try await cache.enqueue(scope: scope, method: "POST", path: path, body: Data(), expectedEpoch: 0); preconditionFailure("revoked context queued a command") }

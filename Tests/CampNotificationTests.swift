@@ -18,9 +18,9 @@ import Foundation
     static func scope(_ suffix: String) -> CloudScope {
         CloudScope(origin: "https://camp.example", userId: "person-" + suffix, campId: "shared-camp")
     }
-    static func request(_ id: String, state: String) -> CloudRequest {
-        CloudRequest(id: id, campId: "shared-camp", sessionId: "shared-session", requesterUserId: "person-a", ownerUserId: "person-b",
-            ownerDeviceId: "mac-b", permissionRevision: 1, revision: 1, prompt: "private prompt never enters the alert", model: "model", effort: "", speed: "standard", state: state, createdAt: Date(), sources: [])
+    static func notification(_ title: String) -> CloudNotification {
+        CloudNotification(id: UUID().uuidString, kind: "finished", title: title, sessionId: UUID().uuidString, requestId: UUID().uuidString,
+            revision: 1, read: false, createdAt: Date())
     }
     @MainActor static func main() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("camp-notices-" + UUID().uuidString)
@@ -47,12 +47,12 @@ import Foundation
         notices.pauseToast("focus", paused: false)
         try await Task.sleep(for: .milliseconds(40))
         precondition(notices.toast == nil)
-        notices.markAllRead(); notices.clearRead(); await notices.flush()
+        await notices.markAllRead(); await notices.clearRead(); await notices.flush()
         notices.record(key: "unread-test", sessionID: "local", title: "Read this", kind: "finished")
         await notices.flush()
         let id = notices.entries[0].id
-        notices.markRead(id); precondition(notices.unread == 0)
-        notices.clearRead(); precondition(notices.entries.isEmpty)
+        await notices.markRead(id); precondition(notices.unread == 0)
+        await notices.clearRead(); precondition(notices.entries.isEmpty)
         await notices.flush()
         precondition(!notices.record(key: "turn-a", sessionID: "local", title: "Deleted replay", kind: "finished"))
 
@@ -89,31 +89,55 @@ import Foundation
         let cloud = CampNotifications(directory: cloudDirectory, delivery: delivery, isActive: { false })
         cloud.setScope(a); await cloud.enableDesktop(true)
         let sentBefore = delivery.sent.count
-        cloud.observeRequests([request("historical", state: "completed")], scope: a) { _ in "Session" }
-        precondition(cloud.entries.isEmpty, "Initial completed snapshots must not generate historical alerts")
-        cloud.observeRequests([request("new", state: "started")], scope: a) { _ in "Session" }
+        let historical = notification("Historical result"), fresh = notification("New result")
+        cloud.applyCloud([historical], scope: a, live: false)
         await cloud.flush()
+        precondition(cloud.entries.count == 1 && delivery.sent.count == sentBefore, "Initial history is visible without replaying alerts")
         let reconnected = CampNotifications(directory: cloudDirectory, delivery: delivery, isActive: { false })
         reconnected.setScope(a)
-        reconnected.observeRequests([request("new", state: "completed")], scope: a) { _ in "Session" }
+        reconnected.applyCloud([historical, fresh], scope: a, live: false)
         await reconnected.flush()
-        reconnected.observeRequests([request("new", state: "completed")], scope: a) { _ in "Session" }
+        reconnected.applyCloud([historical, fresh], scope: a, live: true)
+        await reconnected.flush()
         await settle()
-        precondition(reconnected.entries.count == 1 && delivery.sent.count == sentBefore, "Reconnect restores inbox history without replaying desktop alerts")
+        precondition(reconnected.entries.count == 2 && delivery.sent.count == sentBefore, "Reconnect restores inbox history without replaying desktop alerts")
         let saved = try Data(contentsOf: cloudDirectory.appendingPathComponent("notifications.json"))
         precondition(!String(data: saved, encoding: .utf8)!.contains("private prompt"))
-        reconnected.observeRequests([request("uncertain", state: "started")], scope: a) { _ in "Session" }
-        reconnected.observeRequests([request("uncertain", state: "outcome_unknown")], scope: a) { _ in "Session" }
+        var uncertain = notification("Unconfirmed result"); uncertain.kind = "attention"
+        reconnected.applyCloud([historical, fresh, uncertain], scope: a, live: true)
         await reconnected.flush()
         await settle(); let beforeReconcile = delivery.sent.count
-        reconnected.observeRequests([request("uncertain", state: "completed")], scope: a) { _ in "Session" }
+        uncertain.kind = "finished"; uncertain.revision = 2
+        reconnected.applyCloud([historical, fresh, uncertain], scope: a, live: true)
         await reconnected.flush()
         await settle()
         precondition(reconnected.entries.first?.kind == "finished" && delivery.sent.count == beforeReconcile)
-        reconnected.observeRequests([request("fast", state: "completed")], scope: a, live: true) { _ in "Fast task" }
+        let fast = notification("Fast task")
+        reconnected.applyCloud([historical, fresh, uncertain, fast], scope: a, live: true)
         await reconnected.flush()
         await settle()
         precondition(reconnected.entries.first?.title == "Fast task", "A coalesced live completion must not require a visible started event")
+        var actions: [CloudNotificationAction] = []
+        reconnected.cloudAction = { _, ids, action in actions.append(CloudNotificationAction(ids: ids, action: action)) }
+        let localID = PublishMessage.hash(Data(fast.key(scope: a).utf8))
+        await reconnected.markRead(localID)
+        precondition(actions.count == 1 && actions[0].ids == [fast.id] && actions[0].action == "read")
+        var remotelyRead = fresh; remotelyRead.read = true; remotelyRead.revision = 2
+        reconnected.applyCloud([historical, remotelyRead, uncertain], scope: a, live: true)
+        precondition(reconnected.entries.first(where: { $0.cloudID == fresh.id })?.read == true, "Read receipts from another Mac are authoritative")
+        precondition(reconnected.entries.allSatisfy { $0.cloudID != fast.id }, "An archived server entry must disappear locally")
+        let unreadBeforeSwitch = reconnected.unread
+        var finishReceipt: CheckedContinuation<Void, Never>?
+        reconnected.cloudAction = { _, _, _ in await withCheckedContinuation { finishReceipt = $0 } }
+        let pendingReceipt = Task { await reconnected.markAllRead() }
+        await settle()
+        precondition(finishReceipt != nil)
+        reconnected.setScope(b); finishReceipt?.resume(); await pendingReceipt.value
+        reconnected.setScope(a)
+        precondition(reconnected.unread == unreadBeforeSwitch, "A delayed action cannot alter the inbox after switching Camp identity")
+        reconnected.cloudAction = { _, _, _ in throw CampCloudError.cacheUnavailable }
+        await reconnected.markRead(PublishMessage.hash(Data(historical.key(scope: a).utf8)))
+        precondition(reconnected.unread == unreadBeforeSwitch && !reconnected.error.isEmpty, "Failed durable enqueue must preserve unread state")
 
         let raceDelivery = FakeNoticeDelivery()
         let race = CampNotifications(directory: root.appendingPathComponent("race"), delivery: raceDelivery, isActive: { false })

@@ -83,6 +83,7 @@ func (a *API) Handler() http.Handler {
 	a.sessionRoutes(mux)
 	a.requestRoutes(mux)
 	a.planningRoutes(mux)
+	a.notificationRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")

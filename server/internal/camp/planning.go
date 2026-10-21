@@ -318,6 +318,18 @@ func (s *Store) Planning(ctx context.Context, a auth.Actor, campID, id string, v
 	if err != nil {
 		return p, err
 	}
+	// A saved output may contain excerpts from any pinned source. Recheck access
+	// when it is opened, including older versions after a source is unshared.
+	for _, planner := range p.Version.Planners {
+		if _, err = s.readSession(ctx, tx, a, campID, planner.SessionID); err != nil {
+			return PlanningTicket{}, err
+		}
+	}
+	for _, source := range p.Version.Sources {
+		if _, err = s.readSession(ctx, tx, a, campID, source.SessionID); err != nil {
+			return PlanningTicket{}, err
+		}
+	}
 	return p, tx.Commit(ctx)
 }
 
@@ -485,6 +497,13 @@ func emitPlanning(ctx context.Context, tx pgx.Tx, a auth.Actor, campID, id strin
 		return err
 	}
 	_, err := tx.Exec(ctx, `UPDATE events SET plan_id=$2 WHERE camp_id=$1 AND cursor=(SELECT event_cursor FROM camps WHERE id=$1)`, campID, id)
+	if err == nil && oneOf(state, "ready", "failed") {
+		kind := "attention"
+		if state == "ready" {
+			kind = "plan"
+		}
+		return notifyPlan(ctx, tx, a, campID, id, version, kind)
+	}
 	return err
 }
 func (s *Store) cancelPlanningRequests(ctx context.Context, tx pgx.Tx, a auth.Actor, p PlanningTicket) error {
