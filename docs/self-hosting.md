@@ -3,7 +3,9 @@
 These are V1 development templates. The current server implements Camp sign-in,
 devices, membership, projects, selected session sharing, versioned transcripts,
 durable prompt requests and ordered events. The native execution worker, memory
-and skills are still being built. Do not treat these templates
+and skills are still being built. Cloud provider login and execution are scoped
+in [Local and cloud execution](cloud-execution.md); the current manifests do not
+yet deploy provider runners. Do not treat these templates
 as the completed V1 release or a production deployment sign-off.
 
 Every collaborating Mac connects to the same HTTPS service origin and Camp.
@@ -97,5 +99,8 @@ provided by the templates.
 
 The V1 desktop connection screen will accept the configured HTTPS origin.
 Each person signs in independently, joins the same Camp through an invitation,
-and explicitly shares selected sessions. Provider logins and CLI processes stay
-on their owning Macs. This connection screen is not in v0.0.1.
+and explicitly shares selected sessions. Local provider logins stay on their
+owning Macs. The planned cloud account flow creates separate, owner-bound
+installations and runs the official CLIs in isolated Linux workloads. Choosing
+Cloud does not share account credentials with other members. The connection
+screen is not in v0.0.1.
