@@ -64,9 +64,9 @@ By default, builds go into `build/` and use ad-hoc signing. Set `CAMP_SIGN_IDENT
 
 ## Website
 
-The public website is hosted on Cloudflare Pages at [capybaracamp.com](https://capybaracamp.com), using the `capybara-camp` Direct Upload project. Its source is `docs/index.html`; `docs/_redirects` sends the `www` address to the main domain.
+The public website is hosted on Cloudflare Pages at [capybaracamp.com](https://capybaracamp.com), using the `capybara-camp` Direct Upload project. Its source is `docs/index.html`; a Cloudflare Redirect Rule sends the `www` address to the main domain.
 
-To publish a website update, upload a ZIP containing only those two files at the archive root. Do not upload the repository or a build directory: those can include local diagnostics. Direct Upload is separate from GitHub pushes. The GitHub Pages build remains a preview mirror.
+To publish a website update, upload a ZIP containing only `index.html` at the archive root. Do not upload the repository or a build directory: those can include local diagnostics. Direct Upload is separate from GitHub pushes. The GitHub Pages build remains a preview mirror.
 
 ## Local data and privacy
 
