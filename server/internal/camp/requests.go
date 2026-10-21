@@ -317,6 +317,15 @@ func (s *Store) ClaimAvailableRequest(ctx context.Context, a auth.Actor, campID,
 	return s.claimRequest(ctx, a, campID, key, sessions, "chat")
 }
 
+// New native workers opt into planning only when they can run isolated turns.
+// Existing clients retain their chat-only claim contract.
+func (s *Store) ClaimAvailableWork(ctx context.Context, a auth.Actor, campID, key string, sessions []string) (*Request, error) {
+	if sessions == nil {
+		sessions = []string{}
+	}
+	return s.claimRequest(ctx, a, campID, key, sessions, "all")
+}
+
 func (s *Store) claimRequest(ctx context.Context, a auth.Actor, campID, key string, sessions []string, kind string) (*Request, error) {
 	if len(sessions) > 200 {
 		return nil, ErrInput
@@ -344,7 +353,7 @@ func (s *Store) claimRequest(ctx context.Context, a auth.Actor, campID, key stri
 	}
 	var result *Request
 	var payload any = a.DeviceID // Preserve receipts from the original unfiltered endpoint.
-	if kind == "planning" {
+	if kind != "chat" {
 		payload = struct {
 			DeviceID string
 			Sessions []string
@@ -380,7 +389,7 @@ func (s *Store) claimRequest(ctx context.Context, a auth.Actor, campID, key stri
 	}
 	var id string
 	err = tx.QueryRow(ctx, `SELECT r.id FROM prompt_requests r JOIN sessions s ON s.id=r.session_id JOIN profiles profile ON profile.id=s.profile_id
-	 WHERE r.camp_id=$1 AND r.owner_device_id=$2 AND r.owner_user_id=$4 AND r.kind=$5 AND r.state='queued' AND NOT s.external_owner
+	 WHERE r.camp_id=$1 AND r.owner_device_id=$2 AND r.owner_user_id=$4 AND (r.kind=$5 OR $5='all') AND r.state='queued' AND NOT s.external_owner
 	 AND (r.kind='chat' OR (EXISTS(SELECT 1 FROM planning_versions v JOIN planning_tickets p ON p.id=v.plan_id WHERE v.plan_id=r.plan_id AND v.version=r.plan_version AND v.state='running' AND p.active_version=v.version)
 	 AND NOT EXISTS(SELECT 1 FROM prompt_requests b WHERE b.plan_id=r.plan_id AND b.plan_version=r.plan_version AND b.state IN ('failed','cancelled','outcome_unknown'))))
 	 AND ($3::uuid[] IS NULL OR r.session_id=ANY($3))

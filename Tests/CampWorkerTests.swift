@@ -11,9 +11,12 @@ actor WorkerFixture: CampPublishingTransport {
     var held = false
     var gate: CheckedContinuation<Void, Never>?
     var holdClaim = false
+    var holdStartReply = false
+    var finalPayload: [String: String] = [:]
+    func resultPayload() -> [String: String] { finalPayload }
     init(request: CloudRequest, session: CloudSession) { self.request = request; self.session = session }
-    func configure(claim: Bool = false, start: Bool = false, finish: Bool = false, hold: Bool = false) {
-        loseClaim = claim; loseStart = start; loseFinish = finish; holdClaim = hold
+    func configure(claim: Bool = false, start: Bool = false, finish: Bool = false, hold: Bool = false, startReply: Bool = false) {
+        loseClaim = claim; loseStart = start; loseFinish = finish; holdClaim = hold; holdStartReply = startReply
     }
     func state(_ state: String) { request.state = state }
     func deadline(_ seconds: TimeInterval) { request.leaseUntil = Date().addingTimeInterval(seconds) }
@@ -33,6 +36,7 @@ actor WorkerFixture: CampPublishingTransport {
         let body = try JSONSerialization.jsonObject(with: operation.body) as! [String: Any]
         if operation.kind == "claim" {
             let ids = body["session_ids"] as! [String]
+            guard !request.isPlanning || body["include_planning"] as? Bool == true else { return Data("null".utf8) }
             guard request.state == "queued", ids.contains(request.sessionId) else { return Data("null".utf8) }
             request.state = "claimed"; request.leaseToken = UUID().uuidString; request.leaseUntil = Date().addingTimeInterval(60)
         } else {
@@ -41,7 +45,10 @@ actor WorkerFixture: CampPublishingTransport {
             case "start": request.state = "started"
             case "release": request.state = "queued"; request.leaseToken = nil
             case "heartbeat": break
-            case "finish", "reconcile": request.state = body["outcome"] as! String
+            case "finish", "reconcile":
+                request.state = body["outcome"] as! String
+                finalPayload["output"] = body["output"] as? String
+                if let usage = body["usage"] as? [String: Int] { finalPayload["input_tokens"] = usage["input_tokens"].map(String.init) }
             default: throw CampCloudError.invalidResponse
             }
         }
@@ -49,6 +56,7 @@ actor WorkerFixture: CampPublishingTransport {
         var response = request
         if operation.kind != "claim" { response.leaseToken = nil }
         let data = try CampWire.encoder().encode(response); receipts[operation.key] = data
+        if operation.kind == "start", holdStartReply { held = true; await withCheckedContinuation { gate = $0 }; held = false }
         if operation.kind == "claim", loseClaim { loseClaim = false; throw URLError(.networkConnectionLost) }
         if operation.kind == "start", loseStart { loseStart = false; throw URLError(.networkConnectionLost) }
         if operation.kind == "finish", loseFinish { loseFinish = false; throw URLError(.networkConnectionLost) }
@@ -94,6 +102,55 @@ actor WorkerFixture: CampPublishingTransport {
         await worker.poll(); await worker.poll()
         check(await api.snapshot().1["claim"]?.count == idleClaims, "Idle polling kept writing claim receipts")
         worker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+
+        let planCache = try CampCache(directory: root.appendingPathComponent("planning"))
+        var planRequest = request(); planRequest.kind = "planning"; planRequest.planId = UUID().uuidString; planRequest.planVersion = 1; planRequest.planStep = 0
+        let planAPI = WorkerFixture(request: planRequest, session: remote)
+        await planAPI.configure(finish: true)
+        let planWorker = CampLocalWorker(cache: planCache, automatic: false)
+        planWorker.nativeSession = { _ in local }; planWorker.available = { _ in true }
+        planWorker.readHistory = { _ in preconditionFailure("Planning must not read or resume the anchor conversation") }
+        var planStarts = 0
+        var planComplete: ((ConversationResult) -> Void)?
+        planWorker.execute = { native, work, prompt, history, _, completed in
+            check(work.isPlanning && work.planStep == 0 && history.isEmpty)
+            planStarts += 1; planComplete = completed
+            return LocalConversation(session: native, history: [], prompt: prompt)
+        }
+        planWorker.attach(scope: scope, actor: actor, transport: planAPI, sessions: [remote])
+        await planWorker.poll()
+        check(planStarts == 1 && planWorker.usesPlanningProvider("Codex") && planWorker.activePlanningCount == 1)
+        planComplete?(ConversationResult(state: "completed", message: "", accepted: true, output: "Frozen planning output", usage: ConversationUsage(inputTokens: 73, outputTokens: 11)))
+        try await eventually("Planning result was not persisted") { try await planCache.attempts(scope).first?.state == "finish_pending" }
+        let durableResult = try await planCache.attempts(scope).first
+        check(durableResult?.output == "Frozen planning output" && durableResult?.usage?.inputTokens == 73)
+        await planWorker.poll()
+        check(try await planCache.attempts(scope).isEmpty && planStarts == 1, "Lost planning finish replayed the provider")
+        let planningPayload = await planAPI.resultPayload()
+        check(planningPayload["output"] == "Frozen planning output" && planningPayload["input_tokens"] == "73", "Planning output and usage did not reach the server")
+        check(!planWorker.usesPlanningProvider("Codex") && planWorker.activePlanningCount == 0)
+        planWorker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+        var retained = durableResult!; retained.state = "uncertain"
+        try await planCache.saveWorkerAttempt(retained, scope: scope, expectedEpoch: 0)
+        try await planCache.clear(scope)
+        let scrubbed = try await planCache.attempts(scope).first
+        check(scrubbed?.output == nil && scrubbed?.usage == nil && scrubbed?.request.prompt == "", "Signing out retained private planning output")
+
+        let cancelledCache = try CampCache(directory: root.appendingPathComponent("cancel-during-start"))
+        let cancelledAPI = WorkerFixture(request: planRequest, session: remote)
+        await cancelledAPI.configure(startReply: true)
+        let cancelledWorker = CampLocalWorker(cache: cancelledCache, automatic: false)
+        cancelledWorker.nativeSession = { _ in local }; cancelledWorker.available = { _ in true }
+        cancelledWorker.execute = { _, _, _, _, _, _ in preconditionFailure("A processed cancellation was ignored before provider submission") }
+        cancelledWorker.attach(scope: scope, actor: actor, transport: cancelledAPI, sessions: [remote])
+        let cancelling = Task { await cancelledWorker.poll() }
+        try await eventually("Start acknowledgement was not held") { await cancelledAPI.snapshot().2 }
+        await cancelledAPI.state("cancel_requested")
+        cancelledWorker.changed(await cancelledAPI.snapshot().0)
+        await cancelledAPI.release(); await cancelling.value
+        check(await cancelledAPI.snapshot().0.state == "cancelled")
+        check(try await cancelledCache.attempts(scope).isEmpty)
+        cancelledWorker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
 
         let batchCache = try CampCache(directory: root.appendingPathComponent("eligible-batches"))
         var lastRemote = remote; lastRemote.id = "ffffffff-ffff-4fff-8fff-ffffffffffff"

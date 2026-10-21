@@ -32,14 +32,21 @@ func (a *API) requestRoutes(mux *http.ServeMux) {
 	}))
 	mux.HandleFunc("POST /v1/camps/{camp}/requests/claim", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		var input struct {
-			SessionIDs *[]string `json:"session_ids"`
+			SessionIDs      *[]string `json:"session_ids"`
+			IncludePlanning bool      `json:"include_planning"`
 		}
 		if (r.ContentLength != 0 || len(r.TransferEncoding) != 0) && !decode(w, r, &input) {
 			return
 		}
 		var value *camp.Request
 		var err error
-		if input.SessionIDs == nil {
+		if input.IncludePlanning {
+			if input.SessionIDs == nil {
+				problem(w, 400, "invalid_input")
+				return
+			}
+			value, err = a.Camps.ClaimAvailableWork(r.Context(), u, r.PathValue("camp"), r.Header.Get("Idempotency-Key"), *input.SessionIDs)
+		} else if input.SessionIDs == nil {
 			value, err = a.Camps.ClaimRequest(r.Context(), u, r.PathValue("camp"), r.Header.Get("Idempotency-Key"))
 		} else {
 			value, err = a.Camps.ClaimAvailableRequest(r.Context(), u, r.PathValue("camp"), r.Header.Get("Idempotency-Key"), *input.SessionIDs)

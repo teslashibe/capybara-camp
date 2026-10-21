@@ -10,6 +10,9 @@ import (
 // ReadContext returns only the explicitly selected messages at one immutable
 // transcript revision. Access and permission revision are checked on every read.
 func (s *Store) ReadContext(ctx context.Context, a auth.Actor, campID, id string, input SourceRef) (Transcript, error) {
+	return retryRead(ctx, func() (Transcript, error) { return s.readContextOnce(ctx, a, campID, id, input) })
+}
+func (s *Store) readContextOnce(ctx context.Context, a auth.Actor, campID, id string, input SourceRef) (Transcript, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
 		return Transcript{}, err

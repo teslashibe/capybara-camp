@@ -364,3 +364,38 @@ func TestPlanningRejectsChangedAssignmentsAndInvalidOutput(t *testing.T) {
 		t.Fatal("cancel state not retained")
 	}
 }
+
+func TestOptInWorkerClaimsPlanningWithoutChangingLegacyClaims(t *testing.T) {
+	s, actors, c, input := planningFixture(t)
+	ctx := context.Background()
+	a := actors[0]
+	plan := createAndStartPlanning(t, s, a, c, input)
+	ids := []string{input.Planners[0].SessionID, input.Planners[1].SessionID}
+	if r, err := s.ClaimAvailableRequest(ctx, a, c.ID, uuid.NewString(), ids); err != nil || r != nil {
+		t.Fatal("legacy worker received planning", r, err)
+	}
+	if r, err := s.ClaimAvailableWork(ctx, a, c.ID, uuid.NewString(), []string{}); err != nil || r != nil {
+		t.Fatal("empty eligibility claimed work", r, err)
+	}
+	for i := 0; i < 5; i++ {
+		key := uuid.NewString()
+		r, err := s.ClaimAvailableWork(ctx, a, c.ID, key, ids)
+		if err != nil || r == nil || r.Kind != "planning" || r.PlanID != plan.ID {
+			t.Fatal("mixed claim", r, err)
+		}
+		replay, err := s.ClaimAvailableWork(ctx, a, c.ID, key, ids)
+		if err != nil || replay == nil || replay.ID != r.ID || replay.LeaseToken != r.LeaseToken {
+			t.Fatal("claim replay", replay, err)
+		}
+		if _, err = s.ActOnRequest(ctx, a, c.ID, r.ID, uuid.NewString(), RequestAction{Action: "start", LeaseToken: r.LeaseToken}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.ActOnRequest(ctx, a, c.ID, r.ID, uuid.NewString(), RequestAction{Action: "finish", LeaseToken: r.LeaseToken, Outcome: "completed", Evidence: "Synthetic completion", Output: "Synthetic mixed-worker result"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := s.Planning(ctx, a, c.ID, plan.ID, 1)
+	if err != nil || result.Version.State != "ready" || len(result.Version.Steps) != 5 {
+		t.Fatal("plan completion", result, err)
+	}
+}

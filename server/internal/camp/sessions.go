@@ -388,6 +388,9 @@ func (s *Store) WriteTranscript(ctx context.Context, a auth.Actor, campID, id, r
 	return result, tx.Commit(ctx)
 }
 func (s *Store) Transcript(ctx context.Context, a auth.Actor, campID, id string, revision, before int64, limit int) (Transcript, error) {
+	return retryRead(ctx, func() (Transcript, error) { return s.transcriptOnce(ctx, a, campID, id, revision, before, limit) })
+}
+func (s *Store) transcriptOnce(ctx context.Context, a auth.Actor, campID, id string, revision, before int64, limit int) (Transcript, error) {
 	if limit < 1 || limit > 200 || revision < 0 || before < 0 {
 		return Transcript{}, ErrInput
 	}

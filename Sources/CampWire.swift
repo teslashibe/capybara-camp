@@ -66,6 +66,15 @@ struct CloudRequest: Codable, Identifiable, Equatable, Sendable {
     var id: String; var campId: String; var sessionId: String; var requesterUserId: String; var ownerUserId: String; var ownerDeviceId: String
     var permissionRevision: Int64; var revision: Int64; var prompt: String; var model: String; var effort: String; var speed: String; var state: String
     var leaseToken: String?; var leaseUntil: Date?; var createdAt: Date; var evidence: String?; var reason: String?; var sources: [CloudSourceRef]
+    var kind: String? = nil
+    var planId: String? = nil
+    var planVersion: Int? = nil
+    var planStep: Int? = nil
+    var isPlanning: Bool { kind == "planning" }
+    var supportedWork: Bool {
+        if isPlanning { return planId.flatMap(UUID.init(uuidString:)) != nil && (planVersion ?? 0) > 0 && (0..<5).contains(planStep ?? -1) }
+        return (kind == nil || kind == "chat") && planId == nil
+    }
 }
 struct CloudEvent: Codable, Sendable {
     struct Payload: Codable, Sendable {

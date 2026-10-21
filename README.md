@@ -68,13 +68,14 @@ The `codex/capybara-v1` work adds a Go shared-Camp service with PostgreSQL,
 email sign-in, membership, versioned transcripts, permission checks, a durable
 prompt queue and live events. The Swift client includes a scoped SQLite cache,
 an offline outbox, Camp connection controls and shared transcript viewing.
-The owner-Mac worker can execute shared chat requests. Local five-step plans can
+The owner-Mac worker can execute shared chat requests and isolated shared
+planning steps. Local five-step plans can
 continue into implementation with a separate executor choice on the same ticket.
 Completion notifications include a native inbox, foreground toasts, optional
 macOS alerts and server-owned read receipts across a person's devices.
 See [notifications](docs/notifications.md) for the current delivery
 and cross-device boundaries.
-Shared planning execution, cloud runners, memory and skills are still in
+Shared planning creation and editing in the native UI, cloud runners, memory and skills are still in
 development. These features are not included in v0.0.1. See [planning](docs/planning.md),
 [cloud execution scope](docs/cloud-execution.md), and [self-hosting](docs/self-hosting.md)
 for the current implementation boundary and [the V1 epic](https://github.com/teslashibe/capybara-camp/issues/1)

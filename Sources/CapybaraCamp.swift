@@ -396,10 +396,18 @@ final class TranscriptWatch {
         cloud.worker.nativeSession = { [weak sharing] remote in sharing?.native(for: "camp:" + remote.id) }
         cloud.worker.available = { [weak self] local in
             guard let self else { return false }
-            return self.activity[local.id] == nil && self.conversations.count + self.planning.activeCount < 4 && !self.planning.uses(local.provider) && !self.conversations.values.contains { $0.session.provider == local.provider && $0.session.root == local.root }
+            return self.activity[local.id] == nil && self.conversations.count + self.planning.activeCount + self.cloud.worker.activePlanningCount < 4 && !self.planning.uses(local.provider) && !self.conversations.values.contains { $0.session.provider == local.provider && $0.session.root == local.root }
         }
         cloud.worker.execute = { [weak self] local, request, prompt, history, contexts, completed in
             guard let self else { return nil }
+            if request.isPlanning {
+                let run = LocalConversation(session: local, history: [], prompt: prompt)
+                run.completed = completed
+                do {
+                    try run.start(prompt: prompt, model: request.model, tuning: ModelTuning(effort: request.effort, speed: request.speed), contexts: contexts, mode: .planning, makeProcess: self.conversationProcess)
+                    return run
+                } catch { return nil }
+            }
             let references = request.sources.map { SessionReference(id: "camp:" + $0.sessionId, scope: self.cloud.scope?.key, cloud: $0) }
             guard self.start(local, prompt: prompt, model: request.model, tuning: ModelTuning(effort: request.effort, speed: request.speed), history: history, contexts: contexts, references: references, notifyCompletion: false, completion: completed) else { return nil }
             return self.conversations[local.id]
@@ -444,7 +452,7 @@ final class TranscriptWatch {
         }
         planning.available = { [weak self] planner in
             guard let self else { return false }
-            return self.conversations.count + self.planning.activeCount < 4 &&
+            return !self.cloud.worker.usesPlanningProvider(planner.session.provider) && self.conversations.count + self.planning.activeCount + self.cloud.worker.activePlanningCount < 4 &&
                 !self.conversations.values.contains { $0.session.provider == planner.session.provider && $0.session.root == planner.session.root }
         }
         planning.prepare = { [weak self] planner, references in
@@ -897,7 +905,7 @@ final class TranscriptWatch {
         let s = planning.ticket(s.id)?.session ?? s
         let execution = planning.ticket(s.id)?.implementation
         guard !s.isCloud, s.provider != "Planning", conversations[s.id] == nil else { banner = "This session already has a running turn"; return false }
-        guard conversations.count + planning.activeCount < 4, !planning.uses(s.provider), !conversations.values.contains(where: { $0.session.provider == s.provider && $0.session.root == s.root }) else {
+        guard conversations.count + planning.activeCount + cloud.worker.activePlanningCount < 4, !planning.uses(s.provider), !cloud.worker.usesPlanningProvider(s.provider), !conversations.values.contains(where: { $0.session.provider == s.provider && $0.session.root == s.root }) else {
             banner = "This profile is busy. Queue the prompt or wait for its current turn"; return false
         }
         guard activityFor(s) == nil else { banner = "Close this session in \(s.provider) before sending from Camp"; return false }

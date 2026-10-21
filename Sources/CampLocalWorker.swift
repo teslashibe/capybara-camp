@@ -26,6 +26,9 @@ import SwiftUI
     private var polling = false
     private var active: LocalConversation?
     private var activeAttempt: CloudAttempt?
+    private var reservedPlanningSession: CampSession?
+    private var preparingRequestID: String?
+    private var preparationInterruption: String?
     private var heartbeatAt = Date.distantPast
     private var hasWorkHint = true
     private var queueSignal: UInt64 = 0
@@ -36,6 +39,10 @@ import SwiftUI
         self.cache = cache; self.automatic = automatic; self.heartbeatInterval = heartbeatInterval
     }
     deinit { task?.cancel(); leaseTask?.cancel() }
+    var activePlanningCount: Int { reservedPlanningSession != nil || activeAttempt?.request.isPlanning == true ? 1 : 0 }
+    func usesPlanningProvider(_ provider: String) -> Bool {
+        reservedPlanningSession?.provider == provider || (activeAttempt?.request.isPlanning == true && active?.session.provider == provider)
+    }
 
     func attach(scope: CloudScope?, actor: CloudActor?, transport: (any CampPublishingTransport)?, sessions: [CloudSession]) {
         let priorEligibility = Set(self.sessions.map { "\($0.id):\($0.ownerUserId):\($0.ownerDeviceId):\($0.externalOwner)" })
@@ -43,7 +50,7 @@ import SwiftUI
         self.sessions = sessions
         guard let scope, let actor, let transport else {
             task?.cancel(); task = nil; leaseTask?.cancel(); leaseTask = nil; active?.stop(); active = nil; activeAttempt = nil
-            context = nil; issues = []; status = "Local worker idle"; return
+            context = nil; reservedPlanningSession = nil; issues = []; status = "Local worker idle"; return
         }
         if context?.scope == scope, context?.actor.deviceId == actor.deviceId {
             context?.transport = transport
@@ -67,6 +74,7 @@ import SwiftUI
     func changed(_ request: CloudRequest) {
         if ["queued", "completed", "failed", "cancelled"].contains(request.state) { hasWorkHint = true; queueSignal &+= 1 }
         if request.id == activeAttempt?.id, ["cancel_requested", "cancelled", "outcome_unknown"].contains(request.state) { active?.stop() }
+        if request.id == preparingRequestID, ["cancel_requested", "cancelled", "outcome_unknown"].contains(request.state) { preparationInterruption = request.state }
         wake()
     }
     func scan() { hasWorkHint = true; queueSignal &+= 1; wake() }
@@ -83,6 +91,10 @@ import SwiftUI
         var body: [String: Any] = ["action": name, "lease_token": attempt.request.leaseToken ?? ""]
         if let value = attempt.outcome { body["outcome"] = value }
         if let value = attempt.evidence { body["evidence"] = value }
+        if attempt.request.isPlanning, ["finish", "reconcile"].contains(name) {
+            if let output = attempt.output { body["output"] = output }
+            if let usage = attempt.usage { body["usage"] = try JSONSerialization.jsonObject(with: CampWire.encoder().encode(usage)) }
+        }
         let data = try await c.transport.perform(CampPublication(key: key, kind: name, method: "POST", path: "/v1/camps/\(c.scope.campId)/requests/\(attempt.id)/actions", body: try CampWire.body(body)))
         try check(c)
         let request = try CampWire.decoder().decode(CloudRequest.self, from: data)
@@ -148,7 +160,7 @@ import SwiftUI
                 status = "Local worker ready"; return
             }
             guard request.ownerUserId == c.actor.userId, request.ownerDeviceId == c.actor.deviceId,
-                  request.campId == c.scope.campId, request.state == "claimed", UUID(uuidString: request.leaseToken ?? "") != nil else { throw CampCloudError.invalidResponse }
+                  request.campId == c.scope.campId, request.supportedWork, request.state == "claimed", UUID(uuidString: request.leaseToken ?? "") != nil else { throw CampCloudError.invalidResponse }
             let attempt = CloudAttempt(id: request.id, scope: c.scope.key, request: request, localSessionId: "", state: "claimed", startKey: UUID().uuidString, finishKey: UUID().uuidString)
             try await cache.finishWorkerClaim(attempt, scope: c.scope, expectedEpoch: c.epoch!)
             requestUpdated?(request); try await begin(attempt, c)
@@ -163,6 +175,9 @@ import SwiftUI
 
     private func begin(_ saved: CloudAttempt, _ c: Context) async throws {
         var attempt = saved
+        guard attempt.request.supportedWork else { throw CampCloudError.invalidResponse }
+        preparingRequestID = attempt.id; preparationInterruption = nil
+        defer { preparingRequestID = nil; preparationInterruption = nil }
         let current = try await get(CloudRequest.self, "/v1/camps/\(c.scope.campId)/requests/\(attempt.id)", c)
         guard current.state == "claimed" else {
             if ["queued", "completed", "failed", "cancelled"].contains(current.state) {
@@ -179,9 +194,11 @@ import SwiftUI
             try await cache?.removeWorkerAttempt(attempt.id, scope: c.scope, expectedEpoch: c.epoch!)
             status = "Waiting for the assigned local session"; return
         }
+        if attempt.request.isPlanning { reservedPlanningSession = local }
+        defer { reservedPlanningSession = nil }
         attempt.localSessionId = local.id
         let history: [Message], contexts: [SessionContext]
-        do { history = try await readHistory(local); contexts = try await sourceContexts(attempt.request, c) }
+        do { history = attempt.request.isPlanning ? [] : try await readHistory(local); contexts = try await sourceContexts(attempt.request, c) }
         catch {
             // No provider process has started. Persist a failed admission instead
             // of repeatedly claiming an unreadable source or oversized snapshot.
@@ -203,6 +220,10 @@ import SwiftUI
             issues.append(attempt); throw error
         }
         attempt.state = "running"; try await save(attempt, c); try check(c)
+        if let interrupted = preparationInterruption {
+            await finished(attempt, ConversationResult(state: interrupted == "outcome_unknown" ? "uncertain" : "cancelled", message: "Stopped before provider submission", accepted: false), c)
+            return
+        }
         activeAttempt = attempt; heartbeatAt = Date().addingTimeInterval(heartbeatInterval)
         let running = attempt
         let launched = execute?(local, attempt.request, attempt.request.prompt, history, contexts, { [weak self] result in
@@ -211,7 +232,7 @@ import SwiftUI
         guard let launched else {
             await finished(attempt, ConversationResult(state: "failed", message: "The local runner was unavailable before submission", accepted: false), c); return
         }
-        active = launched; status = "Running shared work on this Mac"
+        active = launched; status = attempt.request.isPlanning ? "Planning on this Mac" : "Running shared work on this Mac"
         watchLease(attempt.request.leaseUntil, attempt: attempt, context: c)
     }
     private func watchLease(_ deadline: Date?, attempt: CloudAttempt, context c: Context) {
@@ -264,6 +285,17 @@ import SwiftUI
         attempt.state = result.state == "uncertain" ? "uncertain" : "finish_pending"
         attempt.outcome = result.state == "uncertain" ? nil : result.state
         attempt.evidence = "Local CLI \(result.state); attempt \(attempt.startKey)"
+        if attempt.request.isPlanning {
+            let validOutput = result.output.utf8.count <= 8192
+            let validUsage = (result.usage.inputTokens ?? 0) >= 0 && (result.usage.outputTokens ?? 0) >= 0
+            if validOutput && validUsage {
+                attempt.output = result.output; attempt.usage = result.usage
+            }
+            if result.state == "completed" && (!validOutput || !validUsage || result.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
+                attempt.state = "finish_pending"; attempt.outcome = "failed"
+                attempt.evidence = "The planning CLI returned an invalid or empty result"
+            }
+        }
         do {
             try await save(attempt, c)
             if context?.generation == c.generation {
@@ -283,6 +315,9 @@ import SwiftUI
     }
     func confirm(_ attempt: CloudAttempt, outcome: String) async {
         guard let c = context, ["completed", "failed", "cancelled"].contains(outcome), issues.contains(where: { $0.id == attempt.id }) else { return }
+        guard !attempt.request.isPlanning || outcome != "completed" || !(attempt.output ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            status = "The planning output is unavailable. Mark this turn failed or cancelled before restarting the plan"; return
+        }
         var value = attempt; value.state = "finish_pending"; value.outcome = outcome
         value.evidence = "Owner reviewed the local transcript; attempt \(value.startKey)"
         do { try await save(value, c); try await settle(value, c) }

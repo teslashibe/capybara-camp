@@ -306,6 +306,9 @@ func (s *Store) loadPlanning(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 	return p, nil
 }
 func (s *Store) Planning(ctx context.Context, a auth.Actor, campID, id string, version int64) (PlanningTicket, error) {
+	return retryRead(ctx, func() (PlanningTicket, error) { return s.planningOnce(ctx, a, campID, id, version) })
+}
+func (s *Store) planningOnce(ctx context.Context, a auth.Actor, campID, id string, version int64) (PlanningTicket, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
 		return PlanningTicket{}, err
@@ -347,6 +350,9 @@ type PlanningSummary struct {
 }
 
 func (s *Store) ListPlanning(ctx context.Context, a auth.Actor, campID string) ([]PlanningSummary, error) {
+	return retryRead(ctx, func() ([]PlanningSummary, error) { return s.listPlanningOnce(ctx, a, campID) })
+}
+func (s *Store) listPlanningOnce(ctx context.Context, a auth.Actor, campID string) ([]PlanningSummary, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
 		return nil, err

@@ -3,7 +3,8 @@
 The V1 development server has a durable five-step planning queue. The Mac app
 also has a private local planning coordinator and paired-chat workspace. Local
 plans persist on the owning Mac and use isolated official CLI turns. The native
-workspace is not yet connected to the shared planning queue or cloud runners.
+workspace does not yet create or edit shared planning tickets. The owner-Mac
+worker can execute their queued steps, while cloud runners remain unfinished.
 Local plans can continue into an approved implementation on the same ticket.
 
 The local workspace includes a saved board card, independently selected
@@ -49,8 +50,10 @@ The installed CLI enforces project permissions, and requests for additional
 access appear in chat. See [execution approvals](execution-approvals.md).
 
 Steps reuse the existing approved request and lease lifecycle. A separate
-planning claim endpoint prevents older chat workers from resuming an anchor
-session by mistake. Planning uses the anchor only to identify its provider
+planning claim endpoint and explicit `include_planning` opt-in on mixed claims
+prevent older chat workers from resuming an anchor session by mistake. New
+native workers claim chat and planning through the same durable queue. Planning
+uses the anchor only to identify its provider
 profile and project. The CLI bridge starts an ephemeral Codex thread or a
 non-persistent Claude session; it does not append planning turns to the anchor
 conversation. The request mode also refuses mid-turn steering of the frozen
@@ -93,8 +96,9 @@ respect the same plan visibility as reads.
   offered, available sessions
 - Existing request actions acknowledge start, heartbeat, finish and reconciliation
 
-Schema 5 is additive and retains older request receipts and session history.
-Run migrations before the new server. The public deployment templates use the
+Planning tables were introduced in schema 5; the current server requires schema
+6, including recipient notifications. Older request receipts and session
+history are retained. Run migrations before the new server. The public deployment templates use the
 same image for the migration job and API.
 
 Tests cover the five-step sequence, preserved output/settings, private events,
@@ -107,5 +111,15 @@ fixture in a disposable development app; they do not prove actual provider
 execution. Local implementation tests cover independent executor selection,
 project binding, approval invalidation, queued continuation, terminal transcript
 updates, duplicate-card suppression and restart recovery. Real two-provider
-execution, shared planning worker integration and cloud runners remain release
-work.
+execution, shared planning creation/editing in the native workspace and cloud
+runners remain release work. Shared worker results persist before reporting
+completion and retain their output and usage through a lost acknowledgement;
+recovery never repeats the provider turn automatically.
+
+The native worker walkthrough shares two synthetic local sessions, starts a
+plan through the real Go API, and verifies five isolated subprocess turns,
+saved outputs and usage, the completion notification, and both result panes.
+An active cancellation stops the current fixture process and prevents the next
+step. Creating and controlling shared plans from the native planning workspace
+remains unfinished. Snapshot reads retry a concurrent database update at most
+three times; those retries never repeat provider work or mutation commands.

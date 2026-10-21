@@ -57,6 +57,9 @@ func scanNotification(row rowScanner) (Notification, error) {
 	return n, err
 }
 func (s *Store) Notifications(ctx context.Context, a auth.Actor, campID, before string, limit int) (NotificationPage, error) {
+	return retryRead(ctx, func() (NotificationPage, error) { return s.notificationsOnce(ctx, a, campID, before, limit) })
+}
+func (s *Store) notificationsOnce(ctx context.Context, a auth.Actor, campID, before string, limit int) (NotificationPage, error) {
 	out := NotificationPage{Notifications: []Notification{}}
 	if limit < 1 || limit > 100 || before != "" && !validID(before) {
 		return out, ErrInput

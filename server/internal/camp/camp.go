@@ -139,6 +139,9 @@ func (s *Store) Create(ctx context.Context, a auth.Actor, requestID, name string
 	return c, tx.Commit(ctx)
 }
 func (s *Store) Snapshot(ctx context.Context, a auth.Actor, id string) (Snapshot, error) {
+	return retryRead(ctx, func() (Snapshot, error) { return s.snapshotOnce(ctx, a, id) })
+}
+func (s *Store) snapshotOnce(ctx context.Context, a auth.Actor, id string) (Snapshot, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
 		return Snapshot{}, err

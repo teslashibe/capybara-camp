@@ -62,7 +62,7 @@ Use `Authorization: Bearer <device-token>` after sign-in.
 | `POST /v1/camps/{camp}/sessions/{id}/requests` | Prompt, model, effort, speed and pinned source references |
 | `GET /v1/camps/{camp}/requests` | Latest 100 requests created by or addressed to this user |
 | `GET /v1/camps/{camp}/requests/{id}` | Current request state; excludes its worker lease token |
-| `POST /v1/camps/{camp}/requests/claim` | Claim one eligible request on its owning device |
+| `POST /v1/camps/{camp}/requests/claim` | Claim one eligible request on its owning device; `include_planning: true` with explicit `session_ids` opts into isolated planning work |
 | `POST /v1/camps/{camp}/requests/{id}/actions` | Approve, start, heartbeat, cancel, finish or reconcile |
 
 Every Camp mutation requires a UUID `Idempotency-Key`. Reusing the same key for

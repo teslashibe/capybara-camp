@@ -58,6 +58,22 @@ func TestNativeFixtureServer(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// The driver controls only this disposable fixture's synthetic owner. Keep
+	// its credential out of console output and out of the app's user defaults.
+	driverToken, err := auth.Token()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO devices(id,user_id,name,token_hash,expires_at) VALUES($1,$2,'Fixture driver',$3,now()+interval '1 hour')`, actors[0].DeviceID, actors[0].UserID, auth.HashToken(driverToken)); err != nil {
+		t.Fatal(err)
+	}
+	driver, err := json.Marshal(map[string]string{"token": driverToken, "user_id": actors[0].UserID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(directory, "driver.json"), driver, 0600); err != nil {
+		t.Fatal(err)
+	}
 	c, err := store.Create(ctx, actors[0], uuid.NewString(), "Demo Camp")
 	if err != nil {
 		t.Fatal(err)

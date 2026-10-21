@@ -15,6 +15,8 @@ struct CloudAttempt: Codable, Identifiable, Sendable {
     var state: String; var startKey: String; var finishKey: String
     var outcome: String?
     var evidence: String?
+    var output: String?
+    var usage: ConversationUsage?
 }
 
 actor CampCache {
@@ -236,7 +238,7 @@ actor CampCache {
             try checkEpoch(scope, expectedEpoch)
             let key = "worker-claim:" + scope.key
             if let saved = try metadata(key) { return try CampWire.decoder().decode(CampPublication.self, from: saved) }
-            let command = CampPublication(kind: "claim", method: "POST", path: "/v1/camps/\(scope.campId)/requests/claim", body: try CampWire.body(["session_ids": sessions]))
+            let command = CampPublication(kind: "claim", method: "POST", path: "/v1/camps/\(scope.campId)/requests/claim", body: try CampWire.body(["session_ids": sessions, "include_planning": true]))
             try setMetadata(key, CampWire.encoder().encode(command)); return command
         }
     }
@@ -292,7 +294,7 @@ actor CampCache {
                 if ["completed", "failed", "cancelled"].contains(attempt.state) {
                     try execute("DELETE FROM attempts WHERE id=?", [.text(attempt.id)]); continue
                 }
-                attempt.request.prompt = ""; attempt.request.sources = []; attempt.state = "uncertain"
+                attempt.request.prompt = ""; attempt.request.sources = []; attempt.output = nil; attempt.usage = nil; attempt.state = "uncertain"
                 try saveAttempt(attempt)
             }
         }
