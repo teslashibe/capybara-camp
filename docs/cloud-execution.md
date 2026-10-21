@@ -25,6 +25,28 @@ local transcripts. Cloud execution is the next runtime extension.
 
 ## Identities and authentication
 
+The first-run flow is Connect Camp → Add accounts → Choose defaults. Connecting
+Camp uses the person's verified email and saved server address. Add accounts
+offers Codex or Claude, an optional name, and the official provider sign-in.
+After one account connects, Add another returns to the same flow. People may
+skip cloud account setup and keep working locally. The app cannot authorize all
+six provider accounts with a single Camp login: each distinct provider account
+needs its own consent once per installation.
+
+Defaults and per-task choices use the same location/account control. A planning
+ticket stores two independent destinations; it must never represent both
+planners as one Codex account. A mixed plan shows Local and Cloud on its board
+location action. Opening that action returns to the two planner controls.
+Starting freezes both destinations alongside their model settings. Changing a
+global default only affects newly created work. Implementation chooses its own
+destination and records it in the same ticket's history.
+
+Selecting an unavailable account shows the specific reconnect action and prevents
+Start; no invisible account replacement is allowed. Returning from account setup
+restores the pending task and selection. Provider account identifiers, not
+editable labels, bind defaults and work. The account's model and usage views
+refresh after verified sign-in, without assuming either API is available.
+
 A Camp login identifies a person. A provider account identifies whose Codex or
 Claude allowance is used. A profile installation is that account's login on one
 specific Mac or cloud runner. A directory name or account label proves neither
