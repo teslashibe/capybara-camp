@@ -1,0 +1,34 @@
+name: Server checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17@sha256:a63c1ea3f6a3a5a1621f97d2aba3b30faecfab4224c1b0000cc85ced57bb1939
+        env:
+          POSTGRES_PASSWORD: camp_fixture_only
+          POSTGRES_DB: camp_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d camp_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Test durable behavior against PostgreSQL
+        working-directory: server
+        env:
+          CAMP_TEST_DATABASE_URL: postgres://postgres:camp_fixture_only@127.0.0.1:5432/camp_test?sslmode=disable
+        run: go test -race -count=1 ./...
+      - name: Vet and build
+        working-directory: server
+        run: |
+          go vet ./...
+          go build ./cmd/...

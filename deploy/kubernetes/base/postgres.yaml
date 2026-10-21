@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: camp-postgres
+spec:
+  clusterIP: None
+  selector:
+    app: camp-postgres
+  ports:
+    - name: postgres
+      port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: camp-postgres
+spec:
+  serviceName: camp-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: camp-postgres
+  template:
+    metadata:
+      labels:
+        app: camp-postgres
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        runAsNonRoot: true
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: postgres:17@sha256:a63c1ea3f6a3a5a1621f97d2aba3b30faecfab4224c1b0000cc85ced57bb1939
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: POSTGRES_DB
+              value: camp
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: camp-secrets
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: CAMP_RUNTIME_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_RUNTIME_DB_PASSWORD}
+            - name: CAMP_MIGRATION_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_MIGRATION_DB_PASSWORD}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, postgres, -d, camp]
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {cpu: "2", memory: 2Gi}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: bootstrap
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: bootstrap
+          configMap:
+            name: camp-postgres-init
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: camp-postgres-init
+data:
+  01-roles.sql: |
+    \getenv runtime_password CAMP_RUNTIME_DB_PASSWORD
+    \getenv migration_password CAMP_MIGRATION_DB_PASSWORD
+    CREATE ROLE camp_runtime LOGIN PASSWORD :'runtime_password';
+    CREATE ROLE camp_migrator LOGIN PASSWORD :'migration_password';
+    ALTER DATABASE camp OWNER TO camp_migrator;
+    \connect camp
+    REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+    GRANT USAGE, CREATE ON SCHEMA public TO camp_migrator;
+    GRANT USAGE ON SCHEMA public TO camp_runtime;

@@ -62,6 +62,14 @@ Tests use local fixtures and fake CLI processes; they do not need provider accou
 
 By default, builds go into `build/` and use ad-hoc signing. Set `CAMP_SIGN_IDENTITY` for your own certificate, `CAMP_APP_PATH` for a different output bundle, or `CAMP_BUNDLE_ID` for a different identifier. The default identifier is `com.capybaracamp.app`. Repeated builds keep that identifier; a matching binary hash across different builds is not promised.
 
+## V1 development
+
+The `codex/capybara-v1` work adds a shared Camp service and native collaboration.
+The service foundation and public Kubernetes/Hetzner templates are under development;
+these features are not included in v0.0.1. See [self-hosting](docs/self-hosting.md)
+for the current implementation boundary and [the V1 epic](https://github.com/teslashibe/capybara-camp/issues/1)
+for release acceptance.
+
 ## Website
 
 The public website is hosted on Cloudflare Pages at [capybaracamp.com](https://capybaracamp.com), using the `capybara-camp` Direct Upload project. Its source is `docs/index.html`; a Cloudflare Redirect Rule sends the `www` address to the main domain.
