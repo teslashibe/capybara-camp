@@ -3,8 +3,8 @@
 The V1 development server has a durable five-step planning queue. The Mac app
 also has a private local planning coordinator and paired-chat workspace. Local
 plans persist on the owning Mac and use isolated official CLI turns. The native
-workspace is not yet connected to the shared planning queue or cloud runners;
-implementation approval and execution remain release work.
+workspace is not yet connected to the shared planning queue or cloud runners.
+Local plans can continue into an approved implementation on the same ticket.
 
 The local workspace includes a saved board card, independently selected
 profiles and model settings, pinned session context, separate draft/review
@@ -25,6 +25,28 @@ source message ranges, two provider profiles, model/effort/speed settings and
 merge provider. Each provider drafts independently, reviews the other draft
 once, and one produces the combined plan. The combined-plan prompt explicitly
 retains unresolved disagreements.
+
+## Local implementation
+
+The combined plan opens an implementation setup step in the same workspace.
+Choose an executor profile, model, effort and supported speed independently of
+the two planners. Selecting a different profile retains the plan's original
+project directory. Approve and implement freezes the plan revision, executor and
+local CLI configuration snapshot, then creates a persistent provider session.
+
+The board card keeps its logical ticket ID and becomes a provider session card.
+Its chat streams the implementation and accepts steering or queued follow-ups.
+View plan and history returns to the drafts, reviews and combined plan. Previous
+implementations remain in history when a new planning revision starts.
+Imported copies of the implementation's native session do not create another
+visible board card. Terminal activity and saved transcript updates refer back to
+the same ticket.
+
+An implementation attempt is saved before launch. On interruption, its outcome
+requires review; Camp does not automatically repeat it. Continuing the same
+provider session or starting another implementation is an explicit choice.
+The installed CLI enforces project permissions, and requests for additional
+access appear in chat. See [execution approvals](execution-approvals.md).
 
 Steps reuse the existing approved request and lease lifecycle. A separate
 planning claim endpoint prevents older chat workers from resuming an anchor
@@ -82,5 +104,8 @@ Native tests exercise isolated mode, five-step ordering, independent settings,
 pause/resume, preserved restart history, unknown-outcome recovery, bounded
 outputs and usage parsing. Computer-use checks use a clearly synthetic provider
 fixture in a disposable development app; they do not prove actual provider
-execution. Real two-provider validation, shared worker integration and
-implementation approval remain release work.
+execution. Local implementation tests cover independent executor selection,
+project binding, approval invalidation, queued continuation, terminal transcript
+updates, duplicate-card suppression and restart recovery. Real two-provider
+execution, shared planning worker integration and cloud runners remain release
+work.

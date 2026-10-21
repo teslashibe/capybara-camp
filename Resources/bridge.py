@@ -83,6 +83,9 @@ def db_open(path):
 def source_id(provider, root):
     return provider + ":" + str(root.resolve())
 
+def session_lock_key(value, native_id=None):
+    return source_id(value['provider'], Path(value['root'])) + ':' + (native_id or value['sessionID'])
+
 def detect_provider(root):
     if not root.is_dir():
         return None
@@ -381,7 +384,7 @@ def chat(s, prompt, model="", effort="", speed=""):
     # Serialize sends across multiple app windows/processes for this session.
     import fcntl
     SUPPORT.mkdir(parents=True, exist_ok=True, mode=0o700)
-    lock_path = SUPPORT / ("run-" + hashlib.sha256(s["id"].encode()).hexdigest() + ".lock")
+    lock_path = SUPPORT / ("run-" + hashlib.sha256(session_lock_key(s).encode()).hexdigest() + ".lock")
     lock = os.fdopen(os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600), "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -507,7 +510,7 @@ def chat(s, prompt, model="", effort="", speed=""):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("action", choices=["scan", "transcript", "export-page", "chat", "conversation", "add-source", "activity", "children"])
+    p.add_argument("action", choices=["scan", "transcript", "export-page", "chat", "conversation", "execution-context", "add-source", "activity", "children"])
     args = p.parse_args()
     if args.action == "scan":
         emit(scan())
@@ -523,6 +526,9 @@ def main():
     elif args.action == "conversation":
         from conversation import run
         run(json.loads(sys.stdin.readline()))
+    elif args.action == "execution-context":
+        from execution import execution_context
+        emit(execution_context(json.load(sys.stdin)['session']))
     else:
         request = json.load(sys.stdin)
         if args.action == "export-page":

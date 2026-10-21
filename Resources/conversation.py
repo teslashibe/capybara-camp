@@ -208,10 +208,10 @@ def codex_config(config, context_server=None):
 
 
 def run(request, input_stream=None, emit=None, command=None):
-    from bridge import SUPPORT, runtime_command, runtime_env
+    from bridge import SUPPORT, runtime_command, runtime_env, session_lock_key
     from bridge import emit as default_emit
     from activity import assert_available
-    emit = emit or default_emit
+    publish = emit or default_emit
     input_stream = input_stream or sys.stdin
     request = dict(request)
     request.pop("_camp_mcp", None)
@@ -223,6 +223,10 @@ def run(request, input_stream=None, emit=None, command=None):
         raise ValueError("Unknown conversation mode")
     if implementing and request.get('executionApproved') is not True:
         raise ValueError('Approve the implementation before enabling project tools')
+    if implementing:
+        from execution import execution_context
+        if request.get('executionContext') != execution_context(s)['fingerprint']:
+            raise ValueError('The project or CLI settings changed. Review the implementation approval again.')
     if type(request.get('newSession', False)) is not bool:
         raise ValueError('Invalid session creation choice')
     if planning and s.get("provider") == "Claude":
@@ -234,14 +238,25 @@ def run(request, input_stream=None, emit=None, command=None):
     # Validate model and tuning with the existing adapter before starting a process.
     native_command = runtime_command(s, request.get("model", ""), request.get("effort", ""), request.get("speed", ""))
     SUPPORT.mkdir(parents=True, exist_ok=True, mode=0o700)
-    lock_key = "planning:" + s["provider"] if planning else s["id"]
-    lock_path = SUPPORT / ("run-" + hashlib.sha256(lock_key.encode()).hexdigest() + ".lock")
-    lock = os.fdopen(os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600), "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        lock.close()
-        raise ValueError("This session is already running in Capybara Camp")
+    locks = {}
+    def acquire(key):
+        if key in locks:
+            return
+        path = SUPPORT / ("run-" + hashlib.sha256(key.encode()).hexdigest() + ".lock")
+        lock = os.fdopen(os.open(path, os.O_RDWR | os.O_CREAT, 0o600), "w")
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock.close()
+            raise ValueError("This session is already running in Capybara Camp")
+        locks[key] = lock
+    acquire("planning:" + s["provider"] if planning else session_lock_key(s))
+    def emit(event):
+        if implementing and event.get('type') == 'session':
+            # Codex assigns the native ID after thread/start. Hold its lock before
+            # publishing that ID or submitting the first implementation turn.
+            acquire(session_lock_key(s, event['sessionID']))
+        publish(event)
     connection = None
     grant = None
     controls = queue.Queue()
@@ -314,7 +329,8 @@ def run(request, input_stream=None, emit=None, command=None):
             grant.close()
         for sig, handler in previous.items():
             signal.signal(sig, handler)
-        lock.close()
+        for lock in locks.values():
+            lock.close()
 
 
 def codex_turn(c, s, request, controls, emit):

@@ -2,6 +2,38 @@
 import json
 import uuid
 import copy
+import hashlib
+from pathlib import Path
+
+
+def execution_context(session):
+    """Bind approval to the project/profile and local CLI configuration bytes."""
+    if session.get('provider') not in ('Codex', 'Claude'):
+        raise ValueError('Choose a supported implementation provider')
+    cwd = Path(session.get('cwd') or '').resolve()
+    root = Path(session.get('root') or '').resolve()
+    if not session.get('cwd') or not cwd.is_dir() or not session.get('root') or not root.is_dir():
+        raise ValueError('Restore the selected project and profile before implementation')
+    files = set()
+    if session['provider'] == 'Codex':
+        files.update([root / 'config.toml', root / 'requirements.toml', Path('/etc/codex/requirements.toml')])
+        files.update(parent / '.codex/config.toml' for parent in [cwd, *cwd.parents])
+    else:
+        files.add(root / 'settings.json')
+        files.update(Path('/Library/Application Support/ClaudeCode') / name for name in ['managed-settings.json', 'managed-mcp.json'])
+        for parent in [cwd, *cwd.parents]:
+            files.update(parent / '.claude' / name for name in ['settings.json', 'settings.local.json'])
+    digest = hashlib.sha256(json.dumps([session['provider'], str(root), str(cwd)]).encode())
+    for path in sorted(files):
+        digest.update(str(path).encode())
+        if not path.exists():
+            digest.update(b'missing')
+            continue
+        if not path.is_file() or path.stat().st_size > 1024 * 1024:
+            raise ValueError('A CLI configuration file is invalid or exceeds 1 MB')
+        digest.update(path.read_bytes())
+    return {'fingerprint': digest.hexdigest(), 'cwd': str(cwd), 'profile': str(root),
+            'provider': session['provider'], 'permissionSummary': 'Installed CLI project rules'}
 
 
 class ApprovalRelay:

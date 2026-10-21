@@ -2,11 +2,17 @@
 
 The native CLI bridge has a separate implementation mode. Ordinary chat and
 planning retain their read-only configuration. Implementation requires an
-explicit internal approval marker and can create a new persistent provider
-session or resume an existing one. The marker is not a remote authorization
-credential; the approved-plan controller must bind it to the selected plan,
-profile, model, project and permissions before this becomes a user-facing flow.
-That controller and the same-ticket implementation transition are still pending.
+explicit plan approval and can create a new persistent provider session or resume
+the ticket's existing one. The local controller binds approval to the immutable
+plan revision, selected profile/model settings and project. It saves each attempt
+before provider submission and retains the same logical card and plan history.
+The internal marker is not a remote authorization credential.
+
+The bridge checks a fingerprint of the project/profile paths and relevant local
+CLI configuration files immediately before launch. A changed fingerprint blocks
+the turn and requires another review. This snapshot does not attest to the
+account identity, entitlement or all dynamically supplied provider policies;
+the installed CLI remains responsible for those checks and permission decisions.
 
 Implementation uses the installed CLI's configuration and permission rules. It
 does not pass permission-bypass flags or automatically save new permission rules.
@@ -27,6 +33,8 @@ The bridge relays these requests to the native approval component:
 
 Pending requests are bounded to 16, each preview to 64 KiB and each question set
 to eight. Oversized requests are declined without a truncated approval preview.
+The native panel presents one pending request at a time, with decision buttons
+outside the scrollable details so a long preview cannot hide them.
 Codex requests are checked against the active thread and turn. Opaque local IDs
 bind answers to their original requests. Cancellation removes pending UI state;
 stale responses cannot authorize another request. Unknown control requests are
@@ -40,7 +48,10 @@ saved as reusable grants.
 
 Validation includes fake CLI processes exercising both wire protocols, native
 answer/rejection/cancellation tests, and a separate native UI fixture. A live
-Codex no-tools probe created a persistent session and completed. Claude's live
+Codex no-tools probe created a persistent session and completed. A second live
+probe completed two consecutive implementation turns and verified context
+continuity when resuming the same provider session. Neither probe requested
+project tool use or file changes. Claude's live
 control channel initialized but the selected account returned its weekly limit;
 live Claude execution is not validated.
 

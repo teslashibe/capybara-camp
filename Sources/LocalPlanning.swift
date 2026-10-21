@@ -52,12 +52,22 @@ struct LocalPlan: Codable, Equatable, Identifiable {
     var title: String
     var updated: Double
     var versions: [LocalPlanVersion]
+    var implementations: [LocalImplementation]?
+    var executorChoices: [String: LocalPlanner]?
+    var selectedExecutor: String?
     var current: LocalPlanVersion { versions.last! }
+    var implementation: LocalImplementation? { implementations?.last { $0.planVersion == current.number } }
     var session: CampSession {
-        CampSession(id: id, sessionID: id, provider: "Planning", sourceID: "planning", sourceLabel: "Plan together",
+        if let implementation { return implementation.session(id: id, title: title, updated: updated) }
+        return CampSession(id: id, sessionID: id, provider: "Planning", sourceID: "planning", sourceLabel: "Plan together",
             root: "", title: title, cwd: current.planners.first?.session.cwd ?? "", updated: updated, path: "", accountID: "", archived: false)
     }
     var stage: Stage {
+        if let implementation {
+            if implementation.active { return .progress }
+            if let stored = implementation.boardStage.flatMap(Stage.init(rawValue:)) { return stored }
+            return implementation.state == "approved" || implementation.state == "idle" ? .ready : .attention
+        }
         switch current.state { case "running": return .progress; case "ready", "failed", "needs_review": return .attention; default: return .ready }
     }
 }
@@ -91,6 +101,15 @@ struct LocalPlan: Codable, Equatable, Identifiable {
             }
             var interrupted = false
             for t in tickets.indices {
+                for i in tickets[t].implementations?.indices ?? 0..<0 {
+                    if tickets[t].implementations![i].active {
+                        tickets[t].implementations![i].state = "needs_review"
+                        for a in tickets[t].implementations![i].attempts.indices where ["starting", "running"].contains(tickets[t].implementations![i].attempts[a].state) {
+                            tickets[t].implementations![i].attempts[a].state = "uncertain"
+                        }
+                        interrupted = true
+                    }
+                }
                 for v in tickets[t].versions.indices {
                     var uncertain = false
                     for s in tickets[t].versions[v].steps.indices where ["starting", "running"].contains(tickets[t].versions[v].steps[s].state) {
@@ -129,6 +148,9 @@ struct LocalPlan: Codable, Equatable, Identifiable {
         let stepStates = Set(["pending", "starting", "running", "completed", "cancelled", "failed", "unknown"])
         return values.count <= 200 && Set(values.map(\.id)).count == values.count && values.allSatisfy { plan in
             plan.id.hasPrefix("plan:") && UUID(uuidString: String(plan.id.dropFirst(5))) != nil &&
+            (plan.implementations ?? []).count <= 100 && (plan.implementations ?? []).allSatisfy(\.valid) &&
+            Set((plan.implementations ?? []).map(\.id)).count == (plan.implementations ?? []).count &&
+            (plan.implementations ?? []).allSatisfy({ execution in plan.versions.contains { $0.number == execution.planVersion } }) &&
             !plan.versions.isEmpty && plan.versions.count <= 100 &&
             plan.versions.enumerated().allSatisfy({ $0.element.number == $0.offset + 1 }) && plan.versions.allSatisfy { version in
                 version.number > 0 && version.brief.utf8.count <= 8192 && states.contains(version.state) &&
@@ -147,6 +169,12 @@ struct LocalPlan: Codable, Equatable, Identifiable {
     @discardableResult private func commit(_ values: [LocalPlan]) -> Bool {
         do { try persist(values); tickets = values; error = ""; changed?(true); return true }
         catch { self.error = error.localizedDescription; return false }
+    }
+    @discardableResult func modifyTicket(_ id: String, _ operation: (inout LocalPlan) -> Void) -> Bool {
+        var values = tickets
+        guard let index = values.firstIndex(where: { $0.id == id }) else { return false }
+        operation(&values[index]); values[index].updated = Date().timeIntervalSince1970
+        return commit(values)
     }
     @discardableResult private func update(_ id: String, version: Int? = nil, _ operation: (inout LocalPlanVersion) -> Void) -> Bool {
         var values = tickets
@@ -194,6 +222,7 @@ struct LocalPlan: Codable, Equatable, Identifiable {
     }
     func restart(_ id: String, reviewedUnknown: Bool = false) {
         guard var plan = ticket(id), plan.versions.count < 100 else { error = "Planning version history is full"; return }
+        guard plan.implementation?.active != true, plan.implementation?.state != "needs_review" else { error = "Stop and review the implementation before restarting its plan"; return }
         guard plan.current.state != "needs_review" || reviewedUnknown else {
             error = "Review the unconfirmed provider turn before starting a new revision"; return
         }

@@ -60,22 +60,23 @@ struct ConversationResult: Sendable {
     private var usage = ConversationUsage()
     static let lineLimit = 4 * 1024 * 1024
 
-    init(session: CampSession, history: [Message], prompt: String, queueID: String? = nil, references: [SessionReference] = []) {
+    init(session: CampSession, history: [Message], prompt: String, queueID: String? = nil, references: [SessionReference] = [], promptID: String? = nil) {
         self.session = session; self.queueID = queueID
         self.references = references
-        messages = history + [Message(id: UUID().uuidString, role: "user", text: prompt)]
+        messages = history + [Message(id: promptID ?? UUID().uuidString, role: "user", text: prompt)]
     }
 
     func start(prompt: String, model: String, tuning: ModelTuning,
                contexts: [SessionContext] = [], mode: ConversationMode = .chat,
                executionApproved: Bool = false, newSession: Bool = false,
+               executionContext: String = "",
                makeProcess: () throws -> Process = { try Bridge.process("conversation") }) throws {
         guard process == nil, !finished, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               prompt.utf8.count <= 65536 else { throw CampError.message("Write a prompt under 64 KB") }
         self.mode = mode
-        guard mode != .implementation || executionApproved else { throw CampError.message("Approve the implementation before enabling project tools") }
+        guard mode != .implementation || (executionApproved && executionContext.count == 64) else { throw CampError.message("Approve the implementation before enabling project tools") }
         let p = try makeProcess(), out = Pipe(), err = Pipe(), stdin = Pipe()
-        var payload = try JSONSerialization.data(withJSONObject: ["session": try JSONSerialization.jsonObject(with: JSONEncoder().encode(session)), "prompt": prompt, "model": model, "effort": tuning.effort, "speed": tuning.speed, "context": JSONSerialization.jsonObject(with: JSONEncoder().encode(contexts)), "mode": mode.rawValue, "executionApproved": executionApproved, "newSession": newSession])
+        var payload = try JSONSerialization.data(withJSONObject: ["session": try JSONSerialization.jsonObject(with: JSONEncoder().encode(session)), "prompt": prompt, "model": model, "effort": tuning.effort, "speed": tuning.speed, "context": JSONSerialization.jsonObject(with: JSONEncoder().encode(contexts)), "mode": mode.rawValue, "executionApproved": executionApproved, "newSession": newSession, "executionContext": executionContext])
         payload.append(10)
         p.standardOutput = out; p.standardError = err; p.standardInput = stdin
         let writer = ConversationInput(stdin.fileHandleForWriting)

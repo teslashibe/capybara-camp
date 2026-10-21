@@ -19,7 +19,7 @@ import Foundation
         let run = LocalConversation(session: source, history: [], prompt: "implement")
         var result: ConversationResult?, created: String?
         run.completed = { result = $0 }; run.sessionCreated = { created = $0 }
-        try run.start(prompt: "implement", model: "fixture", tuning: ModelTuning(), mode: .implementation, executionApproved: true, newSession: true, makeProcess: {
+        try run.start(prompt: "implement", model: "fixture", tuning: ModelTuning(), mode: .implementation, executionApproved: true, newSession: true, executionContext: String(repeating: "a", count: 64), makeProcess: {
             process("""
             import json,sys
             request=json.loads(sys.stdin.readline());assert request['mode']=='implementation' and request['executionApproved'] and request['newSession']
@@ -48,7 +48,7 @@ import Foundation
         result = nil
         let cancelled = LocalConversation(session: source, history: [], prompt: "cancel")
         cancelled.completed = { result = $0 }
-        try cancelled.start(prompt: "cancel", model: "", tuning: ModelTuning(), mode: .implementation, executionApproved: true, makeProcess: {
+        try cancelled.start(prompt: "cancel", model: "", tuning: ModelTuning(), mode: .implementation, executionApproved: true, executionContext: String(repeating: "a", count: 64), makeProcess: {
             process("""
             import json,sys
             sys.stdin.readline()

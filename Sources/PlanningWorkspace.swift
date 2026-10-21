@@ -11,7 +11,7 @@ struct CampCardStyle: ViewModifier {
 extension CampStore {
     func planningProfiles(_ provider: String) -> [CampSession] {
         var seen = Set<String>()
-        return sessions.filter { $0.provider == provider && !$0.isCloud && !$0.root.isEmpty && seen.insert($0.sourceID).inserted }
+        return sessions.filter { $0.provider == provider && !$0.isCloud && !$0.isPlan && !$0.root.isEmpty && seen.insert($0.sourceID).inserted }
     }
     func newPlan() {
         let peers = ["Codex", "Claude"].compactMap { provider -> LocalPlanner? in
@@ -112,7 +112,7 @@ struct PlanningWorkspace: View {
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Planning", systemImage: "lightbulb").font(.system(size: 12, weight: .medium)).padding(.horizontal, 16).padding(.top, 10)
-                    ForEach(["Plans", "Reviews", "Combined plan", "History"], id: \.self) { value in
+                    ForEach(["Plans", "Reviews", "Combined plan", "Implementation", "History"], id: \.self) { value in
                         Button { section = value } label: {
                             Label(value, systemImage: value == "History" ? "clock.arrow.circlepath" : value == "Combined plan" ? "doc.text" : "bubble.left.and.bubble.right")
                                 .font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading).padding(10)
@@ -165,7 +165,8 @@ struct PlanningWorkspace: View {
                             }.fixedSize(horizontal: false, vertical: true).padding(.bottom, 10)
                         }
                     }
-                    if section == "Combined plan" { combined(plan) }
+                    if section == "Implementation" { ImplementationSetupView(store: store, planning: planning, id: id) }
+                    else if section == "Combined plan" { combined(plan) }
                     else if section == "History" { history(plan) }
                     else {
                         HStack(alignment: .top, spacing: 12) {
@@ -238,6 +239,11 @@ struct PlanningWorkspace: View {
             VStack(alignment: .leading, spacing: 16) {
                 if let step = plan.current.steps.first(where: { $0.phase == "combined" }) { output(plan, version: plan.current, step: step) }
                 else { Text("The combined plan follows both drafts and reviews").foregroundStyle(campMuted) }
+                if plan.current.state == "ready" {
+                    Button(plan.implementation == nil ? "Continue to implementation" : "Open implementation") {
+                        if plan.implementation == nil { section = "Implementation" } else { store.reviewingPlan = nil }
+                    }.buttonStyle(.borderedProminent).tint(campGreen)
+                }
             }.frame(maxWidth: .infinity, alignment: .leading).padding(22)
         }
     }
@@ -251,6 +257,11 @@ struct PlanningWorkspace: View {
                             ForEach(version.planners, id: \.session.id) { planner in Text("\(planner.session.provider) · \(planner.model) · \(ModelMenu.effortName(planner.tuning.effort)) effort · \(ModelMenu.speedName(planner.tuning.speed))").font(.system(size: 10)).foregroundStyle(campMuted) }
                             ForEach(version.steps) { output(plan, version: version, step: $0) }
                         }.padding(.vertical, 12)
+                    }
+                }
+                ForEach((plan.implementations ?? []).reversed()) { execution in
+                    DisclosureGroup("Implementation · \(execution.executor.session.provider) · \(execution.state)") {
+                        ForEach(execution.messages) { MessageView(message: $0) }
                     }
                 }
             }.padding(22)

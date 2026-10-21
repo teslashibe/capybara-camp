@@ -29,14 +29,13 @@ struct ProviderApproval: Codable, Equatable, Identifiable, Sendable {
 struct ConversationApprovalsView: View {
     @ObservedObject var conversation: LocalConversation
     var body: some View {
-        if !conversation.approvals.isEmpty {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(conversation.approvals) { approval in
-                        ProviderApprovalView(conversation: conversation, approval: approval)
-                    }
+        if let approval = conversation.approvals.first {
+            VStack(alignment: .leading, spacing: 6) {
+                if conversation.approvals.count > 1 {
+                    Text("\(conversation.approvals.count) requests awaiting review").font(.caption).foregroundStyle(campMuted)
                 }
-            }.frame(maxHeight: 280)
+                ProviderApprovalView(conversation: conversation, approval: approval).id(approval.id)
+            }
         }
     }
 }
@@ -57,7 +56,8 @@ struct ProviderApprovalView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(approval.title, systemImage: "hand.raised").font(.system(size: 12, weight: .semibold))
-            if approval.kind == "question" {
+            ScrollView {
+              if approval.kind == "question" {
                 ForEach(approval.questions) { question in
                     VStack(alignment: .leading, spacing: 6) {
                         Text(question.prompt).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
@@ -75,16 +75,17 @@ struct ProviderApprovalView: View {
                         }
                     }
                 }
-            } else {
-                ScrollView { Text(approval.detail).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 150)
-            }
+              } else {
+                Text(approval.detail).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+              }
+            }.frame(minHeight: 60, idealHeight: 90, maxHeight: 120)
             HStack {
                 if !approval.canApprove { Text("The full action is unavailable for review").font(.caption).foregroundStyle(campMuted) }
                 Spacer()
                 Button(approval.kind == "question" ? "Cancel" : "Decline") { conversation.answer(approval.id, allow: false) }
                 Button(sending ? "Sending…" : approval.acceptLabel) { conversation.answer(approval.id, allow: true, answers: answers) }
                     .buttonStyle(.borderedProminent).tint(campGreen).disabled(!approval.canApprove || !ready)
-            }.disabled(sending)
+            }.disabled(sending).fixedSize(horizontal: false, vertical: true)
         }.padding(12).background(campGreen.opacity(0.06)).clipShape(RoundedRectangle(cornerRadius: 9))
     }
 }

@@ -1,4 +1,6 @@
 import json
+import fcntl
+import hashlib
 from pathlib import Path
 import queue
 import sys
@@ -8,7 +10,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).parents[1] / 'Resources'))
 import bridge
 import conversation
-from execution import ApprovalRelay, execution_command
+from execution import ApprovalRelay, execution_command, execution_context
 
 
 class Connection:
@@ -18,6 +20,22 @@ class Connection:
 
 
 class ExecutionTests(unittest.TestCase):
+    def test_local_permission_snapshot_changes_with_project_configuration(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = {'provider': 'Claude', 'cwd': root, 'root': root}
+            before = execution_context(source)
+            Path(root, '.claude').mkdir()
+            Path(root, '.claude/settings.json').write_text('{"permissions":{"defaultMode":"plan"}}')
+            after = execution_context(source)
+            self.assertNotEqual(before['fingerprint'], after['fingerprint'])
+            self.assertNotIn('defaultMode', json.dumps(after))
+
+    def test_stale_execution_snapshot_fails_before_provider_start(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(ValueError, 'settings changed'):
+                conversation.run({'session': {'provider': 'Claude', 'cwd': root, 'root': root}, 'prompt': 'implement',
+                                  'mode': 'implementation', 'executionApproved': True, 'executionContext': 'stale'})
+
     def relay(self, provider='Codex'):
         conn, events = Connection(), []
         return conn, events, ApprovalRelay(conn, events.append, provider, 'session', 'turn' if provider == 'Codex' else None)
@@ -125,17 +143,38 @@ class ExecutionTests(unittest.TestCase):
                         yield value
             def emit(event):
                 events.append(event)
+                if event['type'] == 'session':
+                    key = bridge.session_lock_key({'provider': provider, 'root': root, 'sessionID': event['sessionID']})
+                    lock = bridge.SUPPORT / ('run-' + hashlib.sha256(key.encode()).hexdigest() + '.lock')
+                    with lock.open('r+') as handle:
+                        with self.assertRaises(BlockingIOError):
+                            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 if event['type'] == 'approval':
                     controls.put(json.dumps({'type': 'approval', 'id': event['id'], 'allow': True}) + '\n')
             try:
                 conversation.run({'session': {'provider': provider, 'id': 'logical', 'sessionID': '00000000-0000-0000-0000-000000000001', 'root': root, 'cwd': root},
-                                  'prompt': 'implement', 'mode': 'implementation', 'executionApproved': True, 'newSession': True},
+                                  'prompt': 'implement', 'mode': 'implementation', 'executionApproved': True, 'newSession': True, 'executionContext': execution_context({'provider': provider, 'root': root, 'cwd': root})['fingerprint']},
                                  Input(), emit, [sys.executable, '-u', '-c', code])
                 self.assertEqual(events[-1]['type'], 'done')
                 self.assertEqual(sum(e['type'] == 'approval' for e in events), 1)
                 self.assertEqual(sum(e['type'] == 'session' for e in events), 1)
             finally:
                 controls.put(None); bridge.SUPPORT = old
+
+    def test_logical_ticket_cannot_bypass_native_session_lock(self):
+        with tempfile.TemporaryDirectory() as root:
+            old = bridge.SUPPORT; bridge.SUPPORT = Path(root)
+            source = {'provider': 'Claude', 'id': 'different-logical-id', 'sessionID': 'native-id', 'root': root, 'cwd': root}
+            key = bridge.session_lock_key(source)
+            path = Path(root) / ('run-' + hashlib.sha256(key.encode()).hexdigest() + '.lock')
+            try:
+                with path.open('w') as handle:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    with self.assertRaisesRegex(ValueError, 'already running'):
+                        conversation.run({'session': source, 'prompt': 'implement', 'mode': 'implementation',
+                                          'executionApproved': True, 'executionContext': execution_context(source)['fingerprint']})
+            finally:
+                bridge.SUPPORT = old
 
     def test_codex_buffers_approval_until_turn_ack(self):
         self.run_process('Codex', '''import json,sys
