@@ -38,7 +38,7 @@ actor PublishingFixture: CampPublishingTransport {
         case "session":
             let expected = (object["expected_revision"] as! NSNumber).int64Value
             guard expected == remote?.revision ?? 0 else { throw CampCloudError.server(409, "revision_conflict") }
-            let value = CloudSession(id: object["id"] as! String, campId: scope.campId, projectId: object["project_id"] as! String, profileId: object["profile_id"] as! String, provider: profile!.provider, profileLabel: profile!.label, ownerUserId: actor.userId, ownerDeviceId: actor.deviceId, localSessionId: object["local_session_id"] as! String, title: object["title"] as! String, model: object["model"] as! String, state: object["state"] as! String, stage: object["stage"] as! String, shared: object["shared"] as! Bool, allowRequests: object["allow_requests"] as! Bool, externalOwner: object["external_owner"] as! Bool, revision: expected + 1, transcriptRevision: remote?.transcriptRevision ?? 0, permissionRevision: 1, updatedAt: Date())
+            let value = CloudSession(id: object["id"] as! String, campId: scope.campId, projectId: object["project_id"] as! String, profileId: object["profile_id"] as! String, provider: profile!.provider, profileLabel: profile!.label, ownerUserId: actor.userId, ownerDeviceId: actor.deviceId, localSessionId: object["local_session_id"] as! String, title: (object["title"] as! String).trimmingCharacters(in: .whitespacesAndNewlines), model: object["model"] as! String, state: object["state"] as! String, stage: object["stage"] as! String, shared: object["shared"] as! Bool, allowRequests: object["allow_requests"] as! Bool, externalOwner: object["external_owner"] as! Bool, revision: expected + 1, transcriptRevision: remote?.transcriptRevision ?? 0, permissionRevision: 1, updatedAt: Date())
             remote = value; result = try CampWire.encoder().encode(value)
         case "transcript":
             let expected = (object["expected_revision"] as! NSNumber).int64Value
@@ -71,7 +71,7 @@ actor PublishingFixture: CampPublishingTransport {
         let scope = CloudScope(origin: "https://fixture.example", userId: UUID().uuidString, campId: UUID().uuidString)
         let actor = CloudActor(userId: scope.userId, deviceId: UUID().uuidString, email: "fixture@example.com", name: "Fixture")
         let cache = try CampCache(directory: root)
-        let native = CampSession(id: "Claude:/local:fixture", sessionID: UUID().uuidString, provider: "Claude", sourceID: "Claude:/local", sourceLabel: "Fixture account", root: "/local", title: "A synthetic session", cwd: "/local/project", updated: 1, path: "/local/session.jsonl", accountID: "", archived: false, model: "fixture-model")
+        let native = CampSession(id: "Claude:/local:fixture", sessionID: UUID().uuidString, provider: "Claude", sourceID: "Claude:/local", sourceLabel: "Fixture account", root: "/local", title: "  A synthetic session  ", cwd: "/local/project", updated: 1, path: "/local/session.jsonl", accountID: "", archived: false, model: "fixture-model")
         let server = PublishingFixture(scope: scope, actor: actor)
         let export: @Sendable (CampSession, Int64) async throws -> TranscriptExport = { _, after in
             let message = PublishMessage(id: after < 0 ? "first" : "second", ordinal: after < 0 ? 0 : 1, role: "assistant", text: after < 0 ? "First message" : "Second message", removed: false)
@@ -100,6 +100,7 @@ actor PublishingFixture: CampPublishingTransport {
         try? await Task.sleep(for: .milliseconds(100))
         let unchanged = await server.snapshot()
         precondition(unchanged.1 == 2, "unchanged transcript was uploaded again")
+        precondition(unchanged.0?.revision == first.0?.revision, "Title whitespace repeatedly republished metadata")
         precondition(resumed.shares.first?.id == id, "reconnect changed shared session identity")
         try await resumed.configure(local: native, projectId: project, shared: false, allowRequests: false)
         await eventually("unshare did not complete") { resumed.shares.first?.state == "Private" }

@@ -76,6 +76,7 @@ struct CampConnectionView: View {
                 Text(cloud.status).font(.system(size: 12)).foregroundStyle(campMuted)
                 Text(cloud.server).font(.system(size: 11)).foregroundStyle(campMuted).textSelection(.enabled)
             }
+            CampWorkerStatusView(worker: cloud.worker)
             if !cloud.camps.isEmpty {
                 Picker("Camp", selection: Binding(get: { cloud.selectedCampId }, set: { id in run { await cloud.selectCamp(id) } })) {
                     ForEach(cloud.camps) { camp in Text(camp.name).tag(camp.id) }
@@ -141,6 +142,7 @@ struct CloudRequestQueueView: View {
     var items: [CloudRequest] { cloud.requests.filter { $0.sessionId == session.id && !["completed", "failed", "cancelled"].contains($0.state) } }
     var pending: [CloudOutboxItem] { cloud.pending.filter { $0.path.contains("/sessions/\(session.id)/") } }
     var body: some View {
+        CampWorkerStatusView(worker: cloud.worker, sessionID: session.id, showStatus: false)
         if !items.isEmpty || !pending.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(items) { request in
@@ -175,6 +177,41 @@ struct CloudRequestQueueView: View {
         case "cancel_requested": return "Stopping on the owner's Mac"
         case "outcome_unknown": return "Delivery unconfirmed · The owner must review the transcript"
         default: return state.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+}
+
+struct CampWorkerStatusView: View {
+    @ObservedObject var worker: CampLocalWorker
+    var sessionID: String? = nil
+    var showStatus = true
+    @State private var reviewing: CloudAttempt?
+    var items: [CloudAttempt] { worker.issues.filter { sessionID == nil || $0.request.sessionId == sessionID } }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if showStatus { Label(worker.status, systemImage: "desktopcomputer").font(.system(size: 11)).foregroundStyle(campMuted) }
+            ForEach(items) { attempt in
+                HStack {
+                    Label("Unconfirmed local execution", systemImage: "exclamationmark.circle").font(.system(size: 11))
+                    Spacer()
+                    Button("Review result") { reviewing = attempt }.font(.system(size: 11))
+                }
+            }
+        }
+        .sheet(item: $reviewing) { attempt in
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Review the interrupted request").font(.headline)
+                Text(attempt.request.prompt).lineLimit(5).font(.system(size: 12))
+                Text("Check the original session transcript before recording the outcome. Confirming a result will not send the prompt again.")
+                    .font(.system(size: 12)).foregroundStyle(campMuted)
+                HStack {
+                    Button("Back") { reviewing = nil }
+                    Spacer()
+                    ForEach(["completed", "failed", "cancelled"], id: \.self) { outcome in
+                        Button("Mark " + outcome) { Task { await worker.confirm(attempt, outcome: outcome); reviewing = nil } }
+                    }
+                }
+            }.padding(24).frame(width: 580)
         }
     }
 }

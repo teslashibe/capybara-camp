@@ -10,6 +10,61 @@ import (
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
 )
 
+func TestAvailableClaimsAndReleaseBeforeStart(t *testing.T) {
+	s, _, actors, c, p, profile := sessionFixture(t)
+	ctx, owner := context.Background(), actors[0]
+	first, err := s.PublishSession(ctx, owner, c.ID, uuid.NewString(), sessionInput(p, profile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := sessionInput(p, profile)
+	input.ID = uuid.NewString()
+	input.LocalSessionID = "second-native-session"
+	second, err := s.PublishSession(ctx, owner, c.ID, uuid.NewString(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range []Session{first, second} {
+		if _, err := s.CreateRequest(ctx, owner, c.ID, session.ID, uuid.NewString(), RequestInput{Prompt: "Run only where available"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r, err := s.ClaimAvailableRequest(ctx, owner, c.ID, uuid.NewString(), nil); err != nil || r != nil {
+		t.Fatal("empty availability claimed work", r, err)
+	}
+	if _, err := s.ClaimAvailableRequest(ctx, owner, c.ID, uuid.NewString(), []string{first.ID, first.ID}); !errors.Is(err, ErrInput) {
+		t.Fatal("duplicate availability accepted", err)
+	}
+	key := uuid.NewString()
+	r, err := s.ClaimAvailableRequest(ctx, owner, c.ID, key, []string{second.ID})
+	if err != nil || r == nil || r.SessionID != second.ID {
+		t.Fatal("claimed unavailable session", r, err)
+	}
+	if _, err := s.ClaimAvailableRequest(ctx, owner, c.ID, key, []string{first.ID}); !errors.Is(err, ErrConflict) {
+		t.Fatal("claim replay changed eligibility", err)
+	}
+	oldLease := r.LeaseToken
+	if _, err := s.ActOnRequest(ctx, actors[1], c.ID, r.ID, uuid.NewString(), RequestAction{Action: "release", LeaseToken: oldLease}); !errors.Is(err, ErrDenied) {
+		t.Fatal("non-worker released claim", err)
+	}
+	if released, err := s.ActOnRequest(ctx, owner, c.ID, r.ID, uuid.NewString(), RequestAction{Action: "release", LeaseToken: oldLease}); err != nil || released.State != "queued" || released.LeaseUntil != nil {
+		t.Fatal("release failed", released, err)
+	}
+	r, err = s.ClaimAvailableRequest(ctx, owner, c.ID, uuid.NewString(), []string{second.ID})
+	if err != nil || r == nil || r.LeaseToken == oldLease {
+		t.Fatal("released work did not receive a new fence", r, err)
+	}
+	if _, err := s.ActOnRequest(ctx, owner, c.ID, r.ID, uuid.NewString(), RequestAction{Action: "start", LeaseToken: oldLease}); !errors.Is(err, ErrTransition) {
+		t.Fatal("released fence started work", err)
+	}
+	if _, err := s.ActOnRequest(ctx, owner, c.ID, r.ID, uuid.NewString(), RequestAction{Action: "start", LeaseToken: r.LeaseToken}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ActOnRequest(ctx, owner, c.ID, r.ID, uuid.NewString(), RequestAction{Action: "release", LeaseToken: r.LeaseToken}); !errors.Is(err, ErrTransition) {
+		t.Fatal("started work was requeued", err)
+	}
+}
+
 func TestRemoteApprovalClaimsAndUnknownOutcome(t *testing.T) {
 	s, pool, actors, c, p, profile := sessionFixture(t)
 	ctx := context.Background()

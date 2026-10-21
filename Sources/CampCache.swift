@@ -13,6 +13,8 @@ struct CloudOutboxItem: Identifiable, Sendable {
 struct CloudAttempt: Codable, Identifiable, Sendable {
     var id: String; var scope: String; var request: CloudRequest; var localSessionId: String
     var state: String; var startKey: String; var finishKey: String
+    var outcome: String?
+    var evidence: String?
 }
 
 actor CampCache {
@@ -95,9 +97,9 @@ actor CampCache {
         guard let bytes = sqlite3_column_text(statement, index) else { return "" }
         return String(decoding: UnsafeBufferPointer(start: bytes, count: Int(sqlite3_column_bytes(statement, index))), as: UTF8.self)
     }
-    private func transaction(_ body: () throws -> Void) throws {
+    private func transaction<T>(_ body: () throws -> T) throws -> T {
         try execute("BEGIN IMMEDIATE")
-        do { try body(); try execute("COMMIT") }
+        do { let value = try body(); try execute("COMMIT"); return value }
         catch { try? execute("ROLLBACK"); throw error }
     }
     func metadata(_ key: String) throws -> Data? { try rows("SELECT value FROM metadata WHERE key=?", [.text(key)]) { blob($0, 0) }.first }
@@ -211,6 +213,40 @@ actor CampCache {
     func saveAttempt(_ attempt: CloudAttempt) throws {
         try execute("INSERT INTO attempts(id,scope,state,body) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,body=excluded.body", [.text(attempt.id), .text(attempt.scope), .text(attempt.state), .blob(try CampWire.encoder().encode(attempt))])
     }
+    func saveWorkerAttempt(_ attempt: CloudAttempt, scope: CloudScope, expectedEpoch: Int64) throws {
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            guard attempt.scope == scope.key, attempt.request.campId == scope.campId,
+                  attempt.request.ownerUserId == scope.userId else { throw CampCloudError.invalidResponse }
+            try saveAttempt(attempt)
+        }
+    }
+    func workerClaim(scope: CloudScope, sessions: [String], expectedEpoch: Int64) throws -> CampPublication {
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            let key = "worker-claim:" + scope.key
+            if let saved = try metadata(key) { return try CampWire.decoder().decode(CampPublication.self, from: saved) }
+            let command = CampPublication(kind: "claim", method: "POST", path: "/v1/camps/\(scope.campId)/requests/claim", body: try CampWire.body(["session_ids": sessions]))
+            try setMetadata(key, CampWire.encoder().encode(command)); return command
+        }
+    }
+    func finishWorkerClaim(_ attempt: CloudAttempt?, scope: CloudScope, expectedEpoch: Int64) throws {
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            if let attempt {
+                guard attempt.scope == scope.key, attempt.request.campId == scope.campId,
+                      attempt.request.ownerUserId == scope.userId else { throw CampCloudError.invalidResponse }
+                try saveAttempt(attempt)
+            }
+            try execute("DELETE FROM metadata WHERE key=?", [.text("worker-claim:" + scope.key)])
+        }
+    }
+    func removeWorkerAttempt(_ id: String, scope: CloudScope, expectedEpoch: Int64) throws {
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            try execute("DELETE FROM attempts WHERE id=? AND scope=?", [.text(id), .text(scope.key)])
+        }
+    }
     func shares(_ scope: CloudScope) throws -> [LocalShare] {
         try rows("SELECT body FROM share_bindings WHERE scope=? ORDER BY id", [.text(scope.key)]) { try JSONDecoder().decode(LocalShare.self, from: blob($0, 0)) }
     }
@@ -240,6 +276,7 @@ actor CampCache {
             for table in ["sessions", "requests", "messages", "tombstones", "outbox", "share_bindings", "published_message_hashes"] { try execute("DELETE FROM \(table) WHERE scope=?", [.text(scope.key)]) }
             try execute("DELETE FROM metadata WHERE key=?", [.text("cursor:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("snapshot:" + scope.key)])
+            try execute("DELETE FROM metadata WHERE key=?", [.text("worker-claim:" + scope.key)])
             for var attempt in try attempts(scope) {
                 if ["completed", "failed", "cancelled"].contains(attempt.state) {
                     try execute("DELETE FROM attempts WHERE id=?", [.text(attempt.id)]); continue

@@ -269,6 +269,29 @@ func emitRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, r Request, kind s
 // attempt and acknowledge Start before invoking the CLI. An expired Start is
 // held as unknown, never automatically put back on the queue.
 func (s *Store) ClaimRequest(ctx context.Context, a auth.Actor, campID, key string) (*Request, error) {
+	return s.claimRequest(ctx, a, campID, key, nil)
+}
+
+// A native worker offers only sessions available on this device. An empty
+// non-nil list deliberately claims nothing; nil retains the original API.
+func (s *Store) ClaimAvailableRequest(ctx context.Context, a auth.Actor, campID, key string, sessions []string) (*Request, error) {
+	if sessions == nil {
+		sessions = []string{}
+	}
+	return s.claimRequest(ctx, a, campID, key, sessions)
+}
+
+func (s *Store) claimRequest(ctx context.Context, a auth.Actor, campID, key string, sessions []string) (*Request, error) {
+	if len(sessions) > 200 {
+		return nil, ErrInput
+	}
+	seen := map[string]bool{}
+	for _, id := range sessions {
+		if !validID(id) || seen[id] {
+			return nil, ErrInput
+		}
+		seen[id] = true
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -284,7 +307,14 @@ func (s *Store) ClaimRequest(ctx context.Context, a auth.Actor, campID, key stri
 		return nil, err
 	}
 	var result *Request
-	if hit, err := s.beginCommand(ctx, tx, a, key, "request.claim:"+campID, a.DeviceID, &result); err != nil {
+	var payload any = a.DeviceID // Preserve receipts from the original unfiltered endpoint.
+	if sessions != nil {
+		payload = struct {
+			DeviceID string
+			Sessions []string
+		}{a.DeviceID, sessions}
+	}
+	if hit, err := s.beginCommand(ctx, tx, a, key, "request.claim:"+campID, payload, &result); err != nil {
 		return nil, err
 	} else if hit {
 		if result == nil {
@@ -308,9 +338,10 @@ func (s *Store) ClaimRequest(ctx context.Context, a auth.Actor, campID, key stri
 	}
 	var id string
 	err = tx.QueryRow(ctx, `SELECT r.id FROM prompt_requests r JOIN sessions s ON s.id=r.session_id
-	 WHERE r.camp_id=$1 AND r.owner_device_id=$2 AND r.state='queued' AND NOT s.external_owner
+	 WHERE r.camp_id=$1 AND r.owner_device_id=$2 AND r.owner_user_id=$4 AND r.state='queued' AND NOT s.external_owner
+	 AND ($3::uuid[] IS NULL OR r.session_id=ANY($3))
 	 AND NOT EXISTS(SELECT 1 FROM prompt_requests running WHERE running.session_id=r.session_id AND running.state IN ('claimed','started','cancel_requested','outcome_unknown'))
-	 ORDER BY r.created_at,r.id LIMIT 1 FOR UPDATE OF r SKIP LOCKED`, campID, a.DeviceID).Scan(&id)
+	 ORDER BY r.created_at,r.id LIMIT 1 FOR UPDATE OF r SKIP LOCKED`, campID, a.DeviceID, sessions, a.UserID).Scan(&id)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
@@ -353,7 +384,7 @@ func (s *Store) ClaimRequest(ctx context.Context, a auth.Actor, campID, key stri
 }
 
 func (s *Store) ActOnRequest(ctx context.Context, a auth.Actor, campID, id, key string, input RequestAction) (Request, error) {
-	if !oneOf(input.Action, "approve", "start", "heartbeat", "cancel", "finish", "reconcile") || len(input.Evidence) > 1024 {
+	if !oneOf(input.Action, "approve", "start", "heartbeat", "release", "cancel", "finish", "reconcile") || len(input.Evidence) > 1024 {
 		return Request{}, ErrInput
 	}
 	tx, err := s.pool.Begin(ctx)
@@ -403,7 +434,7 @@ func (s *Store) ActOnRequest(ctx context.Context, a auth.Actor, campID, id, key 
 		return r, nil
 	}
 	worker := a.DeviceID == r.OwnerDeviceID && a.UserID == r.OwnerUserID
-	if oneOf(input.Action, "start", "heartbeat", "finish", "reconcile") && !worker {
+	if oneOf(input.Action, "start", "heartbeat", "release", "finish", "reconcile") && !worker {
 		return r, ErrDenied
 	}
 	if oneOf(input.Action, "approve", "start") {
@@ -435,6 +466,11 @@ func (s *Store) ActOnRequest(ctx context.Context, a auth.Actor, campID, id, key 
 		if !leaseValid || !oneOf(r.State, "claimed", "started", "cancel_requested") {
 			return r, ErrTransition
 		}
+	case "release":
+		if !leaseValid || r.State != "claimed" {
+			return r, ErrTransition
+		}
+		r.State = "queued"
 	case "cancel":
 		if oneOf(r.State, "queued", "pending_approval", "claimed") {
 			r.State = "cancelled"
@@ -472,7 +508,8 @@ func (s *Store) ActOnRequest(ctx context.Context, a auth.Actor, campID, id, key 
 	terminal := oneOf(r.State, "completed", "failed", "cancelled")
 	_, err = tx.Exec(ctx, `UPDATE prompt_requests SET revision=revision+1,state=$2,outcome_evidence=$3,
 	 started_at=CASE WHEN $4='start' THEN now() ELSE started_at END,
-	 lease_until=CASE WHEN $4 IN ('start','heartbeat') THEN clock_timestamp()+interval '60 seconds' WHEN $5 THEN NULL ELSE lease_until END,
+	 lease_until=CASE WHEN $4 IN ('start','heartbeat') THEN clock_timestamp()+interval '60 seconds' WHEN $5 OR $4='release' THEN NULL ELSE lease_until END,
+	 lease_token=CASE WHEN $4='release' THEN NULL ELSE lease_token END,
 	 finished_at=CASE WHEN $5 THEN now() ELSE finished_at END,reason=$6 WHERE id=$1`, id, r.State, r.Evidence, input.Action, terminal, r.Reason)
 	if err != nil {
 		return r, err

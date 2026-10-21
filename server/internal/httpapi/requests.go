@@ -31,7 +31,19 @@ func (a *API) requestRoutes(mux *http.ServeMux) {
 		}
 	}))
 	mux.HandleFunc("POST /v1/camps/{camp}/requests/claim", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
-		value, err := a.Camps.ClaimRequest(r.Context(), u, r.PathValue("camp"), r.Header.Get("Idempotency-Key"))
+		var input struct {
+			SessionIDs *[]string `json:"session_ids"`
+		}
+		if (r.ContentLength != 0 || len(r.TransferEncoding) != 0) && !decode(w, r, &input) {
+			return
+		}
+		var value *camp.Request
+		var err error
+		if input.SessionIDs == nil {
+			value, err = a.Camps.ClaimRequest(r.Context(), u, r.PathValue("camp"), r.Header.Get("Idempotency-Key"))
+		} else {
+			value, err = a.Camps.ClaimAvailableRequest(r.Context(), u, r.PathValue("camp"), r.Header.Get("Idempotency-Key"), *input.SessionIDs)
+		}
 		if !fail(w, err) {
 			write(w, 200, value)
 		}

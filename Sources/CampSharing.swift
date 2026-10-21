@@ -183,6 +183,7 @@ struct LocalShareStatus {
             await state(id, "Local session unavailable", generation: token); return
         }
         value.local = local
+        let title = local.title.trimmingCharacters(in: .whitespacesAndNewlines)
         if !value.shared && value.remote == nil && value.needsWithdrawalFence != true { await state(id, "Private", generation: token); return }
         if value.profile == nil {
             value.pending = CampPublication(kind: "profile", method: "POST", path: "/v1/profiles", body: try CampWire.body([
@@ -201,10 +202,10 @@ struct LocalShareStatus {
         }
         let status = localStatus?(local) ?? LocalShareStatus(model: local.model, state: "idle", stage: value.remote?.stage ?? "Ready", externalOwner: false)
         let remote = value.remote
-        if remote == nil || remote?.title != local.title || remote?.model != status.model || remote?.state != status.state || remote?.externalOwner != status.externalOwner || remote?.projectId != value.projectId || remote?.shared != value.shared || remote?.allowRequests != value.allowRequests {
+        if remote == nil || remote?.title != title || remote?.model != status.model || remote?.state != status.state || remote?.externalOwner != status.externalOwner || remote?.projectId != value.projectId || remote?.shared != value.shared || remote?.allowRequests != value.allowRequests {
             value.pending = CampPublication(kind: "session", method: "PUT", path: get.path, body: try CampWire.body([
                 "id": id, "project_id": value.projectId, "profile_id": profile.id, "local_session_id": local.sessionID,
-                "title": local.title, "model": status.model, "state": status.state, "stage": remote?.stage ?? status.stage,
+                "title": title, "model": status.model, "state": status.state, "stage": remote?.stage ?? status.stage,
                 "shared": value.shared, "allow_requests": value.allowRequests, "external_owner": status.externalOwner,
                 "expected_revision": remote?.revision ?? 0]))
             try await commit(value, generation: token); value = try await perform(value, generation: token)

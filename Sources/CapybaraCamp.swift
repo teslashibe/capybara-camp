@@ -83,6 +83,23 @@ enum Stage: String, CaseIterable, Codable {
         switch self { case .ready: return Color(hex: 0x91856F); case .progress: return Color(hex: 0x62816B); case .attention: return Color(hex: 0xC18549); case .done: return Color(hex: 0x77969C) }
     }
 }
+private struct SessionStateSnapshot {
+    let running: Set<String>
+    let activity: [String: LiveState]
+    let remote: [String: CloudSession]
+    let requests: Set<String>
+    let stages: [String: Stage]
+    func busy(_ session: CampSession) -> Bool {
+        if running.contains(session.id) { return true }
+        if let shared = remote[session.id] { return shared.state == "running" || requests.contains(shared.id) }
+        return activity[session.id]?.state == "running"
+    }
+    func stage(_ session: CampSession) -> Stage {
+        if busy(session) { return .progress }
+        if let live = activity[session.id], ["waiting", "unknown"].contains(live.state) { return .attention }
+        return stages[session.id] ?? (session.archived ? .done : .ready)
+    }
+}
 enum CampError: LocalizedError {
     case message(String)
     var errorDescription: String? { if case .message(let value) = self { return value }; return nil }
@@ -199,7 +216,7 @@ final class TranscriptWatch {
     private var cloudHistoryRevision: [String: Int64] = [:]
     @Published var sessions: [CampSession] = [] { didSet { filterRevision += 1 } }
     @Published var sources: [CampSource] = []
-    @Published var stages: [String: Stage] = [:]
+    @Published var stages: [String: Stage] = [:] { didSet { filterRevision += 1 } }
     @Published var selectedID: String?
     @Published var sourceFilter = "all"
     @Published var search = ""
@@ -209,7 +226,7 @@ final class TranscriptWatch {
     @Published var messages: [Message] = []
     @Published var historyTotal = 0
     @Published var draft = ""
-    @Published var conversations: [String: LocalConversation] = [:]
+    @Published var conversations: [String: LocalConversation] = [:] { didSet { filterRevision += 1 } }
     var liveText: String { selected.flatMap { conversation($0)?.text } ?? "" }
     var runningID: String? { selected.flatMap { conversation($0) == nil ? nil : $0.id } }
     @Published var queuedPrompts: [QueuedPrompt] = []
@@ -246,6 +263,16 @@ final class TranscriptWatch {
     private var cachedFilterSearch = ""
     private var cachedFilterSource = ""
     private var cachedFiltered: [CampSession] = []
+    private var cachedVisibleRevision = -1
+    private var cachedVisible: [CampSession] = []
+    private var cachedCountRevision = -1
+    private var cachedCounts: [String: Int] = [:]
+    private var sharingSelection: Set<String> = []
+    private var activeRequestSessions: Set<String> = []
+    private var cachedBoardRevision = -1
+    private var cachedBoardSearch = ""
+    private var cachedBoardSource = ""
+    private var cachedBoard: [Stage: [CampSession]] = [:]
     private var cachedRecentRevision = -1
     private var cachedRecentType = ""
     private var cachedRecent: [CampSession] = []
@@ -254,19 +281,49 @@ final class TranscriptWatch {
     private let decoder = JSONDecoder()
     var selected: CampSession? { sessions.first { $0.id == selectedID } }
     var visibleSessions: [CampSession] {
+        if cachedVisibleRevision == filterRevision { return cachedVisible }
         let locals = Set(sharing.shares.filter { $0.shared && cloudSessions["camp:" + $0.id] != nil }.map { $0.local.id })
         let localIDs = Set(sessions.filter { !$0.isCloud }.map(\.id))
         let privateMirrors = Set(sharing.shares.filter { !$0.shared && localIDs.contains($0.local.id) }.map { "camp:" + $0.id })
-        return sessions.filter { !locals.contains($0.id) && !privateMirrors.contains($0.id) }
+        cachedVisible = sessions.filter { !locals.contains($0.id) && !privateMirrors.contains($0.id) }
+        cachedVisibleRevision = filterRevision; return cachedVisible
+    }
+    func sessionCount(_ kind: String) -> Int {
+        if cachedCountRevision != filterRevision {
+            let state = stateSnapshot(), visible = visibleSessions
+            var counts = ["all": visible.count, "active": 0, "Codex": 0, "Claude": 0]
+            for session in visible {
+                counts[session.provider, default: 0] += 1
+                if state.busy(session) { counts["active", default: 0] += 1 }
+            }
+            cachedCounts = counts; cachedCountRevision = filterRevision
+        }
+        return cachedCounts[kind, default: 0]
     }
     var filtered: [CampSession] {
         if cachedFilterRevision == filterRevision && cachedFilterSearch == search && cachedFilterSource == sourceFilter { return cachedFiltered }
+        let state = stateSnapshot()
         cachedFiltered = visibleSessions.filter { s in
-            (sourceFilter == "all" || (sourceFilter == "active" && isBusy(s)) || s.sourceID == sourceFilter || s.provider == sourceFilter) &&
+            (sourceFilter == "all" || (sourceFilter == "active" && state.busy(s)) || s.sourceID == sourceFilter || s.provider == sourceFilter) &&
             (search.isEmpty || (s.title + " " + s.cwd + " " + s.sourceLabel).localizedCaseInsensitiveContains(search))
         }
         cachedFilterRevision = filterRevision; cachedFilterSearch = search; cachedFilterSource = sourceFilter
         return cachedFiltered
+    }
+    private func stateSnapshot() -> SessionStateSnapshot {
+        var running = Set(conversations.keys)
+        for share in sharing.shares where running.contains(share.local.id) { running.insert("camp:" + share.id) }
+        return SessionStateSnapshot(running: running, activity: activity, remote: cloudSessions,
+            requests: Set(cloud.requests.filter { ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId)), stages: stages)
+    }
+    func boardSessions(_ stage: Stage) -> [CampSession] {
+        if cachedBoardRevision != filterRevision || cachedBoardSearch != search || cachedBoardSource != sourceFilter {
+            let state = stateSnapshot()
+            var grouped: [Stage: [CampSession]] = [:]
+            for session in filtered { grouped[state.stage(session), default: []].append(session) }
+            cachedBoard = grouped; cachedBoardRevision = filterRevision; cachedBoardSearch = search; cachedBoardSource = sourceFilter
+        }
+        return cachedBoard[stage] ?? []
     }
     init(stateDirectory: URL = Bridge.support, conversationProcess: @escaping () throws -> Process = { try Bridge.process("conversation") }) {
         self.stateDirectory = stateDirectory
@@ -297,14 +354,37 @@ final class TranscriptWatch {
             let live = self.activity[local.id]
             return LocalShareStatus(model: self.effectiveModel(local), state: self.conversations[local.id] != nil ? "running" : live?.state ?? "idle", stage: self.stage(local).rawValue, externalOwner: live != nil)
         }
-        sharing.changed = { [weak self] in self?.filterRevision += 1; self?.objectWillChange.send() }
+        sharing.changed = { [weak self] in
+            guard let self else { return }
+            let selection = Set(self.sharing.shares.map { $0.id + ":" + $0.local.id + ":" + String($0.shared) })
+            if self.sharingSelection != selection {
+                self.sharingSelection = selection; self.filterRevision += 1; self.objectWillChange.send()
+                self.cloud.worker.scan()
+            }
+        }
         sharing.published = { [weak cloud] value, scope, epoch in await cloud?.acceptPublishedSession(value, scope: scope, epoch: epoch) }
+        cloud.worker.nativeSession = { [weak sharing] remote in sharing?.native(for: "camp:" + remote.id) }
+        cloud.worker.available = { [weak self] local in
+            guard let self else { return false }
+            return self.activity[local.id] == nil && self.conversations.count < 4 && !self.conversations.values.contains { $0.session.provider == local.provider && $0.session.root == local.root }
+        }
+        cloud.worker.execute = { [weak self] local, request, prompt, history, completed in
+            guard let self, self.start(local, prompt: prompt, model: request.model, tuning: ModelTuning(effort: request.effort, speed: request.speed), history: history, completion: completed) else { return nil }
+            return self.conversations[local.id]
+        }
+        cloud.worker.requestUpdated = { [weak cloud] value in Task { await cloud?.acceptWorkerRequest(value) } }
+        cloud.requestChanged = { [weak cloud] value in cloud?.worker.changed(value) }
         cloud.sessionsChanged = { [weak self] sessions, projects, scope in
             guard let self else { return }
             self.applyCloud(sessions, projects: projects)
             if let scope, let actor = self.cloud.credential?.actor, let client = self.cloud.client, let token = self.cloud.credential?.token {
-                self.sharing.attach(scope: scope, actor: actor, transport: AuthenticatedCampPublisher(client: client, token: token))
-            } else { self.sharing.attach(scope: nil, actor: nil, transport: nil) }
+                let transport = AuthenticatedCampPublisher(client: client, token: token)
+                self.sharing.attach(scope: scope, actor: actor, transport: transport)
+                self.cloud.worker.attach(scope: scope, actor: actor, transport: transport, sessions: sessions)
+            } else {
+                self.sharing.attach(scope: nil, actor: nil, transport: nil)
+                self.cloud.worker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+            }
         }
         cloud.transcriptChanged = { [weak self] id in
             guard let self, self.selectedID == "camp:" + id else { return }
@@ -325,13 +405,17 @@ final class TranscriptWatch {
     }
     func applyCloud(_ values: [CloudSession], projects: [CloudProject]) {
         let previous = cloudSessions
-        cloudSessions = Dictionary(uniqueKeysWithValues: values.map { ("camp:" + $0.id, $0) })
+        let next = Dictionary(uniqueKeysWithValues: values.map { ("camp:" + $0.id, $0) })
+        if cloudSessions != next { cloudSessions = next }
+        let active = Set(cloud.requests.filter { ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId))
+        if activeRequestSessions != active { activeRequestSessions = active; filterRevision += 1; objectWillChange.send() }
         let names = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.name) })
         let imported = values.map { value in
             CampSession(id: "camp:" + value.id, sessionID: value.localSessionId, provider: value.provider, sourceID: "camp-profile:" + value.profileId, sourceLabel: value.profileLabel, root: "", title: value.title, cwd: names[value.projectId] ?? "Shared project", updated: value.updatedAt.timeIntervalSince1970, path: "", accountID: value.ownerUserId, archived: value.stage == "Done", model: value.model)
         }
         for (id, value) in cloudSessions where value.revision > (previous[id]?.revision ?? 0) { stages[id] = Stage(rawValue: value.stage) ?? .ready }
-        sessions = (sessions.filter { !$0.isCloud } + imported).sorted { $0.updated > $1.updated }
+        let updatedSessions = (sessions.filter { !$0.isCloud } + imported).sorted { $0.updated > $1.updated }
+        if sessions != updatedSessions { sessions = updatedSessions }
         if let selectedID, let binding = sharing.shares.first(where: { "camp:" + $0.id == selectedID && !$0.shared }),
            let remote = cloudSessions[selectedID], !remote.shared, sessions.contains(where: { $0.id == binding.local.id }) {
             self.selectedID = binding.local.id; readGeneration = UUID()
@@ -343,16 +427,10 @@ final class TranscriptWatch {
         }
     }
     func isBusy(_ s: CampSession) -> Bool {
-        if conversation(s) != nil { return true }
-        if let remote = cloudSessions[s.id] {
-            return remote.state == "running" || cloud.requests.contains { $0.sessionId == remote.id && ["claimed", "started", "cancel_requested"].contains($0.state) }
-        }
-        return conversation(s) != nil || activity[s.id]?.state == "running"
+        stateSnapshot().busy(s)
     }
     func stage(_ session: CampSession) -> Stage {
-        if isBusy(session) { return .progress }
-        if let live = activity[session.id], ["waiting", "unknown"].contains(live.state) { return .attention }
-        return stages[session.id] ?? (session.archived ? .done : .ready)
+        stateSnapshot().stage(session)
     }
     func modelLabel(_ s: CampSession) -> String { modelChoices[s.id] ?? (s.model.isEmpty ? "Session default" : s.model) }
     func selectModel(_ s: CampSession, _ model: String) {
@@ -453,6 +531,7 @@ final class TranscriptWatch {
         }
         if let selected = selected, let live = next[sharing.native(for: selected.id)?.id ?? selected.id] { children = live.children }
         if previousActivity != next { sharing.localChanged() }
+        if Set(previousActivity.keys) != Set(next.keys) { cloud.worker.scan() }
     }
     func loadChildren(_ s: CampSession) {
         guard !s.isCloud else { banner = "Subagent transcripts have not been shared for this session"; return }
@@ -652,6 +731,7 @@ final class TranscriptWatch {
             if visible { self.loadHistory() }
             completion?(result)
             self.sharing.localChanged()
+            self.cloud.worker.scan()
             if result.state == "completed" { self.runNextQueued(sessionID: s.id, history: Array(run.messages.suffix(240))) }
         }
         do {
@@ -765,10 +845,10 @@ struct RootView: View {
             HStack(spacing: 9) { Mascot(size: 46); VStack(alignment: .leading, spacing: 2) { Text("Capybara").font(.system(size: 17, weight: .semibold)); Text("CAMP").font(.system(size: 10, weight: .semibold)).tracking(3).foregroundStyle(campMuted) } }
             VStack(alignment: .leading, spacing: 5) {
                 Text("YOUR CAMP").font(.system(size: 10, weight: .semibold)).tracking(1.4).foregroundStyle(campMuted).padding(.bottom, 8)
-                sourceButton("All sessions", id: "all", icon: "square.grid.2x2", count: store.visibleSessions.count)
-                sourceButton("Active now", id: "active", icon: "waveform.path", count: store.visibleSessions.filter { store.isBusy($0) }.count)
-                sourceButton("Codex", id: "Codex", icon: "terminal", count: store.visibleSessions.filter { $0.provider == "Codex" }.count)
-                sourceButton("Claude", id: "Claude", icon: "asterisk", count: store.visibleSessions.filter { $0.provider == "Claude" }.count)
+                sourceButton("All sessions", id: "all", icon: "square.grid.2x2", count: store.sessionCount("all"))
+                sourceButton("Active now", id: "active", icon: "waveform.path", count: store.sessionCount("active"))
+                sourceButton("Codex", id: "Codex", icon: "terminal", count: store.sessionCount("Codex"))
+                sourceButton("Claude", id: "Claude", icon: "asterisk", count: store.sessionCount("Claude"))
             }
             VStack(alignment: .leading, spacing: 10) {
                 HStack { Text("LOCAL PROFILES").font(.system(size: 10, weight: .semibold)).tracking(1.4).foregroundStyle(campMuted); Spacer(); Button { store.sourceSheet = true } label: { Image(systemName: "plus") }.buttonStyle(.plain) }
@@ -824,7 +904,7 @@ struct BoardColumn: View {
     @ObservedObject var store: CampStore
     let stage: Stage
     @State private var count = 50
-    var items: [CampSession] { store.filtered.filter { store.stage($0) == stage } }
+    var items: [CampSession] { store.boardSessions(stage) }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack { Circle().fill(stage.color).frame(width: 7, height: 7); Text(stage.rawValue).font(.system(size: 12, weight: .semibold)); Text(items.count.formatted()).font(.system(size: 10)).foregroundStyle(campMuted); Spacer() }.padding(.horizontal, 4)

@@ -14,3 +14,5 @@ swiftc -parse-as-library -D CAMP_TESTING -swift-version 5 -framework SwiftUI -fr
 build/CampSharingTests
 swiftc -parse-as-library -D CAMP_TESTING -swift-version 5 -framework SwiftUI -framework AppKit -framework Security -lsqlite3 Sources/*.swift Tests/LocalConversationTests.swift -o build/LocalConversationTests
 build/LocalConversationTests
+swiftc -parse-as-library -D CAMP_TESTING -swift-version 5 -framework SwiftUI -framework AppKit -framework Security -lsqlite3 Sources/*.swift Tests/CampWorkerTests.swift -o build/CampWorkerTests
+build/CampWorkerTests

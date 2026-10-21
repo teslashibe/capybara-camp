@@ -25,6 +25,7 @@ import SwiftUI
     private(set) var scope: CloudScope?
     private(set) var cache: CampCache?
     private(set) var client: CampHTTP?
+    lazy var worker = CampLocalWorker(cache: cache)
     private let vault: any CampCredentialStore
     private let allowLoopback: Bool
     private var generation = UUID()
@@ -159,6 +160,7 @@ import SwiftUI
         try await cache.saveSnapshot(snapshot, scope: scope, expectedEpoch: epoch)
         projects = snapshot.projects; members = snapshot.members
         await loadCached(scope: scope)
+        worker.scan()
     }
     private func startStream(scope: CloudScope, generation token: UUID) {
         streamTask?.cancel()
@@ -238,6 +240,16 @@ import SwiftUI
             try await cache.ingest(scope: scope, session: value, expectedEpoch: epoch)
             guard token == generation else { return }
             if accepts(value) { sessionIndex[value.id] = value }
+            schedulePublish(generation: token)
+        } catch { self.error = error.localizedDescription }
+    }
+    func acceptWorkerRequest(_ value: CloudRequest) async {
+        guard let scope, value.campId == scope.campId, let cache else { return }
+        let token = generation
+        do {
+            try await cache.ingest(scope: scope, request: value, expectedEpoch: cacheEpoch)
+            guard token == generation else { return }
+            if value.revision >= (requestIndex[value.id]?.revision ?? 0) { requestIndex[value.id] = value }
             schedulePublish(generation: token)
         } catch { self.error = error.localizedDescription }
     }

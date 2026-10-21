@@ -8,6 +8,7 @@ import Foundation
         let a = CampSession(id: "codex-a", sessionID: "a", provider: "Codex", sourceID: "source-a", sourceLabel: "Personal", root: "/tmp", title: "Fix search", cwd: "/tmp/Apple", updated: 1, path: "", accountID: "", archived: false)
         let b = CampSession(id: "claude-b", sessionID: "b", provider: "Claude", sourceID: "source-b", sourceLabel: "Work", root: "/tmp", title: "Write tests", cwd: "/tmp/Banana", updated: 2, path: "", accountID: "", archived: true)
         store.sessions = [a,b]
+        precondition(store.sessionCount("all") == 2 && store.sessionCount("Codex") == 1 && store.sessionCount("Claude") == 1)
         precondition(store.filtered.count == 2)
         store.sourceFilter = "Claude"
         precondition(store.filtered.map(\.id) == [b.id])
@@ -18,14 +19,19 @@ import Foundation
         store.search = "work"
         precondition(store.filtered.map(\.id) == [b.id])
         precondition(store.stage(a) == .ready && store.stage(b) == .done)
+        store.search = ""
+        precondition(store.boardSessions(.ready).map(\.id) == [a.id])
+        precondition(store.boardSessions(.done).map(\.id) == [b.id])
         store.move(a.id, .done)
         let restored = CampStore(stateDirectory: root)
         precondition(restored.stages[a.id] == .done)
+        precondition(store.boardSessions(.ready).isEmpty && store.boardSessions(.done).count == 2)
         let attributes = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("board.json").path)
         precondition(attributes[.posixPermissions] as? Int == 0o600)
         store.move("untrusted-drop", .attention)
         precondition(store.stages["untrusted-drop"] == nil)
         store.conversations[a.id] = LocalConversation(session: a, history: [], prompt: "fixture")
+        precondition(store.sessionCount("active") == 1)
         precondition(store.stage(a) == .progress)
         store.move(a.id, .ready)
         precondition(store.stages[a.id] == .done)
