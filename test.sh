@@ -16,7 +16,7 @@ swiftc -parse-as-library -emit-library -emit-module -enable-testing -D CAMP_TEST
   -o build/test-support/libCampTestSupport.dylib
 WORK="$(mktemp -d "$ROOT/build/.camp-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-for suite in CampStateTests CampCloudTests CampSharingTests LocalConversationTests CampWorkerTests SessionMentionsTests LocalPlanningTests; do
+for suite in CampStateTests CampCloudTests CampSharingTests LocalConversationTests CampWorkerTests SessionMentionsTests LocalPlanningTests ExecutionApprovalTests; do
   printf '%s\n' '@testable import CampTestSupport' > "$WORK/$suite.swift"
   cat "Tests/$suite.swift" >> "$WORK/$suite.swift"
   swiftc -parse-as-library -swift-version 5 -I build/test-support -L build/test-support \

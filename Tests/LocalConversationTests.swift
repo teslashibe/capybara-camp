@@ -160,6 +160,15 @@ import Foundation
         try await until { result != nil }
         precondition(result?.state == "failed" && result!.output.utf8.count <= 8192)
         precondition(Bridge.activeProcesses.isEmpty)
+        result = nil
+        let closedInput = LocalConversation(session: a, history: [], prompt: String(repeating: "x", count: 65000))
+        closedInput.completed = { result = $0 }
+        try closedInput.start(prompt: String(repeating: "x", count: 65000), model: "", tuning: ModelTuning(), makeProcess: {
+            process("import sys;sys.stdin.close()")
+        })
+        try await until { result != nil }
+        precondition(result?.state == "uncertain", "A closed input pipe must report an uncertain result without terminating Camp")
+        precondition(Bridge.activeProcesses.isEmpty)
         print("PASS: background navigation, queues, cancellation, isolated planning, usage and bounded process IO")
     }
 }

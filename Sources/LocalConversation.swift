@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import Combine
 
 private func conversationChunk(_ handle: FileHandle, limit: Int) throws -> Data {
     var buffer = [UInt8](repeating: 0, count: limit)
@@ -15,7 +16,7 @@ struct ConversationUsage: Codable, Equatable, Sendable {
     var outputTokens: Int64?
 }
 
-enum ConversationMode: String { case chat, planning }
+enum ConversationMode: String { case chat, planning, implementation }
 
 struct ConversationResult: Sendable {
     let state: String
@@ -27,7 +28,7 @@ struct ConversationResult: Sendable {
 
 // A single official CLI conversation. Its state is independent of the visible
 // chat, and pipe reads apply backpressure instead of queueing unbounded UI work.
-@MainActor final class LocalConversation {
+@MainActor final class LocalConversation: ObservableObject {
     let id = UUID()
     let session: CampSession
     let queueID: String?
@@ -39,9 +40,14 @@ struct ConversationResult: Sendable {
     private(set) var accepted = false
     private(set) var notice = ""
     private(set) var pendingSteer: (id: String, text: String)?
+    @Published private(set) var approvals: [ProviderApproval] = []
+    @Published private(set) var answering: Set<String> = []
+    private(set) var providerSessionID: String?
+    private(set) var activity = ""
     var changed: (() -> Void)?
     var completed: ((ConversationResult) -> Void)?
     var didAccept: (() -> Void)?
+    var sessionCreated: ((String) -> Void)?
     private var process: Process?
     private var input: ConversationInput?
     private var pendingText: String?
@@ -62,12 +68,14 @@ struct ConversationResult: Sendable {
 
     func start(prompt: String, model: String, tuning: ModelTuning,
                contexts: [SessionContext] = [], mode: ConversationMode = .chat,
+               executionApproved: Bool = false, newSession: Bool = false,
                makeProcess: () throws -> Process = { try Bridge.process("conversation") }) throws {
         guard process == nil, !finished, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               prompt.utf8.count <= 65536 else { throw CampError.message("Write a prompt under 64 KB") }
         self.mode = mode
+        guard mode != .implementation || executionApproved else { throw CampError.message("Approve the implementation before enabling project tools") }
         let p = try makeProcess(), out = Pipe(), err = Pipe(), stdin = Pipe()
-        var payload = try JSONSerialization.data(withJSONObject: ["session": try JSONSerialization.jsonObject(with: JSONEncoder().encode(session)), "prompt": prompt, "model": model, "effort": tuning.effort, "speed": tuning.speed, "context": JSONSerialization.jsonObject(with: JSONEncoder().encode(contexts)), "mode": mode.rawValue])
+        var payload = try JSONSerialization.data(withJSONObject: ["session": try JSONSerialization.jsonObject(with: JSONEncoder().encode(session)), "prompt": prompt, "model": model, "effort": tuning.effort, "speed": tuning.speed, "context": JSONSerialization.jsonObject(with: JSONEncoder().encode(contexts)), "mode": mode.rawValue, "executionApproved": executionApproved, "newSession": newSession])
         payload.append(10)
         p.standardOutput = out; p.standardError = err; p.standardInput = stdin
         let writer = ConversationInput(stdin.fileHandleForWriting)
@@ -97,6 +105,17 @@ struct ConversationResult: Sendable {
                         if line.isEmpty { continue }
                         guard let value = try JSONSerialization.jsonObject(with: line) as? [String: Any], let type = value["type"] as? String else {
                             throw CampError.message("The local CLI returned an unreadable event")
+                        }
+                        if type == "approval" {
+                            let approval = try JSONDecoder().decode(ProviderApproval.self, from: line)
+                            guard mode == .implementation, approval.valid else { throw CampError.message("The CLI returned an unsupported approval request") }
+                            await self?.receive(approval)
+                            continue
+                        }
+                        if type == "session", let id = value["sessionID"] as? String {
+                            guard mode == .implementation, !id.isEmpty, id.utf8.count <= 200, !id.contains("/"), !id.contains("\\") else { throw CampError.message("The CLI returned an invalid session identity") }
+                            await self?.createdSession(id)
+                            continue
                         }
                         let usage = ConversationUsage(inputTokens: Self.tokenCount(value["inputTokens"]), outputTokens: Self.tokenCount(value["outputTokens"]))
                         await self?.receive(type, text: value["text"] as? String ?? value["message"] as? String ?? "", requestID: value["requestID"] as? String, usage: usage)
@@ -144,6 +163,11 @@ struct ConversationResult: Sendable {
         case "cancelled": terminal = "cancelled"; notice = value
         case "error": terminal = "failed"; notice = value
         case "notice": notice = value
+        case "activity": activity = String(value.prefix(8192))
+        case "approvalResolved":
+            approvals.removeAll { $0.id == requestID }; if let requestID { answering.remove(requestID) }
+        case "approvalRejected":
+            if let requestID { answering.remove(requestID) }; notice = value
         case "usage":
             // Codex chat counters are cumulative for the resumed thread. Planning
             // starts fresh, so its final counters describe this isolated step.
@@ -152,6 +176,29 @@ struct ConversationResult: Sendable {
         default: return
         }
         changed?()
+    }
+    private func receive(_ approval: ProviderApproval) {
+        guard !finished, !stopped, !approvals.contains(where: { $0.id == approval.id }) else { return }
+        guard approvals.count < 16 else { terminal = "failed"; notice = "Too many pending approval requests"; stop(); return }
+        approvals.append(approval); changed?()
+    }
+    private func createdSession(_ id: String) {
+        guard !finished, !stopped, providerSessionID == nil else { return }
+        providerSessionID = id; sessionCreated?(id); changed?()
+    }
+    func answer(_ id: String, allow: Bool, answers: [String: [String]] = [:]) {
+        guard !finished, !stopped, !answering.contains(id), let approval = approvals.first(where: { $0.id == id }),
+              !allow || approval.canApprove, let input else { return }
+        do {
+            var data = try JSONSerialization.data(withJSONObject: ["type": "approval", "id": id, "allow": allow, "answers": answers]); data.append(10)
+            guard data.count <= 65536 else { throw CampError.message("The answer is too long") }
+            answering.insert(id); changed?()
+            let payload = data
+            Task.detached { [weak self] in
+                do { try input.write(payload) }
+                catch { await self?.receive("approvalRejected", text: "The answer could not be delivered. Check the running session before retrying.", requestID: id) }
+            }
+        } catch { notice = error.localizedDescription; changed?() }
     }
     private func flush() {
         flushTask?.cancel(); flushTask = nil
@@ -166,6 +213,7 @@ struct ConversationResult: Sendable {
         guard !finished else { return }; finished = true
         stopTask?.cancel(); stopTask = nil
         finishMessage(); ready = false; steering = false
+        approvals = []; answering = []
         input?.close(); input = nil; process = nil; Bridge.activeProcesses.removeValue(forKey: id)
         let state: String
         if terminal == "completed", code == 0 { state = "completed" }
@@ -175,10 +223,11 @@ struct ConversationResult: Sendable {
         let message = notice.isEmpty && state != "completed" ? (error.isEmpty ? "The CLI stopped before confirming the result. Check the transcript before retrying." : error) : notice
         completed?(ConversationResult(state: state, message: message, accepted: accepted,
             output: messages.filter { $0.role == "assistant" }.map(\.text).joined(separator: "\n\n"), usage: usage))
-        changed = nil; completed = nil; didAccept = nil
+        changed = nil; completed = nil; didAccept = nil; sessionCreated = nil
     }
     func stop() {
         guard !finished, !stopped else { return }; stopped = true
+        approvals = []; answering = []; changed?()
         let writer = input
         Task.detached { try? writer?.write(Data("{\"type\":\"stop\"}\n".utf8)) }
         // The bridge owns and reaps its provider process group on SIGTERM too.
@@ -189,7 +238,7 @@ struct ConversationResult: Sendable {
         }
     }
     func steer(_ value: String) throws {
-        guard mode == .chat, ready, !steering, pendingSteer == nil, !stopped, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, value.utf8.count <= 65536, let input else {
+        guard mode != .planning, ready, !steering, pendingSteer == nil, !stopped, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, value.utf8.count <= 65536, let input else {
             throw CampError.message("Wait for the active turn before steering")
         }
         let id = UUID().uuidString
@@ -208,9 +257,10 @@ struct ConversationResult: Sendable {
 }
 
 private final class ConversationInput: @unchecked Sendable {
+    private static let ignoreBrokenPipe: Void = { _ = Darwin.signal(SIGPIPE, SIG_IGN) }()
     private let lock = NSLock()
     private var handle: FileHandle?
-    init(_ handle: FileHandle) { self.handle = handle }
+    init(_ handle: FileHandle) { _ = Self.ignoreBrokenPipe; self.handle = handle }
     func write(_ data: Data) throws {
         lock.lock(); defer { lock.unlock() }
         guard let handle else { throw CampError.message("The CLI input is closed") }

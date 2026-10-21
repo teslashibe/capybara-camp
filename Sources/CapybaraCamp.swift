@@ -1192,6 +1192,7 @@ struct ChatView: View {
                       }
                     }
                     VStack(alignment: .leading, spacing: 9) {
+                        if let conversation = store.conversation(s) { ConversationApprovalsView(conversation: conversation) }
                         if let remote = store.cloudSessions[s.id] { CloudRequestQueueView(cloud: store.cloud, session: remote) }
                         else { PromptQueueView(store: store, session: s) }
                         SessionContextComposer(store: store, mentions: store.mentions, destination: s)

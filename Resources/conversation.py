@@ -46,7 +46,8 @@ def emit_usage(emit, usage, codex=False):
 
 
 class NativeConnection:
-    def __init__(self, command, cwd, env):
+    def __init__(self, command, cwd, env, allow_requests=False):
+        self.allow_requests = allow_requests
         self.events = queue.Queue(maxsize=16)
         self.backlog = collections.deque()
         self.errors = collections.deque(maxlen=12)
@@ -119,7 +120,12 @@ class NativeConnection:
                     raise RuntimeError(event["error"].get("message", "Native request rejected"))
                 return event.get("result", {})
             if "method" in event and "id" in event:
-                self.reject_tool(event)
+                if self.allow_requests:
+                    if len(self.backlog) >= 32:
+                        raise RuntimeError('Too many pending provider requests')
+                    self.backlog.append(event)
+                else:
+                    self.reject_tool(event)
             else:
                 if len(self.backlog) >= 32:
                     raise RuntimeError('The native CLI sent too many events before acknowledging ' + method)
@@ -212,8 +218,13 @@ def run(request, input_stream=None, emit=None, command=None):
     request.pop("_camp_context_instructions", None)
     s, prompt = dict(request["session"]), request["prompt"]
     planning = request.get("mode") == "planning"
-    if request.get("mode", "chat") not in ("chat", "planning"):
+    implementing = request.get("mode") == "implementation"
+    if request.get("mode", "chat") not in ("chat", "planning", "implementation"):
         raise ValueError("Unknown conversation mode")
+    if implementing and request.get('executionApproved') is not True:
+        raise ValueError('Approve the implementation before enabling project tools')
+    if type(request.get('newSession', False)) is not bool:
+        raise ValueError('Invalid session creation choice')
     if planning and s.get("provider") == "Claude":
         s["sessionID"] = str(uuid.uuid4())
     if s.get("provider") not in ("Codex", "Claude") or not isinstance(prompt, str) or not prompt.strip():
@@ -236,14 +247,20 @@ def run(request, input_stream=None, emit=None, command=None):
     controls = queue.Queue()
     previous = {}
     try:
-        if not planning:
+        if not planning and not (implementing and request.get('newSession')):
             assert_available(s)
         if request.get("context"):
             from context_tool import ContextGrant
             grant = ContextGrant(request["context"], SUPPORT)
             request = {**request, "prompt": prompt + grant.attachment_links, "_camp_mcp": grant.server, "_camp_context_instructions": grant.instructions}
         if command is None:
-            if s["provider"] == "Codex":
+            if implementing:
+                from execution import execution_command
+                command = execution_command(s, native_command, request.get('newSession', False))
+                if grant and s['provider'] == 'Claude':
+                    command += ['--mcp-config', json.dumps({'mcpServers': {'camp_context': grant.server}}),
+                                '--append-system-prompt-file', str(grant.instructions_path), '--system-prompt-snapshot', 'off']
+            elif s["provider"] == "Codex":
                 command = codex_command(s, grant.server if grant else None)
             else:
                 command = [*native_command, "--input-format", "stream-json", "--replay-user-messages"]
@@ -258,9 +275,9 @@ def run(request, input_stream=None, emit=None, command=None):
                         settings.update(json.loads(command[index + 1])); del command[index:index + 2]
                     command += ["--restricted", "--setting-sources", "", "--disable-slash-commands", "--settings", json.dumps(settings), "--mcp-config", json.dumps({"mcpServers": {"camp_context": grant.server}}), "--allowedTools", "mcp__camp_context__read_session", "--append-system-prompt-file", str(grant.instructions_path), "--system-prompt-snapshot", "off"]
         env = runtime_env(s)
-        if grant and s["provider"] == "Claude":
+        if grant and s["provider"] == "Claude" and not implementing:
             env.pop("CLAUDE_CODE_SAFE_MODE", None)
-        connection = NativeConnection(command, s["cwd"], env)
+        connection = NativeConnection(command, s["cwd"], env, allow_requests=implementing)
 
         def read_controls():
             for line in input_stream:
@@ -306,9 +323,19 @@ def codex_turn(c, s, request, controls, emit):
     merged = c.rpc("config/read", {"includeLayers": False, "cwd": s["cwd"]}).get("config", {})
     params = {"threadId": s["sessionID"], "cwd": s["cwd"], "sandbox": "read-only", "approvalPolicy": "untrusted",
               "config": codex_config(merged, request.get("_camp_mcp")), "developerInstructions": "This is a chat-only preview. Answer directly. Only the Camp context read tool, when configured, is permitted; do not run project tools or delegate work." + request.get("_camp_context_instructions", "")}
+    implementing = request.get('mode') == 'implementation'
+    if implementing:
+        params = {'threadId': s['sessionID'], 'cwd': s['cwd']}
+        if request.get('_camp_mcp'):
+            params['config'] = {'mcp_servers': {**merged.get('mcp_servers', {}), 'camp_context': {**request['_camp_mcp'], 'enabled': True, 'required': True}}}
+            params['developerInstructions'] = (merged.get('developer_instructions') or '') + request.get('_camp_context_instructions', '')
     if request.get("model"):
         params["model"] = request["model"]
-    if request.get("mode") == "planning":
+    if implementing and request.get('newSession'):
+        params.pop('threadId')
+        s['sessionID'] = c.rpc('thread/start', params)['thread']['id']
+        emit({'type': 'session', 'sessionID': s['sessionID']})
+    elif request.get("mode") == "planning":
         params.pop("threadId")
         params["ephemeral"] = True
         params["developerInstructions"] += " This is one bounded planning step. Do not execute the plan or change project files."
@@ -316,12 +343,18 @@ def codex_turn(c, s, request, controls, emit):
     else:
         c.rpc("thread/resume", params)
     turn_params = {"threadId": s["sessionID"], "input": [{"type": "text", "text": request["prompt"]}], "approvalPolicy": "untrusted"}
+    if implementing:
+        turn_params.pop('approvalPolicy')
     for key in ("model", "effort"):
         if request.get(key):
             turn_params[key] = request[key]
     if request.get("speed"):
         turn_params["serviceTier"] = "default" if request["speed"] == "standard" else request["speed"]
     turn_id = c.rpc("turn/start", turn_params)["turn"]["id"]
+    relay = None
+    if implementing:
+        from execution import ApprovalRelay
+        relay = ApprovalRelay(c, emit, 'Codex', s['sessionID'], turn_id)
     emit({"type": "started", "turnID": turn_id})
     texts = collections.OrderedDict()
     while True:
@@ -330,6 +363,9 @@ def codex_turn(c, s, request, controls, emit):
         except queue.Empty:
             control = None
         if control:
+            if control.get('type') == 'approval' and relay:
+                relay.resolve(control)
+                continue
             if control.get("type") == "stop":
                 try:
                     c.rpc("turn/interrupt", {"threadId": s["sessionID"], "turnId": turn_id}, timeout=3)
@@ -353,11 +389,21 @@ def codex_turn(c, s, request, controls, emit):
         if event is None:
             raise RuntimeError("Codex closed before completing the turn")
         if "method" in event and "id" in event:
-            c.reject_tool(event)
+            if relay:
+                relay.request(event)
+            else:
+                c.reject_tool(event)
             continue
         method, params = event.get("method"), event.get("params", {})
         if params.get("threadId") not in (None, s["sessionID"]) or params.get("turnId") not in (None, turn_id):
             continue
+        if relay and method == 'serverRequest/resolved':
+            relay.cancelled(params.get('requestId'))
+        if relay and method == 'item/started':
+            item = params.get('item', {})
+            relay.remember(item)
+            if item.get('type') in ('commandExecution', 'fileChange', 'mcpToolCall'):
+                emit({'type': 'activity', 'text': item.get('command') or item.get('tool') or 'Updating project files'})
         if method == "thread/tokenUsage/updated":
             emit_usage(emit, params.get("tokenUsage", {}).get("total"), codex=True)
         if method == "item/agentMessage/delta":
@@ -382,7 +428,16 @@ def claude_turn(c, s, request, controls, emit):
     def user(text, ident):
         c.write({"type": "user", "uuid": ident, "session_id": s["sessionID"],
                  "parent_tool_use_id": None, "message": {"role": "user", "content": text}})
-    user(request["prompt"], str(uuid.uuid4()))
+    implementing = request.get('mode') == 'implementation'
+    relay, initialization = None, None
+    if implementing:
+        from execution import ApprovalRelay
+        relay = ApprovalRelay(c, emit, 'Claude', s['sessionID'])
+        initialization = str(uuid.uuid4())
+        c.write({'type': 'control_request', 'request_id': initialization, 'request': {'subtype': 'initialize', 'hooks': None}})
+        initialize_deadline = time.monotonic() + 30
+    else:
+        user(request["prompt"], str(uuid.uuid4()))
     pending = None
     interrupt_ack = False
     interrupted_result = False
@@ -396,6 +451,9 @@ def claude_turn(c, s, request, controls, emit):
         except queue.Empty:
             control = None
         if control:
+            if control.get('type') == 'approval' and relay:
+                relay.resolve(control)
+                continue
             if control.get("type") == "stop":
                 emit({"type": "cancelled", "text": "Stopped. Queued prompts are paused."})
                 return
@@ -412,7 +470,24 @@ def claude_turn(c, s, request, controls, emit):
         event = c.next()
         if event is None:
             raise RuntimeError("Claude closed before completing the turn")
+        if initialization and time.monotonic() > initialize_deadline:
+            raise RuntimeError('Claude did not initialize its approval channel')
         kind = event.get("type")
+        if relay and kind == 'control_request':
+            relay.request(event)
+            continue
+        if relay and kind == 'control_cancel_request':
+            relay.cancelled(event.get('request_id'))
+            continue
+        if initialization and kind == 'control_response' and event.get('response', {}).get('request_id') == initialization:
+            response = event['response']
+            if response.get('subtype') != 'success':
+                raise RuntimeError('Claude rejected its approval channel')
+            initialization = None
+            if request.get('newSession'):
+                emit({'type': 'session', 'sessionID': s['sessionID']})
+            user(request['prompt'], str(uuid.uuid4()))
+            continue
         if kind == "system" and event.get("subtype") == "init":
             if request.get("_camp_mcp") and not any(server.get("name") == "camp_context" and server.get("status") == "connected" for server in event.get("mcp_servers", [])):
                 emit({"type": "error", "message": "The selected context tool did not connect. No context was supplied."})
