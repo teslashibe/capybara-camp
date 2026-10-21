@@ -60,6 +60,29 @@ func sessionInput(project Project, profile Profile) SessionInput {
 	return SessionInput{ID: uuid.NewString(), ProjectID: project.ID, ProfileID: profile.ID, LocalSessionID: uuid.NewString(), Title: "A shared plan", Model: "fixture-model", State: "idle", Stage: "Ready", Shared: true, AllowRequests: true}
 }
 
+func TestPrivateMetadataFencesDelayedFirstShare(t *testing.T) {
+	s, _, actors, c, p, profile := sessionFixture(t)
+	ctx := context.Background()
+	input := sessionInput(p, profile)
+	delayed := input
+	input.Shared = false
+	private, err := s.PublishSession(ctx, actors[0], c.ID, uuid.NewString(), input)
+	if err != nil || private.Shared {
+		t.Fatal("private withdrawal fence", err)
+	}
+	if _, err = s.PublishSession(ctx, actors[0], c.ID, uuid.NewString(), delayed); !errors.Is(err, ErrRevision) {
+		t.Fatal("late first share bypassed withdrawal", err)
+	}
+	if _, err = s.Session(ctx, actors[1], c.ID, private.ID); !errors.Is(err, ErrDenied) {
+		t.Fatal("private fence visible to teammate", err)
+	}
+	delayed.ExpectedRevision = private.Revision
+	shared, err := s.PublishSession(ctx, actors[0], c.ID, uuid.NewString(), delayed)
+	if err != nil || !shared.Shared {
+		t.Fatal("explicit re-share failed", err)
+	}
+}
+
 func TestSharedTranscriptVersionsAndRevocation(t *testing.T) {
 	s, _, actors, c, p, profile := sessionFixture(t)
 	ctx := context.Background()

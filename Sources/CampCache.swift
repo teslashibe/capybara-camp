@@ -33,7 +33,7 @@ actor CampCache {
         let versionReady = sqlite3_prepare_v2(database, "PRAGMA user_version", -1, &versionStatement, nil) == SQLITE_OK
         let version = versionReady && sqlite3_step(versionStatement) == SQLITE_ROW ? sqlite3_column_int(versionStatement, 0) : -1
         sqlite3_finalize(versionStatement)
-        guard version == 0 || version == 1 else { sqlite3_close(database); db = nil; throw CampCloudError.cacheUnavailable }
+        guard (0...2).contains(version) else { sqlite3_close(database); db = nil; throw CampCloudError.cacheUnavailable }
         let schema = """
         PRAGMA journal_mode=WAL;
         PRAGMA synchronous=FULL;
@@ -46,9 +46,11 @@ actor CampCache {
         CREATE TABLE IF NOT EXISTS outbox(id TEXT PRIMARY KEY,scope TEXT NOT NULL,method TEXT NOT NULL,path TEXT NOT NULL,body BLOB NOT NULL,state TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',created REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS outbox_pending ON outbox(scope,state,created);
         CREATE TABLE IF NOT EXISTS attempts(id TEXT PRIMARY KEY,scope TEXT NOT NULL,state TEXT NOT NULL,body BLOB NOT NULL);
+        CREATE TABLE IF NOT EXISTS share_bindings(scope TEXT NOT NULL,id TEXT NOT NULL,body BLOB NOT NULL,PRIMARY KEY(scope,id));
+        CREATE TABLE IF NOT EXISTS published_message_hashes(scope TEXT NOT NULL,session_id TEXT NOT NULL,id TEXT NOT NULL,digest TEXT NOT NULL,PRIMARY KEY(scope,session_id,id));
         UPDATE outbox SET state='pending' WHERE state='sending';
         UPDATE attempts SET state='uncertain' WHERE state IN ('start_pending','running');
-        PRAGMA user_version=1;
+        PRAGMA user_version=2;
         """
         guard sqlite3_exec(database, schema, nil, nil, nil) == SQLITE_OK else { sqlite3_close(database); db = nil; throw CampCloudError.cacheUnavailable }
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
@@ -100,9 +102,22 @@ actor CampCache {
     }
     func metadata(_ key: String) throws -> Data? { try rows("SELECT value FROM metadata WHERE key=?", [.text(key)]) { blob($0, 0) }.first }
     func setMetadata(_ key: String, _ data: Data) throws { try execute("INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [.text(key), .blob(data)]) }
+    func saveSnapshot(_ snapshot: CloudSnapshot, scope: CloudScope, expectedEpoch: Int64) throws {
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            try setMetadata("snapshot:" + scope.key, CampWire.encoder().encode(snapshot))
+        }
+    }
     func cursor(_ scope: CloudScope) throws -> Int64 {
         guard let data = try metadata("cursor:" + scope.key), let string = String(data: data, encoding: .utf8), let value = Int64(string) else { return 0 }
         return value
+    }
+    func epoch(_ scope: CloudScope) throws -> Int64 {
+        guard let data = try metadata("epoch:" + scope.key), let text = String(data: data, encoding: .utf8), let epoch = Int64(text) else { return 0 }
+        return epoch
+    }
+    private func checkEpoch(_ scope: CloudScope, _ expected: Int64?) throws {
+        if let expected, try epoch(scope) != expected { throw CampCloudError.server(409, "cache_scope_changed") }
     }
     private func save(_ session: CloudSession, scope: CloudScope) throws {
         try execute("""
@@ -115,9 +130,10 @@ actor CampCache {
         try execute("INSERT INTO requests(scope,id,revision,body) VALUES(?,?,?,?) ON CONFLICT(scope,id) DO UPDATE SET revision=excluded.revision,body=excluded.body WHERE excluded.revision>=requests.revision",
                     [.text(scope.key), .text(request.id), .integer(request.revision), .blob(try CampWire.encoder().encode(request))])
     }
-    func replaceSessions(_ sessions: [CloudSession], scope: CloudScope, cursor: Int64) throws {
+    func replaceSessions(_ sessions: [CloudSession], scope: CloudScope, cursor: Int64, expectedEpoch: Int64? = nil) throws {
         guard cursor >= (try self.cursor(scope)) else { throw CampCloudError.server(409, "server_history_changed") }
         try transaction {
+            try checkEpoch(scope, expectedEpoch)
             try execute("DELETE FROM sessions WHERE scope=?", [.text(scope.key)])
             for session in sessions { try save(session, scope: scope) }
             try execute("DELETE FROM messages WHERE scope=? AND session_id NOT IN (SELECT id FROM sessions WHERE scope=?)", [.text(scope.key), .text(scope.key)])
@@ -125,9 +141,10 @@ actor CampCache {
             try setMetadata("cursor:" + scope.key, Data(String(cursor).utf8))
         }
     }
-    func ingest(scope: CloudScope, cursor: Int64? = nil, session: CloudSession? = nil, request: CloudRequest? = nil, removed: (String, Int64)? = nil) throws {
+    func ingest(scope: CloudScope, cursor: Int64? = nil, session: CloudSession? = nil, request: CloudRequest? = nil, removed: (String, Int64)? = nil, expectedEpoch: Int64? = nil) throws {
         if let cursor, cursor <= (try self.cursor(scope)) { return }
         try transaction {
+            try checkEpoch(scope, expectedEpoch)
             if let session { try save(session, scope: scope) }
             if let request { try save(request, scope: scope) }
             if let (id, revision) = removed {
@@ -145,12 +162,13 @@ actor CampCache {
     func requests(_ scope: CloudScope) throws -> [CloudRequest] {
         try rows("SELECT body FROM requests WHERE scope=? ORDER BY rowid DESC LIMIT 1000", [.text(scope.key)]) { try CampWire.decoder().decode(CloudRequest.self, from: blob($0, 0)) }.sorted { $0.createdAt > $1.createdAt }
     }
-    func saveTranscript(_ transcript: CloudTranscript, scope: CloudScope, sessionId: String, before: Int64 = 0, expectedPermissionRevision: Int64? = nil) throws {
+    func saveTranscript(_ transcript: CloudTranscript, scope: CloudScope, sessionId: String, before: Int64 = 0, expectedPermissionRevision: Int64? = nil, expectedEpoch: Int64? = nil) throws {
         guard transcript.revision >= 0, before >= 0, transcript.messages.count <= 200 else { throw CampCloudError.invalidResponse }
         let floor = transcript.hasMore ? transcript.before : 0
         let ceiling = before == 0 ? Int64.max : before
         guard floor >= 0, floor <= ceiling, transcript.messages.allSatisfy({ $0.ordinal >= floor && $0.ordinal < ceiling && $0.revision <= transcript.revision }) else { throw CampCloudError.invalidResponse }
         try transaction {
+            try checkEpoch(scope, expectedEpoch)
             let permissions = try rows("SELECT json_extract(CAST(body AS TEXT),'$.permission_revision') FROM sessions WHERE scope=? AND id=?", [.text(scope.key), .text(sessionId)]) { sqlite3_column_int64($0, 0) }
             guard let permission = permissions.first, expectedPermissionRevision == nil || permission == expectedPermissionRevision else { throw CampCloudError.server(404, "session_unavailable") }
             // Each page is authoritative for its ordinal window, including messages
@@ -170,7 +188,8 @@ actor CampCache {
             try CampWire.decoder().decode(CloudMessage.self, from: blob($0, 0))
         }.reversed())
     }
-    func enqueue(scope: CloudScope, method: String, path: String, body: Data, id: String = UUID().uuidString.lowercased()) throws -> String {
+    func enqueue(scope: CloudScope, method: String, path: String, body: Data, id: String = UUID().uuidString.lowercased(), expectedEpoch: Int64? = nil) throws -> String {
+        try checkEpoch(scope, expectedEpoch)
         let endpoint = try CampEndpoint(scope.origin, allowLoopback: true)
         _ = try endpoint.requestURL(path)
         guard UUID(uuidString: id) != nil, body.count <= 2 << 20, ["POST", "PUT", "PATCH", "DELETE"].contains(method),
@@ -192,6 +211,24 @@ actor CampCache {
     func saveAttempt(_ attempt: CloudAttempt) throws {
         try execute("INSERT INTO attempts(id,scope,state,body) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,body=excluded.body", [.text(attempt.id), .text(attempt.scope), .text(attempt.state), .blob(try CampWire.encoder().encode(attempt))])
     }
+    func shares(_ scope: CloudScope) throws -> [LocalShare] {
+        try rows("SELECT body FROM share_bindings WHERE scope=? ORDER BY id", [.text(scope.key)]) { try JSONDecoder().decode(LocalShare.self, from: blob($0, 0)) }
+    }
+    func saveShare(_ value: LocalShare, scope: CloudScope, published: [PublishedDigest] = [], expectedEpoch: Int64? = nil) throws {
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            try execute("INSERT INTO share_bindings(scope,id,body) VALUES(?,?,?) ON CONFLICT(scope,id) DO UPDATE SET body=excluded.body", [.text(scope.key), .text(value.id), .blob(try JSONEncoder().encode(value))])
+            for hash in published {
+                try execute("INSERT INTO published_message_hashes(scope,session_id,id,digest) VALUES(?,?,?,?) ON CONFLICT(scope,session_id,id) DO UPDATE SET digest=excluded.digest", [.text(scope.key), .text(value.id), .text(hash.id), .text(hash.digest)])
+            }
+        }
+    }
+    func unpublished(_ messages: [PublishMessage], scope: CloudScope, sessionId: String) throws -> [PublishMessage] {
+        let ids = try CampWire.encoder().encode(messages.map(\.id))
+        let pairs = try rows("SELECT id,digest FROM published_message_hashes WHERE scope=? AND session_id=? AND id IN (SELECT value FROM json_each(?))", [.text(scope.key), .text(sessionId), .blob(ids)]) { (text($0, 0), text($0, 1)) }
+        let saved = Dictionary(pairs, uniquingKeysWith: { _, new in new })
+        return messages.filter { saved[$0.id] != $0.digest }
+    }
     func attempts(_ scope: CloudScope) throws -> [CloudAttempt] {
         try rows("SELECT state,body FROM attempts WHERE scope=?", [.text(scope.key)]) {
             var result = try CampWire.decoder().decode(CloudAttempt.self, from: blob($0, 1)); result.state = text($0, 0); return result
@@ -199,7 +236,8 @@ actor CampCache {
     }
     func clear(_ scope: CloudScope) throws {
         try transaction {
-            for table in ["sessions", "requests", "messages", "tombstones", "outbox"] { try execute("DELETE FROM \(table) WHERE scope=?", [.text(scope.key)]) }
+            try setMetadata("epoch:" + scope.key, Data(String(try epoch(scope) + 1).utf8))
+            for table in ["sessions", "requests", "messages", "tombstones", "outbox", "share_bindings", "published_message_hashes"] { try execute("DELETE FROM \(table) WHERE scope=?", [.text(scope.key)]) }
             try execute("DELETE FROM metadata WHERE key=?", [.text("cursor:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("snapshot:" + scope.key)])
             for var attempt in try attempts(scope) {

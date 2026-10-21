@@ -73,6 +73,18 @@ development. These features are not included in v0.0.1. See [self-hosting](docs/
 for the current implementation boundary and [the V1 epic](https://github.com/teslashibe/capybara-camp/issues/1)
 for release acceptance.
 
+In a V1 development build, connect your Camp from the header, then choose
+**Share with Camp** on a session card. Select its project and whether teammates
+may request work. Requests from other people require the session owner's approval.
+Stop sharing removes the other members' access and cancels queued requests.
+
+For isolated native/Go integration tests, run `tools/native-fixture.sh` with an
+absolute temporary directory, then build with `./build.sh --development`.
+The fixture starts disposable PostgreSQL and a loopback API; it writes synthetic
+email codes to that directory. Development builds allow a loopback HTTP origin.
+`CAMP_DEV_EPHEMERAL_CREDENTIALS=1` uses in-memory Camp credentials in those builds.
+Normal builds require HTTPS and use the Keychain.
+
 ## Website
 
 The public website is hosted on Cloudflare Pages at [capybaracamp.com](https://capybaracamp.com), using the `capybara-camp` Direct Upload project. Its source is `docs/index.html`; a Cloudflare Redirect Rule sends the `www` address to the main domain.
@@ -83,7 +95,7 @@ To publish a website update, upload a ZIP containing only `index.html` at the ar
 
 Camp stores source paths, cached metadata, board positions, model settings and queued prompts under `~/Library/Application Support/Capybara Camp`. `CAPY_SUPPORT` can select a separate absolute directory for local testing. Provider credentials stay in the provider's own storage. Import reads are local; sending a prompt uses the selected CLI and updates that provider's session store.
 
-Cloud-only conversations and unreadable files belonging to other macOS users are not imported. Camp does not upload transcripts to a Camp service. Do not attach your profile directories, application-support folder or unredacted transcripts to an issue. See [SECURITY.md](SECURITY.md).
+Cloud-only conversations and unreadable files belonging to other macOS users are not imported. v0.0.1 does not upload transcripts to a Camp service. V1 development builds upload only sessions explicitly shared to the configured Camp server. Do not attach your profile directories, application-support folder or unredacted transcripts to an issue. See [SECURITY.md](SECURITY.md).
 
 ## Scope of the first release
 

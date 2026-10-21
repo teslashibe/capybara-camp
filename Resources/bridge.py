@@ -44,7 +44,7 @@ def text_blocks(value):
     if isinstance(value, str):
         return value
     if isinstance(value, list):
-        return "\n".join(x.get("text", "") for x in value if isinstance(x, dict) and x.get("type") in ("text", "input_text", "output_text"))
+        return "\n".join(x.get("text", "") for x in value if isinstance(x, dict) and x.get("type") in ("text", "input_text", "output_text") and isinstance(x.get("text", ""), str))
     return ""
 
 def title_for(value):
@@ -290,19 +290,35 @@ def codex_history(s):
                 if text:
                     yield {"id": p.get("id") or str(n), "role": p["role"], "text": text}
 
-def claude_history(s):
-    records = {}
+def claude_records(s, strict=False):
     with Path(s["path"]).open(errors="replace") as f:
         for n, line in enumerate(f):
             try:
                 d = json.loads(line)
             except ValueError:
+                if strict and line.strip():
+                    raise ValueError("The transcript is incomplete; sharing will retry after it is written")
+                continue
+            if not isinstance(d, dict):
+                if strict:
+                    raise ValueError("The transcript contains an invalid record")
                 continue
             if d.get("type") in ("user", "assistant") and (not d.get("isSidechain") or s.get("isSubagent")):
-                text = text_blocks(d.get("message", {}).get("content"))
+                message = d.get("message")
+                if not isinstance(message, dict):
+                    if strict:
+                        raise ValueError("The transcript contains an invalid message")
+                    continue
+                text = text_blocks(message.get("content"))
                 if text:
                     ident = d.get("uuid") or str(n)
-                    records[ident] = {"id": ident, "role": d["type"], "text": text}
+                    value = {"id": ident, "role": d["type"], "text": text}
+                    if isinstance(message.get("model"), str):
+                        value["model"] = message["model"]
+                    yield value
+
+def claude_history(s):
+    records = {value["id"]: value for value in claude_records(s)}
     yield from records.values()
 
 def transcript(s, limit=120):
@@ -491,7 +507,7 @@ def chat(s, prompt, model="", effort="", speed=""):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("action", choices=["scan", "transcript", "chat", "conversation", "add-source", "activity", "children"])
+    p.add_argument("action", choices=["scan", "transcript", "export-page", "chat", "conversation", "add-source", "activity", "children"])
     args = p.parse_args()
     if args.action == "scan":
         emit(scan())
@@ -509,7 +525,10 @@ def main():
         run(json.loads(sys.stdin.readline()))
     else:
         request = json.load(sys.stdin)
-        if args.action == "transcript":
+        if args.action == "export-page":
+            from transcript_index import export_page
+            emit(export_page(request["session"], SUPPORT, request.get("after", -1), request.get("limit", 200)))
+        elif args.action == "transcript":
             emit(transcript(request["session"], request.get("limit", 120)))
         else:
             chat(request["session"], request["prompt"], request.get("model", ""), request.get("effort", ""), request.get("speed", ""))

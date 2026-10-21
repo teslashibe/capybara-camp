@@ -35,6 +35,7 @@ import SwiftUI
     private var sessionIndex: [String: CloudSession] = [:]
     private var requestIndex: [String: CloudRequest] = [:]
     private var lastRenewal = Date.distantPast
+    private var cacheEpoch: Int64 = 0
 
     init(directory: URL, vault: any CampCredentialStore = CampKeychain(), allowLoopback: Bool = false) {
         self.vault = vault; self.allowLoopback = allowLoopback
@@ -122,10 +123,12 @@ import SwiftUI
         guard let cache else { return }
         do {
             let token = generation
+            let epoch = try await cache.epoch(scope)
             let cachedSessions = try await cache.sessions(scope), cachedRequests = try await cache.requests(scope)
             let cachedPending = try await cache.outbox(scope)
             let data = try await cache.metadata("snapshot:" + scope.key)
             guard self.scope == scope, generation == token else { return }
+            cacheEpoch = epoch
             sessions = cachedSessions; requests = cachedRequests
             sessionIndex = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
             requestIndex = Dictionary(uniqueKeysWithValues: requests.map { ($0.id, $0) })
@@ -138,6 +141,7 @@ import SwiftUI
     }
     private func synchronize(scope: CloudScope, generation token: UUID) async throws {
         guard let client, let credential, let cache else { throw CampCloudError.cacheUnavailable }
+        let epoch = cacheEpoch
         let snapshot = try await client.get(CloudSnapshot.self, path: "/v1/camps/\(scope.campId)/snapshot", token: credential.token)
         var all: [CloudSession] = [], cursor = "", seen = Set<String>()
         repeat {
@@ -150,9 +154,9 @@ import SwiftUI
         } while !cursor.isEmpty
         let currentRequests = try await client.get([CloudRequest].self, path: "/v1/camps/\(scope.campId)/requests", token: credential.token)
         guard generation == token else { throw CancellationError() }
-        try await cache.replaceSessions(all, scope: scope, cursor: snapshot.camp.cursor)
-        for request in currentRequests { try await cache.ingest(scope: scope, request: request) }
-        try await cache.setMetadata("snapshot:" + scope.key, CampWire.encoder().encode(snapshot))
+        try await cache.replaceSessions(all, scope: scope, cursor: snapshot.camp.cursor, expectedEpoch: epoch)
+        for request in currentRequests { try await cache.ingest(scope: scope, request: request, expectedEpoch: epoch) }
+        try await cache.saveSnapshot(snapshot, scope: scope, expectedEpoch: epoch)
         projects = snapshot.projects; members = snapshot.members
         await loadCached(scope: scope)
     }
@@ -192,6 +196,7 @@ import SwiftUI
     }
     private func receive(_ event: CloudEvent, scope: CloudScope, generation token: UUID) async throws {
         guard generation == token, let client, let credential, let cache else { throw CancellationError() }
+        let epoch = cacheEpoch
         var changedSession: CloudSession?, changedRequest: CloudRequest?, removed: (String, Int64)?
         if let id = event.payload.sessionId {
             guard UUID(uuidString: id) != nil else { throw CampCloudError.invalidResponse }
@@ -206,7 +211,7 @@ import SwiftUI
             catch CampCloudError.server(404, _) {} // Other members can see task activity, not its private request.
         }
         guard generation == token else { throw CancellationError() }
-        try await cache.ingest(scope: scope, cursor: event.cursor, session: changedSession, request: changedRequest, removed: removed)
+        try await cache.ingest(scope: scope, cursor: event.cursor, session: changedSession, request: changedRequest, removed: removed, expectedEpoch: epoch)
         if let value = changedSession, accepts(value) { sessionIndex[value.id] = value }
         if let value = changedRequest, value.revision >= (requestIndex[value.id]?.revision ?? 0) { requestIndex[value.id] = value; requestChanged?(value) }
         if let (id, revision) = removed, (sessionIndex[id]?.revision ?? 0) <= revision {
@@ -218,13 +223,23 @@ import SwiftUI
             let snapshot = try await client.get(CloudSnapshot.self, path: "/v1/camps/\(scope.campId)/snapshot", token: credential.token)
             guard generation == token else { throw CancellationError() }
             projects = snapshot.projects; members = snapshot.members
-            try await cache.setMetadata("snapshot:" + scope.key, CampWire.encoder().encode(snapshot))
+            try await cache.saveSnapshot(snapshot, scope: scope, expectedEpoch: epoch)
         }
         status = "Connected to Camp"; error = ""; schedulePublish(generation: token)
     }
     private func accepts(_ value: CloudSession) -> Bool {
         guard let old = sessionIndex[value.id] else { return true }
         return value.revision > old.revision || (value.revision == old.revision && value.transcriptRevision >= old.transcriptRevision)
+    }
+    func acceptPublishedSession(_ value: CloudSession, scope expectedScope: CloudScope, epoch: Int64) async {
+        guard let scope, scope == expectedScope, scope.campId == value.campId, let cache else { return }
+        let token = generation
+        do {
+            try await cache.ingest(scope: scope, session: value, expectedEpoch: epoch)
+            guard token == generation else { return }
+            if accepts(value) { sessionIndex[value.id] = value }
+            schedulePublish(generation: token)
+        } catch { self.error = error.localizedDescription }
     }
     private func schedulePublish(generation token: UUID) {
         guard publishTask == nil else { return }
@@ -283,25 +298,26 @@ import SwiftUI
     func queuePrompt(session: CloudSession, text: String, model: String, tuning: ModelTuning) async throws {
         guard let scope, let cache else { throw CampCloudError.cacheUnavailable }
         let body = try CampWire.body(["prompt": text, "model": model, "effort": tuning.effort, "speed": tuning.speed])
-        _ = try await cache.enqueue(scope: scope, method: "POST", path: "/v1/camps/\(scope.campId)/sessions/\(session.id)/requests", body: body)
+        _ = try await cache.enqueue(scope: scope, method: "POST", path: "/v1/camps/\(scope.campId)/sessions/\(session.id)/requests", body: body, expectedEpoch: cacheEpoch)
         pending = try await cache.outbox(scope); flush()
     }
     func queueStage(session: CloudSession, stage: Stage) async throws {
         guard let scope, let cache else { throw CampCloudError.cacheUnavailable }
         let body = try CampWire.body(["stage": stage.rawValue, "expected_revision": session.revision])
-        _ = try await cache.enqueue(scope: scope, method: "PATCH", path: "/v1/camps/\(scope.campId)/sessions/\(session.id)/board", body: body)
+        _ = try await cache.enqueue(scope: scope, method: "PATCH", path: "/v1/camps/\(scope.campId)/sessions/\(session.id)/board", body: body, expectedEpoch: cacheEpoch)
         pending = try await cache.outbox(scope); flush()
     }
     func queueAction(request: CloudRequest, action: String) async {
         guard let scope, let cache, ["approve", "cancel"].contains(action) else { return }
         do {
-            _ = try await cache.enqueue(scope: scope, method: "POST", path: "/v1/camps/\(scope.campId)/requests/\(request.id)/actions", body: CampWire.body(["action": action]))
+            _ = try await cache.enqueue(scope: scope, method: "POST", path: "/v1/camps/\(scope.campId)/requests/\(request.id)/actions", body: CampWire.body(["action": action]), expectedEpoch: cacheEpoch)
             pending = try await cache.outbox(scope); flush()
         } catch { self.error = error.localizedDescription }
     }
     func flush() {
         guard flushTask == nil, let scope, let client, let credential, let cache else { return }
         let token = generation
+        let epoch = cacheEpoch
         flushTask = Task { [weak self] in
             defer { if self?.generation == token { self?.flushTask = nil } }
             do {
@@ -311,11 +327,11 @@ import SwiftUI
                     do {
                         let data = try await client.data(item.method, path: item.path, body: item.body, key: item.id, token: credential.token)
                         if let request = try? CampWire.decoder().decode(CloudRequest.self, from: data) {
-                            try await cache.ingest(scope: scope, request: request)
+                            try await cache.ingest(scope: scope, request: request, expectedEpoch: epoch)
                             if self?.generation == token { self?.requestIndex[request.id] = request; self?.requestChanged?(request) }
                         }
                         if let session = try? CampWire.decoder().decode(CloudSession.self, from: data) {
-                            try await cache.ingest(scope: scope, session: session)
+                            try await cache.ingest(scope: scope, session: session, expectedEpoch: epoch)
                             if self?.generation == token, self?.accepts(session) == true { self?.sessionIndex[session.id] = session }
                         }
                         try await cache.acknowledge(item.id)
@@ -337,9 +353,10 @@ import SwiftUI
     }
     func transcript(session: CloudSession, before: Int64 = 0, revision: Int64 = 0) async throws -> CloudTranscript {
         guard let scope, let client, let credential, let cache else { throw CampCloudError.cacheUnavailable }
+        let epoch = cacheEpoch
         let value = try await client.get(CloudTranscript.self, path: "/v1/camps/\(scope.campId)/sessions/\(session.id)/transcript?limit=120&before=\(before)&revision=\(revision)", token: credential.token)
         guard self.scope == scope, self.credential?.token == credential.token else { throw CancellationError() }
-        try await cache.saveTranscript(value, scope: scope, sessionId: session.id, before: before, expectedPermissionRevision: session.permissionRevision); return value
+        try await cache.saveTranscript(value, scope: scope, sessionId: session.id, before: before, expectedPermissionRevision: session.permissionRevision, expectedEpoch: epoch); return value
     }
     func cachedTranscript(session: CloudSession) async -> [CloudMessage] {
         guard let scope, let cache else { return [] }; return (try? await cache.transcript(scope, sessionId: session.id)) ?? []

@@ -149,17 +149,14 @@ func (s *Store) Session(ctx context.Context, a auth.Actor, campID, id string) (S
 	return s.readSession(ctx, s.pool, a, campID, id)
 }
 
-// Sessions are uploaded only after an explicit initial share. Later unsharing
-// keeps the owner's history but removes it from other members' reads/replay.
+// Native clients publish only explicitly selected sessions. A private initial
+// row can fence a delayed first share after the user withdraws it offline.
 func (s *Store) PublishSession(ctx context.Context, a auth.Actor, campID, requestID string, input SessionInput) (Session, error) {
 	input.Title = strings.TrimSpace(input.Title)
 	if !validID(input.ID) || !validID(input.ProjectID) || !validID(input.ProfileID) || len(input.Title) == 0 || len(input.Title) > 500 || len(input.Model) > 200 || input.ExpectedRevision < 0 || len(input.LocalSessionID) == 0 || len(input.LocalSessionID) > 128 || strings.ContainsAny(input.LocalSessionID, "/\\") {
 		return Session{}, ErrInput
 	}
 	if !oneOf(input.State, "idle", "running", "waiting", "done", "unknown") || !oneOf(input.Stage, "Ready", "In progress", "Needs you", "Done") {
-		return Session{}, ErrInput
-	}
-	if input.ExpectedRevision == 0 && !input.Shared {
 		return Session{}, ErrInput
 	}
 	tx, err := s.pool.Begin(ctx)

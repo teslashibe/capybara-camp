@@ -117,6 +117,14 @@ import SQLite3
             preconditionFailure("late response restored revoked transcript")
         } catch { assertions += 1 }
         try await cache.clear(scope)
+        let nextEpoch = try await cache.epoch(scope)
+        check(nextEpoch == 1, "revocation increments durable cache epoch")
+        do { try await cache.ingest(scope: scope, session: value, expectedEpoch: 0); preconditionFailure("revoked response restored cached session") }
+        catch { assertions += 1 }
+        do { _ = try await cache.enqueue(scope: scope, method: "POST", path: path, body: Data(), expectedEpoch: 0); preconditionFailure("revoked context queued a command") }
+        catch { assertions += 1 }
+        do { try await cache.replaceSessions([value], scope: scope, cursor: 20, expectedEpoch: 0); preconditionFailure("late snapshot restored revoked cache") }
+        catch { assertions += 1 }
         check(try await cache.outbox(scope).isEmpty, "revocation clears queued prompts")
         check(try await cache.attempts(scope).first?.request.prompt == "", "revocation scrubs retained reconciliation attempt")
         let permissions = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("camp-cache.sqlite").path)

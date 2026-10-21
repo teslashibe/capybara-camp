@@ -51,6 +51,7 @@ Use `Authorization: Bearer <device-token>` after sign-in.
 | `GET /v1/camps/{camp}/sessions` | Authorized search with `q`, `limit` and opaque `before` cursor; returns `sessions` and `next` |
 | `PUT /v1/camps/{camp}/sessions/{id}` | Owner-device metadata, explicit sharing and expected revision |
 | `PATCH /v1/camps/{camp}/sessions/{id}/board` | Owner/editor stage change with expected revision; preserves execution ownership |
+| `POST /v1/camps/{camp}/sessions/{id}/ownership` | Same-user, explicit device adoption after active and uncertain work is resolved |
 | `GET /v1/camps/{camp}/sessions/{id}` | Current authorized metadata |
 | `POST /v1/camps/{camp}/sessions/{id}/transcript` | Expected transcript revision and up to 200 changed messages |
 | `GET /v1/camps/{camp}/sessions/{id}/transcript` | Pinned `revision`, `before` ordinal and `limit`; returns a bounded message page |
@@ -88,6 +89,11 @@ messages and roughly 1 MiB of text per page; larger history remains available
 through pagination. A write can contain at most 1 MiB of message text. Conflicting
 metadata or transcript revisions return `409 revision_conflict` for explicit
 reload/rebase. Reads always recheck current access, including old revisions.
+
+A new device login does not inherit execution ownership. The same user may
+explicitly adopt a session using a profile on the new device. Adoption preserves
+its transcript, invalidates old queued requests and increments the permission
+revision. Active, uncertain, or externally controlled sessions cannot move.
 
 The email-code store hashes codes, limits attempts, consumes atomically, and
 throttles resends. The public auth boundary also limits requests by the direct

@@ -37,7 +37,7 @@ struct CampKeychain: CampCredentialStore {
     }
 }
 
-#if CAMP_TESTING
+#if CAMP_TESTING || CAMP_DEVELOPMENT
 final class MemoryCampCredentials: CampCredentialStore, @unchecked Sendable {
     private let lock = NSLock()
     private var values: [String: CloudCredential] = [:]

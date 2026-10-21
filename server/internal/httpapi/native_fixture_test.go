@@ -1,0 +1,91 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http/httptest"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"syscall"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/teslashibe/capybara-camp/server/internal/auth"
+	"github.com/teslashibe/capybara-camp/server/internal/camp"
+	"github.com/teslashibe/capybara-camp/server/internal/testdb"
+)
+
+// This server exists only in the test binary. It exercises the real API and
+// database while routing synthetic sign-in emails to an owner-only directory.
+type fixtureMail struct{ directory string }
+
+func (s fixtureMail) Send(_ context.Context, to, _, body string) error {
+	if to != "owner@example.com" && to != "k@example.com" {
+		return errors.New("only synthetic fixture recipients are permitted")
+	}
+	match := regexp.MustCompile(`<strong>([^<]+)</strong>`).FindStringSubmatch(body)
+	if len(match) != 2 {
+		return errors.New("fixture code was not found")
+	}
+	name := strings.Split(to, "@")[0] + "-code.txt"
+	return os.WriteFile(filepath.Join(s.directory, name), []byte(match[1]), 0600)
+}
+
+func TestNativeFixtureServer(t *testing.T) {
+	directory := os.Getenv("CAMP_NATIVE_FIXTURE_DIR")
+	if directory == "" {
+		t.Skip("interactive native fixture not requested")
+	}
+	if !filepath.IsAbs(directory) {
+		t.Fatal("fixture directory must be absolute")
+	}
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	pool := testdb.Open(t)
+	ctx := context.Background()
+	store := camp.New(pool, "synthetic-native-fixture-receipt-key")
+	actors := []auth.Actor{
+		{UserID: uuid.NewString(), DeviceID: uuid.NewString(), Email: "owner@example.com", Name: "Camp owner"},
+		{UserID: uuid.NewString(), DeviceID: uuid.NewString(), Email: "k@example.com", Name: "K"},
+	}
+	for _, actor := range actors {
+		if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,display_name) VALUES($1,$2,$3)`, actor.UserID, actor.Email, actor.Name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, err := store.Create(ctx, actors[0], uuid.NewString(), "Demo Camp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := store.CreateProject(ctx, actors[0], c.ID, uuid.NewString(), "Demo project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	invite, err := store.Invite(ctx, actors[0], c.ID, uuid.NewString(), actors[1].Email, "editor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Accept(ctx, actors[1], uuid.NewString(), invite.Token); err != nil {
+		t.Fatal(err)
+	}
+	api := &API{Pool: pool, Auth: auth.New(pool, strings.Repeat("fixture", 8), "https://fixture.example", fixtureMail{directory}), Camps: store, Origin: "https://fixture.example"}
+	server := httptest.NewServer(api.Handler())
+	defer server.Close()
+	data, err := json.Marshal(map[string]any{"url": server.URL, "camp_id": c.ID, "project_id": project.ID, "pid": os.Getpid(), "owner": actors[0].Email, "teammate": actors[1].Email})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "fixture.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Log("Native fixture API ready on loopback")
+	stopped := make(chan os.Signal, 1)
+	signal.Notify(stopped, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(stopped)
+	<-stopped
+}
