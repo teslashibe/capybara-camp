@@ -6,7 +6,7 @@ Your Camp for big ideas
 
 A small native Mac app for your local Codex and Claude Code sessions. Find a conversation, put it on a Kanban board, and pick it up in chat.
 
-[Get started](https://teslashibe.github.io/capybara-camp/) · [Download v0.0.1](https://github.com/teslashibe/capybara-camp/releases/tag/v0.0.1) · [Release notes](releases/v0.0.1.md)
+[Get started](https://capybaracamp.com/) · [Download v0.0.1](https://github.com/teslashibe/capybara-camp/releases/tag/v0.0.1) · [Release notes](releases/v0.0.1.md)
 
 ## What works
 
