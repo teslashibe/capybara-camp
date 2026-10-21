@@ -483,9 +483,10 @@ final class TranscriptWatch {
         } catch { runningID = nil; process = nil; controlInput = nil; Bridge.activeProcess = nil; draft = prompt; banner = error.localizedDescription; queuePaused = true; markUncertainQueue(); return }
         var input = (try? JSONSerialization.data(withJSONObject: ["session": object(s), "prompt": prompt, "model": model, "effort": tuning.effort, "speed": tuning.speed])) ?? Data()
         input.append(10)
+        let payload = input
         Task.detached { [weak self] in
             let errors = Task.detached { err.fileHandleForReading.readDataToEndOfFile() }
-            let writer = Task.detached { try? stdin.fileHandleForWriting.write(contentsOf: input) }
+            let writer = Task.detached { try? stdin.fileHandleForWriting.write(contentsOf: payload) }
             var buffer = Data()
             var terminal = false
             while let chunk = try? out.fileHandleForReading.read(upToCount: 4096), !chunk.isEmpty {
