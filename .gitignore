@@ -1,0 +1,16 @@
+/build/
+/dist/
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+.env.*
+*.log
+*.key
+*.pem
+*.p12
+*.pfx
+auth.json
+.credentials.json
+.codex*/
+.claude*/
