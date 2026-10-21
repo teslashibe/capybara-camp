@@ -1,0 +1,188 @@
+import Foundation
+import Darwin
+
+private func conversationChunk(_ handle: FileHandle, limit: Int) throws -> Data {
+    var buffer = [UInt8](repeating: 0, count: limit)
+    while true {
+        let count = Darwin.read(handle.fileDescriptor, &buffer, buffer.count)
+        if count >= 0 { return Data(buffer.prefix(count)) }
+        if errno != EINTR { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    }
+}
+
+struct ConversationResult: Sendable {
+    let state: String
+    let message: String
+    let accepted: Bool
+}
+
+// A single official CLI conversation. Its state is independent of the visible
+// chat, and pipe reads apply backpressure instead of queueing unbounded UI work.
+@MainActor final class LocalConversation {
+    let id = UUID()
+    let session: CampSession
+    let queueID: String?
+    private(set) var messages: [Message]
+    private(set) var text = ""
+    private(set) var ready = false
+    private(set) var steering = false
+    private(set) var accepted = false
+    private(set) var notice = ""
+    private(set) var pendingSteer: (id: String, text: String)?
+    var changed: (() -> Void)?
+    var completed: ((ConversationResult) -> Void)?
+    var didAccept: (() -> Void)?
+    private var process: Process?
+    private var input: ConversationInput?
+    private var pendingText: String?
+    private var flushTask: Task<Void, Never>?
+    private var stopTask: Task<Void, Never>?
+    private var terminal: String?
+    private var stopped = false
+    private var finished = false
+    static let lineLimit = 4 * 1024 * 1024
+
+    init(session: CampSession, history: [Message], prompt: String, queueID: String? = nil) {
+        self.session = session; self.queueID = queueID
+        messages = history + [Message(id: UUID().uuidString, role: "user", text: prompt)]
+    }
+
+    func start(prompt: String, model: String, tuning: ModelTuning,
+               makeProcess: () throws -> Process = { try Bridge.process("conversation") }) throws {
+        guard process == nil, !finished, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              prompt.utf8.count <= 65536 else { throw CampError.message("Write a prompt under 64 KB") }
+        let p = try makeProcess(), out = Pipe(), err = Pipe(), stdin = Pipe()
+        var payload = try JSONSerialization.data(withJSONObject: ["session": try JSONSerialization.jsonObject(with: JSONEncoder().encode(session)), "prompt": prompt, "model": model, "effort": tuning.effort, "speed": tuning.speed])
+        payload.append(10)
+        p.standardOutput = out; p.standardError = err; p.standardInput = stdin
+        let writer = ConversationInput(stdin.fileHandleForWriting)
+        try p.run()
+        process = p; input = writer; Bridge.activeProcesses[id] = p
+        let limit = Self.lineLimit
+        Task.detached { [weak self] in
+            let diagnostics = Task.detached { () -> Data in
+                var tail = Data()
+                while let chunk = try? conversationChunk(err.fileHandleForReading, limit: 4096), !chunk.isEmpty {
+                    tail.append(chunk)
+                    if tail.count > 32768 { tail = Data(tail.suffix(32768)) }
+                }
+                try? err.fileHandleForReading.close(); return tail
+            }
+            let initial = payload
+            let writeTask = Task.detached { () -> Bool in
+                do { try writer.write(initial); return true } catch { return false }
+            }
+            var buffer = Data(), protocolError = ""
+            do {
+                while case let chunk = try conversationChunk(out.fileHandleForReading, limit: 16384), !chunk.isEmpty {
+                    buffer.append(chunk)
+                    while let end = buffer.firstIndex(of: 10) {
+                        guard end <= limit else { throw CampError.message("The CLI response exceeded the event size limit") }
+                        let line = Data(buffer[..<end]); buffer.removeSubrange(...end)
+                        if line.isEmpty { continue }
+                        guard let value = try JSONSerialization.jsonObject(with: line) as? [String: Any], let type = value["type"] as? String else {
+                            throw CampError.message("The local CLI returned an unreadable event")
+                        }
+                        await self?.receive(type, text: value["text"] as? String ?? value["message"] as? String ?? "", requestID: value["requestID"] as? String)
+                    }
+                    guard buffer.count <= limit else { throw CampError.message("The CLI response exceeded the event size limit") }
+                }
+                if !buffer.isEmpty { throw CampError.message("The CLI closed during an event") }
+            } catch { protocolError = error.localizedDescription; p.terminate() }
+            p.waitUntilExit()
+            writer.close(); try? out.fileHandleForReading.close()
+            let wrote = await writeTask.value, errors = await diagnostics.value
+            await self?.finish(code: p.terminationStatus, error: protocolError.isEmpty ? (wrote ? String(data: errors.suffix(4000), encoding: .utf8) ?? "" : "The prompt could not be written to the CLI") : protocolError)
+        }
+    }
+
+    private func receive(_ type: String, text value: String, requestID: String?) {
+        guard !finished else { return }
+        switch type {
+        case "started": accepted = true; ready = true; didAccept?()
+        case "text":
+            pendingText = value
+            if flushTask == nil {
+                flushTask = Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(40))
+                    guard !Task.isCancelled else { return }; self?.flush()
+                }
+            }
+            return
+        case "boundary": finishMessage()
+        case "steerAccepted" where pendingSteer?.id == requestID:
+            if let pendingSteer { messages.append(Message(id: pendingSteer.id, role: "user", text: pendingSteer.text)) }
+            pendingSteer = nil; steering = false
+        case "steerRejected" where pendingSteer?.id == requestID: steering = false; notice = value
+        case "done": terminal = "completed"
+        case "cancelled": terminal = "cancelled"; notice = value
+        case "error": terminal = "failed"; notice = value
+        case "notice": notice = value
+        default: return
+        }
+        changed?()
+    }
+    private func flush() {
+        flushTask?.cancel(); flushTask = nil
+        if let pendingText { text = pendingText; self.pendingText = nil; changed?() }
+    }
+    private func finishMessage() {
+        flush()
+        if !text.isEmpty { messages.append(Message(id: UUID().uuidString, role: "assistant", text: text)) }
+        text = ""
+    }
+    private func finish(code: Int32, error: String) {
+        guard !finished else { return }; finished = true
+        stopTask?.cancel(); stopTask = nil
+        finishMessage(); ready = false; steering = false
+        input?.close(); input = nil; process = nil; Bridge.activeProcesses.removeValue(forKey: id)
+        let state: String
+        if terminal == "completed", code == 0 { state = "completed" }
+        else if terminal == "cancelled" { state = "cancelled" }
+        else if terminal == "failed" { state = "failed" }
+        else { state = "uncertain" }
+        let message = notice.isEmpty && state != "completed" ? (error.isEmpty ? "The CLI stopped before confirming the result. Check the transcript before retrying." : error) : notice
+        completed?(ConversationResult(state: state, message: message, accepted: accepted))
+        changed = nil; completed = nil; didAccept = nil
+    }
+    func stop() {
+        guard !finished, !stopped else { return }; stopped = true
+        let writer = input
+        Task.detached { try? writer?.write(Data("{\"type\":\"stop\"}\n".utf8)) }
+        // The bridge owns and reaps its provider process group on SIGTERM too.
+        stopTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled, let self, self.process?.isRunning == true else { return }
+            self.process?.terminate()
+        }
+    }
+    func steer(_ value: String) throws {
+        guard ready, !steering, pendingSteer == nil, !stopped, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, value.utf8.count <= 65536, let input else {
+            throw CampError.message("Wait for the active turn before steering")
+        }
+        let id = UUID().uuidString
+        var data = try JSONSerialization.data(withJSONObject: ["type": "steer", "id": id, "text": value]); data.append(10)
+        pendingSteer = (id, value); steering = true; changed?()
+        let payload = data
+        Task.detached { [weak self] in
+            do { try input.write(payload) }
+            catch { await self?.receive("steerRejected", text: "The steering message could not be delivered. Check the transcript before retrying.", requestID: id) }
+        }
+    }
+    func takePendingSteer() -> String? {
+        defer { pendingSteer = nil }
+        return pendingSteer?.text
+    }
+}
+
+private final class ConversationInput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handle: FileHandle?
+    init(_ handle: FileHandle) { self.handle = handle }
+    func write(_ data: Data) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard let handle else { throw CampError.message("The CLI input is closed") }
+        try handle.write(contentsOf: data)
+    }
+    func close() { lock.lock(); defer { lock.unlock() }; try? handle?.close(); handle = nil }
+}

@@ -96,7 +96,7 @@ extension Color {
 }
 
 enum Bridge {
-    static var activeProcess: Process?
+    static var activeProcesses: [UUID: Process] = [:]
     static let support: URL = {
         if let path = ProcessInfo.processInfo.environment["CAPY_SUPPORT"], path.hasPrefix("/") { return URL(fileURLWithPath: path) }
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Capybara Camp")
@@ -209,12 +209,17 @@ final class TranscriptWatch {
     @Published var messages: [Message] = []
     @Published var historyTotal = 0
     @Published var draft = ""
-    @Published var liveText = ""
-    @Published var runningID: String? { didSet { filterRevision += 1 } }
+    @Published var conversations: [String: LocalConversation] = [:]
+    var liveText: String { selected.flatMap { conversation($0)?.text } ?? "" }
+    var runningID: String? { selected.flatMap { conversation($0) == nil ? nil : $0.id } }
     @Published var queuedPrompts: [QueuedPrompt] = []
-    @Published var queuePaused = true
-    @Published var readyToSteer = false
-    @Published var steering = false
+    @Published private var enabledQueues: Set<String> = []
+    var queuePaused: Bool {
+        get { selectedID.map { !enabledQueues.contains($0) } ?? true }
+        set { guard let selectedID else { return }; pauseQueue(selectedID, newValue) }
+    }
+    var readyToSteer: Bool { selected.flatMap { conversation($0)?.ready } ?? false }
+    var steering: Bool { selected.flatMap { conversation($0)?.steering } ?? false }
     @Published var banner = ""
     @Published var sourceSheet = false
     @Published var activity: [String: LiveState] = [:] { didSet { filterRevision += 1 } }
@@ -233,13 +238,6 @@ final class TranscriptWatch {
     private var historyRequestID: String?
     private let transcriptWatch = TranscriptWatch()
     private var historyDirty = false
-    private var process: Process?
-    private var controlInput: FileHandle?
-    private var pendingSteer: (id: String, text: String)?
-    private var activeQueueID: String?
-    private var runSucceeded = false
-    private var pendingLiveText: String?
-    private var liveFlushTask: Task<Void, Never>?
     private var historyLimit = 120
     private var readGeneration = UUID()
     private var drafts: [String: String] = [:]
@@ -252,6 +250,7 @@ final class TranscriptWatch {
     private var cachedRecentType = ""
     private var cachedRecent: [CampSession] = []
     private let stateDirectory: URL
+    private let conversationProcess: () throws -> Process
     private let decoder = JSONDecoder()
     var selected: CampSession? { sessions.first { $0.id == selectedID } }
     var visibleSessions: [CampSession] {
@@ -269,8 +268,9 @@ final class TranscriptWatch {
         cachedFilterRevision = filterRevision; cachedFilterSearch = search; cachedFilterSource = sourceFilter
         return cachedFiltered
     }
-    init(stateDirectory: URL = Bridge.support) {
+    init(stateDirectory: URL = Bridge.support, conversationProcess: @escaping () throws -> Process = { try Bridge.process("conversation") }) {
         self.stateDirectory = stateDirectory
+        self.conversationProcess = conversationProcess
         #if CAMP_DEVELOPMENT
         cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"), vault: ProcessInfo.processInfo.environment["CAMP_DEV_EPHEMERAL_CREDENTIALS"] == "1" ? MemoryCampCredentials() : CampKeychain(), allowLoopback: true)
         #elseif CAMP_TESTING
@@ -288,14 +288,14 @@ final class TranscriptWatch {
         if let data = try? Data(contentsOf: stateDirectory.appendingPathComponent("board.json")), let saved = try? decoder.decode([String: Stage].self, from: data) { stages = saved }
         if let data = try? Data(contentsOf: stateDirectory.appendingPathComponent("recent-filter.json")), let saved = try? decoder.decode(String.self, from: data), ["All types", "Planning", "Codex", "Claude"].contains(saved) { recentType = saved }
         if let data = try? Data(contentsOf: stateDirectory.appendingPathComponent("queued-prompts.json")), let saved = try? decoder.decode([QueuedPrompt].self, from: data) {
-            queuedPrompts = saved.map { item in var item = item; if item.state == "sending" { item.state = "needsReview" }; return item }
+            queuedPrompts = saved.map { item in var item = item; if ["sending", "running"].contains(item.state) { item.state = "needsReview" }; return item }
             saveQueue()
         }
         sharing.localSession = { [weak self] id in self?.sessions.first { $0.id == id && !$0.isCloud } }
         sharing.localStatus = { [weak self] local in
             guard let self else { return LocalShareStatus(model: local.model, state: "unknown", stage: "Ready", externalOwner: false) }
             let live = self.activity[local.id]
-            return LocalShareStatus(model: self.effectiveModel(local), state: self.runningID == local.id ? "running" : live?.state ?? "idle", stage: self.stage(local).rawValue, externalOwner: live != nil)
+            return LocalShareStatus(model: self.effectiveModel(local), state: self.conversations[local.id] != nil ? "running" : live?.state ?? "idle", stage: self.stage(local).rawValue, externalOwner: live != nil)
         }
         sharing.changed = { [weak self] in self?.filterRevision += 1; self?.objectWillChange.send() }
         sharing.published = { [weak cloud] value, scope, epoch in await cloud?.acceptPublishedSession(value, scope: scope, epoch: epoch) }
@@ -334,17 +334,20 @@ final class TranscriptWatch {
         sessions = (sessions.filter { !$0.isCloud } + imported).sorted { $0.updated > $1.updated }
         if let selectedID, let binding = sharing.shares.first(where: { "camp:" + $0.id == selectedID && !$0.shared }),
            let remote = cloudSessions[selectedID], !remote.shared, sessions.contains(where: { $0.id == binding.local.id }) {
-            self.selectedID = binding.local.id; messages = []; readGeneration = UUID(); loadHistory()
+            self.selectedID = binding.local.id; readGeneration = UUID()
+            if let run = conversations[binding.local.id] { messages = run.messages; banner = run.notice }
+            else { messages = []; loadHistory() }
         }
         if let selectedID, selectedID.hasPrefix("camp:"), cloudSessions[selectedID] == nil {
             self.selectedID = nil; messages = []; cloudHistory = [:]; readGeneration = UUID()
         }
     }
     func isBusy(_ s: CampSession) -> Bool {
+        if conversation(s) != nil { return true }
         if let remote = cloudSessions[s.id] {
             return remote.state == "running" || cloud.requests.contains { $0.sessionId == remote.id && ["claimed", "started", "cancel_requested"].contains($0.state) }
         }
-        return runningID == s.id || activity[s.id]?.state == "running"
+        return conversation(s) != nil || activity[s.id]?.state == "running"
     }
     func stage(_ session: CampSession) -> Stage {
         if isBusy(session) { return .progress }
@@ -353,7 +356,7 @@ final class TranscriptWatch {
     }
     func modelLabel(_ s: CampSession) -> String { modelChoices[s.id] ?? (s.model.isEmpty ? "Session default" : s.model) }
     func selectModel(_ s: CampSession, _ model: String) {
-        guard runningID != s.id else { return }
+        guard conversation(s) == nil else { return }
         modelChoices[s.id] = model.isEmpty ? nil : model
         do {
             let url = stateDirectory.appendingPathComponent("models.json")
@@ -373,7 +376,7 @@ final class TranscriptWatch {
     func shareSource(_ s: CampSession) -> CampSession? { s.isCloud ? sharing.native(for: s.id) : s }
     func tuning(_ s: CampSession) -> ModelTuning { modelTuning[s.id]?[effectiveModel(s)] ?? ModelTuning() }
     func tune(_ s: CampSession, effort: String? = nil, speed: String? = nil) {
-        guard runningID != s.id else { return }
+        guard conversation(s) == nil else { return }
         let caps = capabilities(s)
         if let effort, !effort.isEmpty, !caps.efforts.contains(effort) { return }
         if let speed, !caps.speeds.contains(speed) { return }
@@ -437,7 +440,7 @@ final class TranscriptWatch {
     func applyActivity(_ result: ActivityResult) {
         var next = Dictionary(result.activity.map { ($0.id, $0) }, uniquingKeysWith: { first, second in second.state == "running" ? second : first })
         for (id, var old) in activity where result.errors[old.sourceID] != nil { old.state = "unknown"; next[id] = old }
-        if let runningID { next.removeValue(forKey: runningID) }
+        for id in conversations.keys { next.removeValue(forKey: id) }
         let previousActivity = activity
         if activity != next { activity = next }
         for (id, previous) in previousActivity where previous.state == "running" && next[id]?.state == "idle" { move(id, .attention) }
@@ -484,7 +487,7 @@ final class TranscriptWatch {
         let importedIDs = Set(result.sessions.map(\.id))
         // A temporary read failure must not remove chats or interrupt the open one.
         let retained = sessions.filter { !$0.isCloud && !importedIDs.contains($0.id) &&
-            (failedRoots.contains($0.root) || $0.id == selectedID || $0.id == runningID) }
+            (failedRoots.contains($0.root) || $0.id == selectedID || conversations[$0.id] != nil) }
         let updated = (result.sessions + retained + sessions.filter(\.isCloud)).sorted { $0.updated > $1.updated }
         let indexChanged = sessions != updated || sources != result.sources
         if sessions != updated { sessions = updated }
@@ -529,13 +532,14 @@ final class TranscriptWatch {
         }
     }
     func open(_ session: CampSession) {
-        guard runningID == nil || runningID == session.id else { banner = "Stop or finish the current reply before opening another chat"; return }
         if selectedID != session.id {
             if let previous = selectedID { drafts[previous] = draft }
             draft = drafts[session.id] ?? ""
             messages = []; historyTotal = 0; historyLimit = 120; banner = ""
         }
-        selectedID = session.id; children = activity[session.id]?.children ?? []; view = "Chat"; observeHistory(); loadHistory()
+        selectedID = session.id; children = activity[session.id]?.children ?? []; view = "Chat"
+        if let run = conversation(session) { messages = run.messages; banner = run.notice }
+        observeHistory(); loadHistory()
     }
     func applyHistory(_ result: Transcript, sessionID: String) {
         guard selectedID == sessionID, runningID == nil else { return }
@@ -590,7 +594,7 @@ final class TranscriptWatch {
     }
     func object(_ s: CampSession) -> [String: Any] { (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(s))) as? [String: Any] ?? [:] }
     func send() {
-        guard let s = selected, runningID == nil, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard let s = selected, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         if let remote = cloudSessions[s.id] {
             let text = draft, model = modelChoices[s.id] ?? remote.model, choice = tuning(s)
             Task {
@@ -599,147 +603,121 @@ final class TranscriptWatch {
             }
             return
         }
+        guard conversation(s) == nil else { return }
         guard activity[s.id] == nil else { banner = "This session is open in \(s.provider). Close it there before sending from Camp."; return }
         let prompt = draft
         draft = ""
         start(s, prompt: prompt, model: modelChoices[s.id] ?? "", tuning: tuning(s))
     }
-    func start(_ s: CampSession, prompt: String, model: String, tuning: ModelTuning, queuedID: String? = nil) {
-        guard !s.isCloud else { banner = "Shared work must run on its owning Mac"; return }
-        let p: Process
-        do { p = try Bridge.process("conversation") } catch { draft = prompt; banner = error.localizedDescription; queuePaused = true; return }
-        drafts[s.id] = nil; liveText = ""; banner = ""; runningID = s.id
-        readyToSteer = false; runSucceeded = false; activeQueueID = queuedID
-        readGeneration = UUID(); loading = false; historyRequestID = nil; historyDirty = false
-        messages.append(Message(id: UUID().uuidString, role: "user", text: prompt))
-        let out = Pipe(), err = Pipe(), stdin = Pipe()
-        p.standardOutput = out; p.standardError = err; p.standardInput = stdin
-        process = p
-        Bridge.activeProcess = p
-        controlInput = stdin.fileHandleForWriting
+    func conversation(_ session: CampSession) -> LocalConversation? {
+        if session.isCloud, let binding = sharing.shares.first(where: { "camp:" + $0.id == session.id }) { return conversations[binding.local.id] }
+        return conversations[session.id]
+    }
+    private func pauseQueue(_ id: String, _ pause: Bool) {
+        if pause { enabledQueues.remove(id) } else { enabledQueues.insert(id) }
+    }
+    @discardableResult
+    func start(_ s: CampSession, prompt: String, model: String, tuning: ModelTuning, queuedID: String? = nil,
+               history: [Message]? = nil, completion: ((ConversationResult) -> Void)? = nil) -> Bool {
+        guard !s.isCloud, conversations[s.id] == nil else { banner = "This session already has a running turn"; return false }
+        guard conversations.count < 4, !conversations.values.contains(where: { $0.session.provider == s.provider && $0.session.root == s.root }) else {
+            banner = "This profile is busy. Queue the prompt or wait for its current turn"; return false
+        }
+        guard activity[s.id] == nil else { banner = "Close this session in \(s.provider) before sending from Camp"; return false }
+        let run = LocalConversation(session: s, history: history ?? (selectedID == s.id ? messages : []), prompt: prompt, queueID: queuedID)
+        run.changed = { [weak self, weak run] in
+            guard let self, let run, self.conversations[s.id]?.id == run.id else { return }
+            if !run.steering, let restored = run.takePendingSteer() { self.restoreDraft(restored, for: s.id) }
+            if self.view == "Chat", let selected = self.selected, self.conversation(selected)?.id == run.id {
+                if self.messages != run.messages { self.messages = run.messages }
+                if self.banner != run.notice { self.banner = run.notice }
+                self.objectWillChange.send()
+            }
+        }
+        run.didAccept = { [weak self] in
+            guard let self, let queuedID else { return }
+            if let index = self.queuedPrompts.firstIndex(where: { $0.id == queuedID }) {
+                self.queuedPrompts[index].state = "running"; self.saveQueue()
+            }
+        }
+        run.completed = { [weak self, weak run] result in
+            guard let self, let run, self.conversations[s.id]?.id == run.id else { return }
+            if let restored = run.takePendingSteer() { self.restoreDraft(restored, for: s.id) }
+            let visible = self.selected.map { self.conversation($0)?.id == run.id } ?? false
+            if visible { self.messages = run.messages; self.banner = result.message }
+            self.conversations.removeValue(forKey: s.id); self.filterRevision += 1
+            if result.state != "completed" { self.pauseQueue(s.id, true); self.markUncertainQueue(queuedID) }
+            else if let queuedID { self.queuedPrompts.removeAll { $0.id == queuedID }; self.saveQueue() }
+            self.move(s.id, .attention)
+            if visible { self.loadHistory() }
+            completion?(result)
+            self.sharing.localChanged()
+            if result.state == "completed" { self.runNextQueued(sessionID: s.id, history: Array(run.messages.suffix(240))) }
+        }
         do {
-            try p.run()
-        } catch { runningID = nil; process = nil; controlInput = nil; Bridge.activeProcess = nil; draft = prompt; banner = error.localizedDescription; queuePaused = true; markUncertainQueue(); return }
-        var input = (try? JSONSerialization.data(withJSONObject: ["session": object(s), "prompt": prompt, "model": model, "effort": tuning.effort, "speed": tuning.speed])) ?? Data()
-        input.append(10)
-        let payload = input
-        Task.detached { [weak self] in
-            let errors = Task.detached { err.fileHandleForReading.readDataToEndOfFile() }
-            let writer = Task.detached { try? stdin.fileHandleForWriting.write(contentsOf: payload) }
-            var buffer = Data()
-            var terminal = false
-            while let chunk = try? out.fileHandleForReading.read(upToCount: 4096), !chunk.isEmpty {
-                buffer.append(chunk)
-                while let end = buffer.firstIndex(of: 10) {
-                    let line = Data(buffer[..<end]); buffer.removeSubrange(...end)
-                    if let event = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] {
-                        let type = event["type"] as? String ?? ""
-                        if ["done", "error", "cancelled"].contains(type) { terminal = true }
-                        let text = event["text"] as? String ?? event["message"] as? String ?? ""
-                        await self?.receive(type, text: text, session: s, requestID: event["requestID"] as? String)
-                    }
-                }
-            }
-            p.waitUntilExit()
-            _ = await writer.value
-            let errorData = await errors.value
-            await self?.finished(s, code: p.terminationStatus, completed: terminal, diagnostics: String(data: errorData.suffix(4000), encoding: .utf8) ?? "")
+            try run.start(prompt: prompt, model: model, tuning: tuning, makeProcess: conversationProcess)
+            conversations[s.id] = run; drafts[s.id] = nil; filterRevision += 1
+            sharing.localChanged()
+            if selectedID == s.id { readGeneration = UUID(); loading = false; historyRequestID = nil; historyDirty = false; messages = run.messages; banner = "" }
+            return true
+        } catch {
+            pauseQueue(s.id, true)
+            if selectedID == s.id { draft = prompt; banner = error.localizedDescription } else { drafts[s.id] = prompt }
+            return false
         }
     }
-    func receive(_ type: String, text: String, session: CampSession, requestID: String? = nil) {
-        if type == "started" {
-            readyToSteer = true
-            if let activeQueueID { queuedPrompts.removeAll { $0.id == activeQueueID }; saveQueue() }
-        }
-        if type == "text" {
-            pendingLiveText = text
-            if liveFlushTask == nil {
-                liveFlushTask = Task { [weak self] in
-                    try? await Task.sleep(for: .milliseconds(150))
-                    guard !Task.isCancelled else { return }
-                    self?.flushLiveText()
-                }
-            }
-        }
-        if type == "boundary" { finishLiveMessage() }
-        if type == "steerAccepted", let pending = pendingSteer, pending.id == requestID {
-            messages.append(Message(id: pending.id, role: "user", text: pending.text))
-            pendingSteer = nil; steering = false
-        }
-        if type == "steerRejected", pendingSteer?.id == requestID { restoreSteer(); banner = text }
-        if type == "done" { runSucceeded = true }
-        if type == "notice" { banner = text }
-        if type == "error" || type == "cancelled" { banner = text; stages[session.id] = .attention }
+    func stop() {
+        guard let s = selected, let run = conversation(s) else { return }
+        pauseQueue(run.session.id, true); run.stop()
     }
-    func finishLiveMessage() {
-        flushLiveText()
-        if !liveText.isEmpty { messages.append(Message(id: UUID().uuidString, role: "assistant", text: liveText)) }
-        liveText = ""
-    }
-    func flushLiveText() {
-        liveFlushTask?.cancel(); liveFlushTask = nil
-        if let pendingLiveText { liveText = pendingLiveText; self.pendingLiveText = nil }
-    }
-    func finished(_ session: CampSession, code: Int32, completed: Bool, diagnostics: String) {
-        finishLiveMessage(); restoreSteer()
-        runningID = nil; process = nil; readyToSteer = false; controlInput = nil; Bridge.activeProcess = nil
-        if (code != 0 || !completed) && banner.isEmpty { banner = diagnostics.isEmpty ? "The local CLI exited before finishing. Refresh history before retrying." : diagnostics }
-        if code != 0 || !runSucceeded { queuePaused = true; markUncertainQueue() }
-        activeQueueID = nil
-        move(session.id, .attention)
-        loadHistory()
-        if code == 0 && runSucceeded { runNextQueued() }
-    }
-    func stop() { queuePaused = true; if let process, process.isRunning { process.terminate() } }
     func steerDraft() {
-        guard let s = selected, runningID == s.id, readyToSteer, !steering, let input = controlInput, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        let pending = (id: UUID().uuidString, text: draft)
-        do {
-            var data = try JSONSerialization.data(withJSONObject: ["type": "steer", "id": pending.id, "text": pending.text])
-            data.append(10)
-            try input.write(contentsOf: data)
-            pendingSteer = pending; steering = true; draft = ""
-        } catch { banner = "Could not send steering: " + error.localizedDescription }
+        guard let s = selected, let run = conversation(s), !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        do { try run.steer(draft); draft = "" } catch { banner = error.localizedDescription }
     }
-    func restoreSteer() {
-        if let pending = pendingSteer { draft = draft.isEmpty ? pending.text : pending.text + "\n\n" + draft }
-        pendingSteer = nil; steering = false
+    private func restoreDraft(_ value: String, for id: String) {
+        if selectedID == id { draft = draft.isEmpty ? value : value + "\n\n" + draft }
+        else { let previous = drafts[id] ?? ""; drafts[id] = previous.isEmpty ? value : value + "\n\n" + previous }
     }
     func enqueueDraft() {
         guard let s = selected, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if s.isCloud { send(); return }
         let choice = tuning(s)
         queuedPrompts.append(QueuedPrompt(id: UUID().uuidString, sessionID: s.id, text: draft, model: modelChoices[s.id] ?? "", effort: choice.effort, speed: choice.speed))
         draft = ""; queuePaused = runningID != s.id
         saveQueue()
     }
-    func queued(_ s: CampSession) -> [QueuedPrompt] { queuedPrompts.filter { $0.sessionID == s.id } }
-    func saveQueue() {
+    func queued(_ s: CampSession) -> [QueuedPrompt] { queuedPrompts.filter { $0.sessionID == s.id && $0.state != "running" } }
+    @discardableResult
+    func saveQueue() -> Bool {
         do {
             let url = stateDirectory.appendingPathComponent("queued-prompts.json")
             try JSONEncoder().encode(queuedPrompts).write(to: url, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        } catch { queuePaused = true; banner = "Could not save the prompt queue: " + error.localizedDescription }
+            return true
+        } catch { enabledQueues.removeAll(); banner = "Could not save the prompt queue: " + error.localizedDescription; return false }
     }
-    func markUncertainQueue() {
+    func markUncertainQueue(_ activeQueueID: String?) {
         if let activeQueueID, let index = queuedPrompts.firstIndex(where: { $0.id == activeQueueID }) { queuedPrompts[index].state = "needsReview"; saveQueue() }
     }
     func editQueued(_ item: QueuedPrompt) {
-        guard item.state != "sending" else { return }
+        guard !["sending", "running"].contains(item.state) else { return }
         draft = draft.isEmpty ? item.text : draft + "\n\n" + item.text
         queuedPrompts.removeAll { $0.id == item.id }; saveQueue()
     }
     func removeQueued(_ item: QueuedPrompt) {
-        guard item.state != "sending" else { return }
+        guard !["sending", "running"].contains(item.state) else { return }
         queuedPrompts.removeAll { $0.id == item.id }; saveQueue()
     }
     func resumeQueue() { queuePaused = false; runNextQueued() }
-    func runNextQueued() {
-        guard !queuePaused, runningID == nil, let s = selected, let item = queued(s).first else { return }
-        guard item.state == "waiting" else { queuePaused = true; banner = "Check the transcript before editing and resubmitting the unconfirmed prompt"; return }
-        guard activity[s.id] == nil else { queuePaused = true; banner = "Close this session in \(s.provider) before resuming its Camp queue"; return }
-        if let index = queuedPrompts.firstIndex(where: { $0.id == item.id }) { queuedPrompts[index].state = "sending"; saveQueue() }
-        guard !queuePaused else { return }
-        start(s, prompt: item.text, model: item.model, tuning: ModelTuning(effort: item.effort, speed: item.speed), queuedID: item.id)
+    func runNextQueued(sessionID: String? = nil, history: [Message]? = nil) {
+        guard let id = sessionID ?? selectedID, enabledQueues.contains(id), let s = sessions.first(where: { $0.id == id }), conversation(s) == nil, let item = queued(s).first else { return }
+        guard item.state == "waiting" else { pauseQueue(s.id, true); banner = "Check the transcript before editing and resubmitting the unconfirmed prompt"; return }
+        guard activity[s.id] == nil else { pauseQueue(s.id, true); banner = "Close this session in \(s.provider) before resuming its Camp queue"; return }
+        if let index = queuedPrompts.firstIndex(where: { $0.id == item.id }) { queuedPrompts[index].state = "sending"; guard saveQueue() else { return } }
+        guard enabledQueues.contains(s.id) else { return }
+        if !start(s, prompt: item.text, model: item.model, tuning: ModelTuning(effort: item.effort, speed: item.speed), queuedID: item.id, history: history), let index = queuedPrompts.firstIndex(where: { $0.id == item.id }) {
+            queuedPrompts[index].state = "waiting"; pauseQueue(s.id, true); saveQueue()
+        }
     }
     func addSource() {
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.showsHiddenFiles = true
@@ -1005,7 +983,7 @@ struct ChatView: View {
                         .onReceive(store.$messages) { new in
                             DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo("bottom", anchor: .bottom) } }
                         }
-                        .onReceive(store.$liveText) { _ in
+                        .onChange(of: store.liveText) { _, _ in
                             DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo("bottom", anchor: .bottom) } }
                         }
                         .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
@@ -1125,7 +1103,7 @@ struct ModelMenu: View {
             HStack(spacing: 6) { ProviderMark(provider: session.provider, size: 14); Text(store.modelLabel(session)).font(.system(size: 10)).lineLimit(1) }
         }
         .menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true)
-        .disabled(store.runningID == session.id).accessibilityLabel("Model settings for \(session.title)")
+        .disabled(store.conversation(session) != nil).accessibilityLabel("Model settings for \(session.title)")
         .accessibilityValue("\(store.modelLabel(session)), \(effortTitle) effort, \(Self.speedName(choice.speed)) speed")
     }
     @ViewBuilder func row(_ title: String, checked: Bool) -> some View {
@@ -1157,7 +1135,7 @@ struct SourcesView: View {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ notification: Notification) {
-        if let process = Bridge.activeProcess, process.isRunning { process.terminate() }
+        for process in Bridge.activeProcesses.values where process.isRunning { process.terminate() }
     }
 }
 #if !CAMP_TESTING

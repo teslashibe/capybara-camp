@@ -25,11 +25,11 @@ import Foundation
         precondition(attributes[.posixPermissions] as? Int == 0o600)
         store.move("untrusted-drop", .attention)
         precondition(store.stages["untrusted-drop"] == nil)
-        store.runningID = a.id
+        store.conversations[a.id] = LocalConversation(session: a, history: [], prompt: "fixture")
         precondition(store.stage(a) == .progress)
         store.move(a.id, .ready)
         precondition(store.stages[a.id] == .done)
-        store.runningID = nil
+        store.conversations.removeValue(forKey: a.id)
         let external = LiveState(id: b.id, sourceID: b.sourceID, state: "running", model: "opus", children: [], owner: "Claude Code", pid: 123)
         store.applyActivity(ActivityResult(activity: [external], sessions: [], models: [:], errors: [:]))
         precondition(store.stage(b) == .progress)
@@ -61,7 +61,7 @@ import Foundation
         precondition(store.tuning(a).speed == "fast")
         let tuningPermissions = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("model-tuning.json").path)
         precondition(tuningPermissions[.posixPermissions] as? Int == 0o600)
-        store.selectedID = a.id; store.runningID = a.id
+        store.selectedID = a.id; store.conversations[a.id] = LocalConversation(session: a, history: [], prompt: "fixture")
         store.draft = "First queued prompt"; store.enqueueDraft()
         store.draft = "Second queued prompt"; store.enqueueDraft()
         precondition(store.queued(a).map(\.text) == ["First queued prompt", "Second queued prompt"])
@@ -78,12 +78,15 @@ import Foundation
         store.queuedPrompts[0].state = "sending"; store.saveQueue()
         let recovered = CampStore(stateDirectory: root)
         precondition(recovered.queued(a)[0].state == "needsReview" && recovered.queuePaused)
+        store.queuedPrompts[0].state = "running"; store.saveQueue()
+        precondition(store.queued(a).isEmpty)
+        precondition(CampStore(stateDirectory: root).queued(a)[0].state == "needsReview")
         let queuePermissions = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("queued-prompts.json").path)
         precondition(queuePermissions[.posixPermissions] as? Int == 0o600)
         let sync = CampStore(stateDirectory: root.appendingPathComponent("sync"))
         sync.sessions = [a, b]; sync.selectedID = a.id; sync.draft = "Keep my unsent words"
         sync.search = "apple"; sync.sourceFilter = "Codex"; sync.view = "Chat"
-        sync.banner = "Keep provider feedback"; sync.runningID = a.id
+        sync.banner = "Keep provider feedback"; sync.conversations[a.id] = LocalConversation(session: a, history: [], prompt: "fixture")
         var renamed = b; renamed.title = "Automatically discovered update"
         sync.applyImport(ImportResult(sessions: [renamed], sources: [], errors: []))
         precondition(sync.selectedID == a.id && sync.sessions.contains(a))
@@ -91,7 +94,7 @@ import Foundation
         precondition(sync.banner == "Keep provider feedback" && sync.sessions.first { $0.id == b.id }?.title == renamed.title)
         sync.applyHistory(Transcript(messages: [Message(id: "stale", role: "assistant", text: "old read")], total: 1), sessionID: a.id)
         precondition(sync.messages.isEmpty)
-        sync.runningID = nil
+        sync.conversations.removeValue(forKey: a.id)
         sync.applyHistory(Transcript(messages: [Message(id: "new", role: "assistant", text: "Automatically refreshed reply")], total: 1), sessionID: a.id)
         precondition(sync.messages.last?.text == "Automatically refreshed reply" && sync.historyTotal == 1)
         sync.applyHistory(Transcript(messages: [], total: 0), sessionID: b.id)

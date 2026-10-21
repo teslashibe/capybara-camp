@@ -16,30 +16,51 @@ import uuid
 
 class NativeConnection:
     def __init__(self, command, cwd, env):
-        self.events = queue.Queue()
+        self.events = queue.Queue(maxsize=16)
         self.backlog = collections.deque()
         self.errors = collections.deque(maxlen=12)
+        self.stopping = threading.Event()
+        self.cancelled = threading.Event()
         self.child = subprocess.Popen(command, cwd=cwd, env=env, text=True,
                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE, start_new_session=True)
         self.serial = 0
-        threading.Thread(target=self._read, daemon=True).start()
-        threading.Thread(target=self._stderr, daemon=True).start()
+        self.readers = [threading.Thread(target=self._read, daemon=True),
+                        threading.Thread(target=self._stderr, daemon=True)]
+        for reader in self.readers:
+            reader.start()
+
+    def _publish(self, event):
+        while not self.stopping.is_set():
+            try:
+                self.events.put(event, timeout=.1)
+                return
+            except queue.Full:
+                pass
 
     def _read(self):
         try:
-            for line in self.child.stdout:
+            while not self.stopping.is_set():
+                line = self.child.stdout.readline(1024 * 1024 + 1)
+                if not line:
+                    break
+                if len(line) > 1024 * 1024:
+                    self._publish({'camp_error': 'The native CLI exceeded the event size limit'})
+                    break
                 try:
                     event = json.loads(line)
                     if isinstance(event, dict):
-                        self.events.put(event)
+                        self._publish(event)
                 except ValueError:
                     pass
         finally:
-            self.events.put(None)
+            self._publish(None)
 
     def _stderr(self):
-        for line in self.child.stderr:
+        while not self.stopping.is_set():
+            line = self.child.stderr.readline(4096)
+            if not line:
+                break
             self.errors.append(line.rstrip())
 
     def write(self, event):
@@ -52,12 +73,16 @@ class NativeConnection:
         self.write({"id": ident, "method": method, "params": params})
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if self.cancelled.is_set():
+                raise InterruptedError('Stopped while waiting for the native CLI')
             try:
-                event = self.events.get(timeout=max(.01, deadline - time.monotonic()))
+                event = self.events.get(timeout=min(.1, max(.01, deadline - time.monotonic())))
             except queue.Empty:
-                raise RuntimeError("The native CLI did not acknowledge " + method)
+                continue
             if event is None:
                 raise RuntimeError("The native CLI closed before acknowledging " + method + (": " + " ".join(self.errors) if self.errors else ""))
+            if event.get('camp_error'):
+                raise RuntimeError(event['camp_error'])
             if event.get("id") == ident:
                 if "error" in event:
                     raise RuntimeError(event["error"].get("message", "Native request rejected"))
@@ -65,6 +90,8 @@ class NativeConnection:
             if "method" in event and "id" in event:
                 self.reject_tool(event)
             else:
+                if len(self.backlog) >= 32:
+                    raise RuntimeError('The native CLI sent too many events before acknowledging ' + method)
                 self.backlog.append(event)
         raise RuntimeError("The native CLI did not acknowledge " + method)
 
@@ -75,11 +102,15 @@ class NativeConnection:
         if self.backlog:
             return self.backlog.popleft()
         try:
-            return self.events.get(timeout=.1)
+            event = self.events.get(timeout=.1)
+            if event and event.get('camp_error'):
+                raise RuntimeError(event['camp_error'])
+            return event
         except queue.Empty:
             return {}
 
     def close(self):
+        self.stopping.set()
         try:
             self.child.stdin.close()
         except (OSError, BrokenPipeError):
@@ -96,6 +127,8 @@ class NativeConnection:
             except (ProcessLookupError, PermissionError):
                 pass
             self.child.wait(timeout=2)
+        for reader in self.readers:
+            reader.join(timeout=2)
         self.child.stdout.close()
         self.child.stderr.close()
 
@@ -168,17 +201,26 @@ def run(request, input_stream=None, emit=None, command=None):
                     control = json.loads(line)
                     if isinstance(control, dict):
                         controls.put(control)
+                        if control.get('type') == 'stop':
+                            connection.cancelled.set()
                 except ValueError:
                     pass
             controls.put({"type": "stop"})
+            connection.cancelled.set()
 
         threading.Thread(target=read_controls, daemon=True).start()
-        previous = {sig: signal.signal(sig, lambda *_: controls.put({"type": "stop"}))
+        def stop_request(*_):
+            controls.put({'type': 'stop'})
+            connection.cancelled.set()
+
+        previous = {sig: signal.signal(sig, stop_request)
                     for sig in (signal.SIGTERM, signal.SIGINT)}
         if s["provider"] == "Codex":
             codex_turn(connection, s, request, controls, emit)
         else:
             claude_turn(connection, s, request, controls, emit)
+    except InterruptedError:
+        emit({'type': 'cancelled', 'text': 'Stopped. Queued prompts are paused.'})
     finally:
         if connection:
             connection.close()

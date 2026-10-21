@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'Resources'))
@@ -12,6 +13,39 @@ import conversation
 
 
 class ConversationTests(unittest.TestCase):
+    def test_output_backpressure_and_close_join_readers(self):
+        with tempfile.TemporaryDirectory() as root:
+            c = conversation.NativeConnection([sys.executable, '-u', '-c',
+                "import json;[(print(json.dumps({'type':'notice','text':'x'*1000}),flush=True)) for _ in range(10000)]"], root, os.environ.copy())
+            time.sleep(.1)
+            self.assertLessEqual(c.events.qsize(), 16)
+            c.close()
+            self.assertIsNotNone(c.child.poll())
+            self.assertFalse(any(reader.is_alive() for reader in c.readers))
+
+    def test_oversized_native_event_fails_instead_of_growing(self):
+        with tempfile.TemporaryDirectory() as root:
+            c = conversation.NativeConnection([sys.executable, '-u', '-c',
+                "print('x'*(2*1024*1024),flush=True)"], root, os.environ.copy())
+            try:
+                with self.assertRaisesRegex(RuntimeError, 'size limit'):
+                    c.rpc('initialize', {})
+            finally:
+                c.close()
+
+    def test_cancel_unblocks_an_unacknowledged_rpc(self):
+        with tempfile.TemporaryDirectory() as root:
+            c = conversation.NativeConnection([sys.executable, '-u', '-c',
+                "import time;time.sleep(10)"], root, os.environ.copy())
+            try:
+                c.cancelled.set()
+                started = time.monotonic()
+                with self.assertRaises(InterruptedError):
+                    c.rpc('initialize', {})
+                self.assertLess(time.monotonic() - started, .5)
+            finally:
+                c.close()
+
     def run_fake(self, provider, code, controls=''):
         with tempfile.TemporaryDirectory() as root:
             old = bridge.SUPPORT
