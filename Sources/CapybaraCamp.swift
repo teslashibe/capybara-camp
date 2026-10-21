@@ -66,7 +66,7 @@ struct ActivityResult: Codable {
     let errors: [String: String]
 }
 struct ChildrenResult: Codable { let children: [ChildSession] }
-struct Message: Codable, Identifiable, Equatable { let id: String; let role: String; let text: String }
+struct Message: Codable, Identifiable, Equatable, Sendable { let id: String; let role: String; let text: String }
 struct QueuedPrompt: Codable, Identifiable {
     let id: String
     let sessionID: String
@@ -75,6 +75,7 @@ struct QueuedPrompt: Codable, Identifiable {
     let effort: String
     let speed: String
     var state = "waiting"
+    var sources: [SessionReference]? = nil
 }
 struct Transcript: Codable { let messages: [Message]; let total: Int }
 enum Stage: String, CaseIterable, Codable {
@@ -207,7 +208,9 @@ final class TranscriptWatch {
 @MainActor final class CampStore: ObservableObject {
     let cloud: CampConnection
     let sharing: CampSharing
+    let mentions: SessionMentions
     @Published var shareSheet: CampSession?
+    @Published var contextInspection: ContextInspection?
     @Published var cloudSessions: [String: CloudSession] = [:]
     @Published var recentType = "All types"
     @Published var remoteHasMore = false
@@ -226,6 +229,7 @@ final class TranscriptWatch {
     @Published var messages: [Message] = []
     @Published var historyTotal = 0
     @Published var draft = ""
+    @Published var preparingPrompts: Set<String> = []
     @Published var conversations: [String: LocalConversation] = [:] { didSet { filterRevision += 1 } }
     var liveText: String { selected.flatMap { conversation($0)?.text } ?? "" }
     var runningID: String? { selected.flatMap { conversation($0) == nil ? nil : $0.id } }
@@ -327,6 +331,7 @@ final class TranscriptWatch {
     }
     init(stateDirectory: URL = Bridge.support, conversationProcess: @escaping () throws -> Process = { try Bridge.process("conversation") }) {
         self.stateDirectory = stateDirectory
+        self.mentions = SessionMentions(directory: stateDirectory)
         self.conversationProcess = conversationProcess
         #if CAMP_DEVELOPMENT
         cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"), vault: ProcessInfo.processInfo.environment["CAMP_DEV_EPHEMERAL_CREDENTIALS"] == "1" ? MemoryCampCredentials() : CampKeychain(), allowLoopback: true)
@@ -368,8 +373,10 @@ final class TranscriptWatch {
             guard let self else { return false }
             return self.activity[local.id] == nil && self.conversations.count < 4 && !self.conversations.values.contains { $0.session.provider == local.provider && $0.session.root == local.root }
         }
-        cloud.worker.execute = { [weak self] local, request, prompt, history, completed in
-            guard let self, self.start(local, prompt: prompt, model: request.model, tuning: ModelTuning(effort: request.effort, speed: request.speed), history: history, completion: completed) else { return nil }
+        cloud.worker.execute = { [weak self] local, request, prompt, history, contexts, completed in
+            guard let self else { return nil }
+            let references = request.sources.map { SessionReference(id: "camp:" + $0.sessionId, scope: self.cloud.scope?.key, cloud: $0) }
+            guard self.start(local, prompt: prompt, model: request.model, tuning: ModelTuning(effort: request.effort, speed: request.speed), history: history, contexts: contexts, references: references, completion: completed) else { return nil }
             return self.conversations[local.id]
         }
         cloud.worker.requestUpdated = { [weak cloud] value in Task { await cloud?.acceptWorkerRequest(value) } }
@@ -416,6 +423,10 @@ final class TranscriptWatch {
         for (id, value) in cloudSessions where value.revision > (previous[id]?.revision ?? 0) { stages[id] = Stage(rawValue: value.stage) ?? .ready }
         let updatedSessions = (sessions.filter { !$0.isCloud } + imported).sorted { $0.updated > $1.updated }
         if sessions != updatedSessions { sessions = updatedSessions }
+        for run in conversations.values where run.references.contains(where: { reference in
+            guard let source = reference.cloud else { return false }
+            return reference.scope != cloud.scope?.key || next[reference.id]?.permissionRevision != source.permissionRevision
+        }) { run.stop() }
         if let selectedID, let binding = sharing.shares.first(where: { "camp:" + $0.id == selectedID && !$0.shared }),
            let remote = cloudSessions[selectedID], !remote.shared, sessions.contains(where: { $0.id == binding.local.id }) {
             self.selectedID = binding.local.id; readGeneration = UUID()
@@ -673,11 +684,20 @@ final class TranscriptWatch {
     }
     func object(_ s: CampSession) -> [String: Any] { (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(s))) as? [String: Any] ?? [:] }
     func send() {
-        guard let s = selected, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard let s = selected, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !preparingPrompts.contains(s.id) else { return }
+        let references = mentions.references(for: s.id)
         if let remote = cloudSessions[s.id] {
             let text = draft, model = modelChoices[s.id] ?? remote.model, choice = tuning(s)
+            preparingPrompts.insert(s.id)
             Task {
-                do { try await cloud.queuePrompt(session: remote, text: text, model: model, tuning: choice); if draft == text { draft = "" } }
+                defer { preparingPrompts.remove(s.id) }
+                do {
+                    guard references.allSatisfy({ $0.scope == cloud.scope?.key && $0.cloud != nil }) else { throw CampError.message("Share local sources with this Camp before attaching them to a shared request") }
+                    try mentions.record(references)
+                    try await cloud.queuePrompt(session: remote, text: text, model: model, tuning: choice, sources: references.compactMap(\.cloud))
+                    if selectedID == s.id && draft == text { draft = "" }
+                    try mentions.clear(references, for: s.id)
+                }
                 catch { banner = error.localizedDescription }
             }
             return
@@ -685,8 +705,19 @@ final class TranscriptWatch {
         guard conversation(s) == nil else { return }
         guard activity[s.id] == nil else { banner = "This session is open in \(s.provider). Close it there before sending from Camp."; return }
         let prompt = draft
-        draft = ""
-        start(s, prompt: prompt, model: modelChoices[s.id] ?? "", tuning: tuning(s))
+        let model = modelChoices[s.id] ?? "", choice = tuning(s)
+        if references.isEmpty { if start(s, prompt: prompt, model: model, tuning: choice) { draft = "" }; return }
+        preparingPrompts.insert(s.id)
+        Task {
+            defer { preparingPrompts.remove(s.id) }
+            do {
+                let contexts = try await resolveContexts(references, destination: s)
+                if start(s, prompt: prompt, model: model, tuning: choice, contexts: contexts, references: references) {
+                    if selectedID == s.id && draft == prompt { draft = "" }
+                    try mentions.clear(references, for: s.id)
+                }
+            } catch { banner = error.localizedDescription }
+        }
     }
     func conversation(_ session: CampSession) -> LocalConversation? {
         if session.isCloud, let binding = sharing.shares.first(where: { "camp:" + $0.id == session.id }) { return conversations[binding.local.id] }
@@ -697,13 +728,14 @@ final class TranscriptWatch {
     }
     @discardableResult
     func start(_ s: CampSession, prompt: String, model: String, tuning: ModelTuning, queuedID: String? = nil,
-               history: [Message]? = nil, completion: ((ConversationResult) -> Void)? = nil) -> Bool {
+               history: [Message]? = nil, contexts: [SessionContext] = [], references: [SessionReference] = [], completion: ((ConversationResult) -> Void)? = nil) -> Bool {
         guard !s.isCloud, conversations[s.id] == nil else { banner = "This session already has a running turn"; return false }
         guard conversations.count < 4, !conversations.values.contains(where: { $0.session.provider == s.provider && $0.session.root == s.root }) else {
             banner = "This profile is busy. Queue the prompt or wait for its current turn"; return false
         }
         guard activity[s.id] == nil else { banner = "Close this session in \(s.provider) before sending from Camp"; return false }
-        let run = LocalConversation(session: s, history: history ?? (selectedID == s.id ? messages : []), prompt: prompt, queueID: queuedID)
+        do { try mentions.record(references) } catch { banner = error.localizedDescription; return false }
+        let run = LocalConversation(session: s, history: history ?? (selectedID == s.id ? messages : []), prompt: prompt, queueID: queuedID, references: references)
         run.changed = { [weak self, weak run] in
             guard let self, let run, self.conversations[s.id]?.id == run.id else { return }
             if !run.steering, let restored = run.takePendingSteer() { self.restoreDraft(restored, for: s.id) }
@@ -735,7 +767,7 @@ final class TranscriptWatch {
             if result.state == "completed" { self.runNextQueued(sessionID: s.id, history: Array(run.messages.suffix(240))) }
         }
         do {
-            try run.start(prompt: prompt, model: model, tuning: tuning, makeProcess: conversationProcess)
+            try run.start(prompt: prompt, model: model, tuning: tuning, contexts: contexts, makeProcess: conversationProcess)
             conversations[s.id] = run; drafts[s.id] = nil; filterRevision += 1
             sharing.localChanged()
             if selectedID == s.id { readGeneration = UUID(); loading = false; historyRequestID = nil; historyDirty = false; messages = run.messages; banner = "" }
@@ -752,6 +784,7 @@ final class TranscriptWatch {
     }
     func steerDraft() {
         guard let s = selected, let run = conversation(s), !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard mentions.references(for: s.id).isEmpty else { banner = "Queue this prompt to attach new context after the current turn"; return }
         do { try run.steer(draft); draft = "" } catch { banner = error.localizedDescription }
     }
     private func restoreDraft(_ value: String, for id: String) {
@@ -762,9 +795,11 @@ final class TranscriptWatch {
         guard let s = selected, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         if s.isCloud { send(); return }
         let choice = tuning(s)
-        queuedPrompts.append(QueuedPrompt(id: UUID().uuidString, sessionID: s.id, text: draft, model: modelChoices[s.id] ?? "", effort: choice.effort, speed: choice.speed))
+        let references = mentions.references(for: s.id)
+        queuedPrompts.append(QueuedPrompt(id: UUID().uuidString, sessionID: s.id, text: draft, model: modelChoices[s.id] ?? "", effort: choice.effort, speed: choice.speed, sources: references))
+        guard saveQueue() else { queuedPrompts.removeLast(); return }
         draft = ""; queuePaused = runningID != s.id
-        saveQueue()
+        do { try mentions.clear(references, for: s.id) } catch { banner = error.localizedDescription }
     }
     func queued(_ s: CampSession) -> [QueuedPrompt] { queuedPrompts.filter { $0.sessionID == s.id && $0.state != "running" } }
     @discardableResult
@@ -781,6 +816,11 @@ final class TranscriptWatch {
     }
     func editQueued(_ item: QueuedPrompt) {
         guard !["sending", "running"].contains(item.state) else { return }
+        do {
+            var references = mentions.references(for: item.sessionID)
+            for ref in item.sources ?? [] { references.removeAll { $0.id == ref.id }; references.append(ref) }
+            try mentions.set(references, for: item.sessionID)
+        } catch { banner = error.localizedDescription; return }
         draft = draft.isEmpty ? item.text : draft + "\n\n" + item.text
         queuedPrompts.removeAll { $0.id == item.id }; saveQueue()
     }
@@ -795,6 +835,20 @@ final class TranscriptWatch {
         guard activity[s.id] == nil else { pauseQueue(s.id, true); banner = "Close this session in \(s.provider) before resuming its Camp queue"; return }
         if let index = queuedPrompts.firstIndex(where: { $0.id == item.id }) { queuedPrompts[index].state = "sending"; guard saveQueue() else { return } }
         guard enabledQueues.contains(s.id) else { return }
+        if let references = item.sources, !references.isEmpty {
+            Task {
+                do {
+                    let contexts = try await resolveContexts(references, destination: s)
+                    guard enabledQueues.contains(s.id), queuedPrompts.contains(where: { $0.id == item.id && $0.state == "sending" }) else {
+                        if let index = queuedPrompts.firstIndex(where: { $0.id == item.id }) { queuedPrompts[index].state = "waiting"; saveQueue() }; return
+                    }
+                    if !start(s, prompt: item.text, model: item.model, tuning: ModelTuning(effort: item.effort, speed: item.speed), queuedID: item.id, history: history, contexts: contexts, references: references), let index = queuedPrompts.firstIndex(where: { $0.id == item.id }) {
+                        queuedPrompts[index].state = "waiting"; pauseQueue(s.id, true); saveQueue()
+                    }
+                } catch { markUncertainQueue(item.id); pauseQueue(s.id, true); banner = error.localizedDescription }
+            }
+            return
+        }
         if !start(s, prompt: item.text, model: item.model, tuning: ModelTuning(effort: item.effort, speed: item.speed), queuedID: item.id, history: history), let index = queuedPrompts.firstIndex(where: { $0.id == item.id }) {
             queuedPrompts[index].state = "waiting"; pauseQueue(s.id, true); saveQueue()
         }
@@ -839,6 +893,12 @@ struct RootView: View {
         .sheet(isPresented: $store.sourceSheet) { SourcesView(store: store) }
         .sheet(isPresented: $showCamp) { CampConnectionView(cloud: store.cloud) }
         .sheet(item: $store.shareSheet) { session in CampShareView(store: store, cloud: store.cloud, sharing: store.sharing, session: session) }
+        .sheet(item: $store.contextInspection) { value in ContextInspectionView(store: store, inspection: value) }
+        .onOpenURL { store.openContextLink($0) }
+        .environment(\.openURL, OpenURLAction { url in
+            if url.scheme == "capybara" { store.openContextLink(url); return .handled }
+            return .systemAction
+        })
     }
     var sidebar: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -1073,6 +1133,7 @@ struct ChatView: View {
                     VStack(alignment: .leading, spacing: 9) {
                         if let remote = store.cloudSessions[s.id] { CloudRequestQueueView(cloud: store.cloud, session: remote) }
                         else { PromptQueueView(store: store, session: s) }
+                        SessionContextComposer(store: store, mentions: store.mentions, destination: s)
                         TextEditor(text: $store.draft).font(.system(size: 13)).scrollContentBackground(.hidden).frame(minHeight: 55, maxHeight: 100).padding(8).background(.white).clipShape(RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(campInk.opacity(0.13)))
                         HStack(spacing: 10) {
                             Text(s.isCloud ? "Saved to Camp · Runs on the session owner's Mac after approval" : store.runningID == s.id ? "Steer now or queue for after this turn" : store.activity[s.id] == nil ? "Uses \(s.sourceLabel) login · Chat-only local preview" : "Open in \(s.provider) · Camp queue waits until it is closed")
@@ -1088,7 +1149,7 @@ struct ChatView: View {
                                     .help(s.provider == "Codex" ? "Add input to the current turn" : "Interrupt the current response and send the new direction")
                             } else {
                                 Button { store.send() } label: { Label("Send", systemImage: "arrow.up") }.buttonStyle(.borderedProminent).tint(campGreen)
-                                    .disabled(store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.loading || store.activity[s.id] != nil).keyboardShortcut(.return, modifiers: .command)
+                                    .disabled(store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.loading || store.activity[s.id] != nil || store.preparingPrompts.contains(s.id)).keyboardShortcut(.return, modifiers: .command)
                             }
                         }
                     }.padding(20)
@@ -1195,7 +1256,7 @@ struct MessageView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 7) { Image(systemName: message.role == "user" ? "person.crop.circle" : "sparkle"); Text(message.role == "user" ? "You" : "Assistant").fontWeight(.semibold) }.font(.system(size: 11)).foregroundStyle(message.role == "user" ? campMuted : campGreen)
-            Text(verbatim: message.text).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled)
+            Text((try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text)).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled)
                 .lineLimit(nil).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
         }.padding(message.role == "user" ? 15 : 0).background(message.role == "user" ? Color.white.opacity(0.7) : .clear).clipShape(RoundedRectangle(cornerRadius: 10))
     }

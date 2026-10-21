@@ -9,6 +9,16 @@ import (
 )
 
 func (a *API) sessionRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /v1/camps/{camp}/sessions/{session}/context", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		var input camp.SourceRef
+		if !decode(w, r, &input) {
+			return
+		}
+		value, err := a.Camps.ReadContext(r.Context(), u, r.PathValue("camp"), r.PathValue("session"), input)
+		if !fail(w, err) {
+			write(w, 200, value)
+		}
+	}))
 	mux.HandleFunc("POST /v1/camps/{camp}/sessions/{session}/ownership", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		var input camp.OwnershipInput
 		if !decode(w, r, &input) {

@@ -6,7 +6,7 @@ import SwiftUI
     @Published private(set) var issues: [CloudAttempt] = []
     var nativeSession: ((CloudSession) -> CampSession?)?
     var available: ((CampSession) -> Bool)?
-    var execute: ((CampSession, CloudRequest, String, [Message], @escaping (ConversationResult) -> Void) -> LocalConversation?)?
+    var execute: ((CampSession, CloudRequest, String, [Message], [SessionContext], @escaping (ConversationResult) -> Void) -> LocalConversation?)?
     var requestUpdated: ((CloudRequest) -> Void)?
     var readHistory: (CampSession) async throws -> [Message] = { local in
         let body = try CampWire.body(["session": JSONSerialization.jsonObject(with: JSONEncoder().encode(local)), "limit": 120])
@@ -180,8 +180,8 @@ import SwiftUI
             status = "Waiting for the assigned local session"; return
         }
         attempt.localSessionId = local.id
-        let history: [Message], prompt: String
-        do { history = try await readHistory(local); prompt = try await sourcePrompt(attempt.request, c) }
+        let history: [Message], contexts: [SessionContext]
+        do { history = try await readHistory(local); contexts = try await sourceContexts(attempt.request, c) }
         catch {
             // No provider process has started. Persist a failed admission instead
             // of repeatedly claiming an unreadable source or oversized snapshot.
@@ -205,7 +205,7 @@ import SwiftUI
         attempt.state = "running"; try await save(attempt, c); try check(c)
         activeAttempt = attempt; heartbeatAt = Date().addingTimeInterval(heartbeatInterval)
         let running = attempt
-        let launched = execute?(local, attempt.request, prompt, history, { [weak self] result in
+        let launched = execute?(local, attempt.request, attempt.request.prompt, history, contexts, { [weak self] result in
             Task { await self?.finished(running, result, c) }
         })
         guard let launched else {
@@ -223,25 +223,39 @@ import SwiftUI
             self?.active?.stop(); self?.status = "Execution lease expired · Reviewing the local result"
         }
     }
-    private func sourcePrompt(_ request: CloudRequest, _ c: Context) async throws -> String {
-        var result = request.prompt
+    private func sourceContexts(_ request: CloudRequest, _ c: Context) async throws -> [SessionContext] {
+        var result: [SessionContext] = [], bytes = 0
         for source in request.sources {
+            if let ids = source.messageIds, !ids.isEmpty {
+                let operation = CampPublication(kind: "read", method: "POST", path: "/v1/camps/\(c.scope.campId)/sessions/\(source.sessionId)/context", body: try CampWire.encoder().encode(source))
+                let page = try CampWire.decoder().decode(CloudTranscript.self, from: await c.transport.perform(operation))
+                try check(c)
+                guard page.revision == source.transcriptRevision, Set(page.messages.map(\.id)) == Set(ids), page.messages.count == ids.count else { throw CampCloudError.invalidResponse }
+                let messages = page.messages.filter { !$0.removed }.map { Message(id: $0.id, role: $0.role, text: $0.text) }
+                bytes += messages.reduce(0) { $0 + $1.text.utf8.count }
+                guard bytes <= 256 << 10 else { throw CampError.message("The selected source context exceeds 256 KB") }
+                result.append(SessionContext(id: "camp:" + source.sessionId, title: "Shared session", revision: String(source.transcriptRevision), messages: messages))
+                continue
+            }
             var before: Int64 = 0, pages: [[CloudMessage]] = [], ended = false
             for _ in 0..<100 {
                 let page = try await get(CloudTranscript.self, "/v1/camps/\(c.scope.campId)/sessions/\(source.sessionId)/transcript?revision=\(source.transcriptRevision)&before=\(before)&limit=120", c)
                 guard page.revision == source.transcriptRevision else { throw CampCloudError.invalidResponse }
                 pages.append(page.messages)
                 let size = pages.flatMap { $0 }.reduce(0) { $0 + $1.text.utf8.count }
-                guard size + result.utf8.count < 60000 else { throw CampError.message("The tagged context is too large for this request. Choose a smaller source snapshot") }
+                guard size + bytes <= 256 << 10 else { throw CampError.message("The tagged context is too large for this request. Choose a smaller source snapshot") }
                 if !page.hasMore { ended = true; break }
                 guard page.before > 0, before == 0 || page.before < before else { throw CampCloudError.invalidResponse }
                 before = page.before
             }
             guard ended else { throw CampError.message("The tagged transcript exceeds the request page limit") }
-            result += "\n\nQuoted context from Camp session \(source.sessionId), revision \(source.transcriptRevision):\n"
-            result += pages.reversed().flatMap { $0 }.filter { !$0.removed }.map { "[\($0.role)] \($0.text)" }.joined(separator: "\n")
+            let messages = pages.reversed().flatMap { $0 }.filter { !$0.removed }.map { Message(id: $0.id, role: $0.role, text: $0.text) }
+            bytes += messages.reduce(0) { $0 + $1.text.utf8.count }
+            result.append(SessionContext(id: "camp:" + source.sessionId, title: "Shared session", revision: String(source.transcriptRevision), messages: messages))
         }
-        guard result.utf8.count <= 65536 else { throw CampError.message("The prompt and tagged context exceed 64 KB") }
+        guard result.allSatisfy({ !$0.messages.isEmpty && $0.messages.count <= 120 && !$0.messages.contains(where: { $0.text.utf8.count > 48 << 10 }) }) else {
+            throw CampError.message("Choose a source range of up to 120 messages, each under 48 KB")
+        }
         return result
     }
     private func finished(_ saved: CloudAttempt, _ result: ConversationResult, _ c: Context) async {

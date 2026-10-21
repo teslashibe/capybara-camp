@@ -22,6 +22,7 @@ struct ConversationResult: Sendable {
     let id = UUID()
     let session: CampSession
     let queueID: String?
+    let references: [SessionReference]
     private(set) var messages: [Message]
     private(set) var text = ""
     private(set) var ready = false
@@ -42,17 +43,19 @@ struct ConversationResult: Sendable {
     private var finished = false
     static let lineLimit = 4 * 1024 * 1024
 
-    init(session: CampSession, history: [Message], prompt: String, queueID: String? = nil) {
+    init(session: CampSession, history: [Message], prompt: String, queueID: String? = nil, references: [SessionReference] = []) {
         self.session = session; self.queueID = queueID
+        self.references = references
         messages = history + [Message(id: UUID().uuidString, role: "user", text: prompt)]
     }
 
     func start(prompt: String, model: String, tuning: ModelTuning,
+               contexts: [SessionContext] = [],
                makeProcess: () throws -> Process = { try Bridge.process("conversation") }) throws {
         guard process == nil, !finished, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               prompt.utf8.count <= 65536 else { throw CampError.message("Write a prompt under 64 KB") }
         let p = try makeProcess(), out = Pipe(), err = Pipe(), stdin = Pipe()
-        var payload = try JSONSerialization.data(withJSONObject: ["session": try JSONSerialization.jsonObject(with: JSONEncoder().encode(session)), "prompt": prompt, "model": model, "effort": tuning.effort, "speed": tuning.speed])
+        var payload = try JSONSerialization.data(withJSONObject: ["session": try JSONSerialization.jsonObject(with: JSONEncoder().encode(session)), "prompt": prompt, "model": model, "effort": tuning.effort, "speed": tuning.speed, "context": JSONSerialization.jsonObject(with: JSONEncoder().encode(contexts))])
         payload.append(10)
         p.standardOutput = out; p.standardError = err; p.standardInput = stdin
         let writer = ConversationInput(stdin.fileHandleForWriting)

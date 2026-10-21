@@ -307,11 +307,20 @@ import SwiftUI
             await refresh()
         } catch { self.error = error.localizedDescription }
     }
-    func queuePrompt(session: CloudSession, text: String, model: String, tuning: ModelTuning) async throws {
+    func queuePrompt(session: CloudSession, text: String, model: String, tuning: ModelTuning, sources: [CloudSourceRef] = []) async throws {
         guard let scope, let cache else { throw CampCloudError.cacheUnavailable }
-        let body = try CampWire.body(["prompt": text, "model": model, "effort": tuning.effort, "speed": tuning.speed])
+        let refs = try JSONSerialization.jsonObject(with: CampWire.encoder().encode(sources))
+        let body = try CampWire.body(["prompt": text, "model": model, "effort": tuning.effort, "speed": tuning.speed, "sources": refs])
         _ = try await cache.enqueue(scope: scope, method: "POST", path: "/v1/camps/\(scope.campId)/sessions/\(session.id)/requests", body: body, expectedEpoch: cacheEpoch)
         pending = try await cache.outbox(scope); flush()
+    }
+    func context(session: CloudSession, source: CloudSourceRef) async throws -> CloudTranscript {
+        guard let scope, let client, let credential, session.campId == scope.campId,
+              session.id == source.sessionId, session.permissionRevision == source.permissionRevision else { throw CampCloudError.invalidResponse }
+        let origin = scope
+        let data = try await client.data("POST", path: "/v1/camps/\(scope.campId)/sessions/\(session.id)/context", body: CampWire.encoder().encode(source), token: credential.token)
+        guard self.scope == origin, self.credential?.token == credential.token else { throw CancellationError() }
+        return try CampWire.decoder().decode(CloudTranscript.self, from: data)
     }
     func queueStage(session: CloudSession, stage: Stage) async throws {
         guard let scope, let cache else { throw CampCloudError.cacheUnavailable }

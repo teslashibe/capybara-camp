@@ -14,9 +14,10 @@ import (
 var ErrTransition = errors.New("request state has changed")
 
 type SourceRef struct {
-	SessionID          string `json:"session_id"`
-	TranscriptRevision int64  `json:"transcript_revision"`
-	PermissionRevision int64  `json:"permission_revision"`
+	SessionID          string   `json:"session_id"`
+	TranscriptRevision int64    `json:"transcript_revision"`
+	PermissionRevision int64    `json:"permission_revision"`
+	MessageIDs         []string `json:"message_ids,omitempty"`
 }
 type RequestInput struct {
 	Prompt  string      `json:"prompt"`
@@ -72,14 +73,14 @@ func loadRequest(ctx context.Context, tx pgx.Tx, campID, id string) (Request, er
 	if err != nil {
 		return r, err
 	}
-	rows, err := tx.Query(ctx, `SELECT session_id,transcript_revision,permission_revision FROM request_sources WHERE request_id=$1 ORDER BY session_id`, id)
+	rows, err := tx.Query(ctx, `SELECT session_id,transcript_revision,permission_revision,message_ids FROM request_sources WHERE request_id=$1 ORDER BY session_id`, id)
 	if err != nil {
 		return r, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var source SourceRef
-		if err = rows.Scan(&source.SessionID, &source.TranscriptRevision, &source.PermissionRevision); err != nil {
+		if err = rows.Scan(&source.SessionID, &source.TranscriptRevision, &source.PermissionRevision, &source.MessageIDs); err != nil {
 			return r, err
 		}
 		r.Sources = append(r.Sources, source)
@@ -176,7 +177,17 @@ func (s *Store) CreateRequest(ctx context.Context, a auth.Actor, campID, session
 		if err != nil {
 			return r, err
 		}
+		if ref.PermissionRevision != 0 && ref.PermissionRevision != source.PermissionRevision {
+			return r, ErrDenied
+		}
 		ref.PermissionRevision = source.PermissionRevision
+		if len(ref.MessageIDs) > 0 {
+			if _, err = readContextMessages(ctx, tx, ref); err != nil {
+				return r, err
+			}
+		} else {
+			ref.MessageIDs = []string{}
+		}
 		r.Sources = append(r.Sources, ref)
 	}
 	if _, err = s.requestAccess(ctx, tx, r); err != nil {
@@ -188,7 +199,7 @@ func (s *Store) CreateRequest(ctx context.Context, a auth.Actor, campID, session
 		return Request{}, err
 	}
 	for _, ref := range r.Sources {
-		if _, err = tx.Exec(ctx, `INSERT INTO request_sources(request_id,session_id,transcript_revision,permission_revision) VALUES($1,$2,$3,$4)`, r.ID, ref.SessionID, ref.TranscriptRevision, ref.PermissionRevision); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO request_sources(request_id,session_id,transcript_revision,permission_revision,message_ids) VALUES($1,$2,$3,$4,$5)`, r.ID, ref.SessionID, ref.TranscriptRevision, ref.PermissionRevision, ref.MessageIDs); err != nil {
 			return Request{}, err
 		}
 	}

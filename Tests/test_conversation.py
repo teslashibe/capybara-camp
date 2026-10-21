@@ -13,6 +13,27 @@ import conversation
 
 
 class ConversationTests(unittest.TestCase):
+    def test_context_instructions_do_not_change_user_prompt(self):
+        class Connection:
+            def __init__(self): self.calls = []
+            def rpc(self, method, params):
+                self.calls.append((method, params))
+                if method == 'config/read': return {'config': {}}
+                if method == 'turn/start': return {'turn': {'id': 'turn'}}
+                return {}
+            def write(self, event): pass
+            def next(self): return {'method': 'turn/completed', 'params': {'turn': {'id': 'turn', 'status': 'completed'}}}
+        import queue
+        c = Connection()
+        conversation.codex_turn(c, {'sessionID': 'fixture', 'cwd': '/tmp'},
+            {'prompt': 'The original prompt', '_camp_context_instructions': '\nSelected sources only'}, queue.Queue(), lambda e: None)
+        resume = next(params for method, params in c.calls if method == 'thread/resume')
+        turn = next(params for method, params in c.calls if method == 'turn/start')
+        self.assertIn('Selected sources only', resume['developerInstructions'])
+        self.assertEqual(turn['input'][0]['text'], 'The original prompt')
+        for feature in ('view_image', 'image_generation', 'apps', 'plugins', 'multi_agent', 'shell_tool'):
+            self.assertFalse(resume['config']['features.' + feature])
+
     def test_output_backpressure_and_close_join_readers(self):
         with tempfile.TemporaryDirectory() as root:
             c = conversation.NativeConnection([sys.executable, '-u', '-c',

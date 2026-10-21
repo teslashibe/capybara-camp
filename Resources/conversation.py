@@ -13,6 +13,10 @@ import threading
 import time
 import uuid
 
+CHAT_DISABLED_FEATURES = ("hooks", "shell_tool", "unified_exec", "multi_agent", "multi_agent_v2",
+                          "view_image", "image_generation", "apps", "plugins", "remote_plugin",
+                          "skill_search", "tool_suggest", "sleep_tool", "goals", "request_permissions_tool")
+
 
 class NativeConnection:
     def __init__(self, command, cwd, env):
@@ -133,7 +137,7 @@ class NativeConnection:
         self.child.stderr.close()
 
 
-def codex_command(s):
+def codex_command(s, context_server=None):
     # Disable configured MCP transports before the server parses their URLs.
     # Desktop-only placeholder URLs are not understood by the standalone CLI.
     import tomllib
@@ -145,7 +149,9 @@ def codex_command(s):
         if path.exists():
             with path.open("rb") as file:
                 servers.update(tomllib.load(file).get("mcp_servers", {}))
-    command = ["codex", "app-server", "--stdio", "-c", "features.hooks=false"]
+    command = ["codex", "app-server", "--stdio"]
+    for feature in CHAT_DISABLED_FEATURES:
+        command += ["-c", "features." + feature + "=false"]
     disabled = []
     for name, config in servers.items():
         fields = ["enabled=false"]
@@ -153,15 +159,18 @@ def codex_command(s):
             fields.append('url="http://127.0.0.1:9"')
         disabled.append(json.dumps(name) + "={" + ",".join(fields) + "}")
     command += ["-c", "mcp_servers={" + ",".join(disabled) + "}"]
+    if context_server:
+        command += ["-c", "mcp_servers.camp_context=" + "{command=" + json.dumps(context_server["command"]) + ",args=" + json.dumps(context_server["args"]) + ",enabled=true,required=true}"]
     return command
 
 
-def codex_config(config):
+def codex_config(config, context_server=None):
     """Disable every merged MCP server before resuming, including project entries."""
     overrides = {"mcp_servers": {name: {"enabled": False} for name in config.get("mcp_servers", {})}}
-    overrides.update({"features.hooks": False, "features.shell_tool": False,
-                      "features.unified_exec": False, "features.multi_agent": False,
-                      "web_search": "disabled"})
+    overrides.update({"features." + feature: False for feature in CHAT_DISABLED_FEATURES})
+    overrides["web_search"] = "disabled"
+    if context_server:
+        overrides["mcp_servers"]["camp_context"] = {**context_server, "enabled": True, "required": True}
     return overrides
 
 
@@ -171,6 +180,9 @@ def run(request, input_stream=None, emit=None, command=None):
     from activity import assert_available
     emit = emit or default_emit
     input_stream = input_stream or sys.stdin
+    request = dict(request)
+    request.pop("_camp_mcp", None)
+    request.pop("_camp_context_instructions", None)
     s, prompt = request["session"], request["prompt"]
     if s.get("provider") not in ("Codex", "Claude") or not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("Choose a session and write a message")
@@ -187,13 +199,31 @@ def run(request, input_stream=None, emit=None, command=None):
         lock.close()
         raise ValueError("This session is already running in Capybara Camp")
     connection = None
+    grant = None
     controls = queue.Queue()
     previous = {}
     try:
         assert_available(s)
+        if request.get("context"):
+            from context_tool import ContextGrant
+            grant = ContextGrant(request["context"], SUPPORT)
+            request = {**request, "prompt": prompt + grant.attachment_links, "_camp_mcp": grant.server, "_camp_context_instructions": grant.instructions}
         if command is None:
-            command = codex_command(s) if s["provider"] == "Codex" else [*native_command, "--input-format", "stream-json", "--replay-user-messages"]
-        connection = NativeConnection(command, s["cwd"], runtime_env(s))
+            if s["provider"] == "Codex":
+                command = codex_command(s, grant.server if grant else None)
+            else:
+                command = [*native_command, "--input-format", "stream-json", "--replay-user-messages"]
+                if grant:
+                    command.remove("--safe-mode")
+                    settings = {"disableAllHooks": True, "autoMemoryEnabled": False}
+                    if "--settings" in command:
+                        index = command.index("--settings")
+                        settings.update(json.loads(command[index + 1])); del command[index:index + 2]
+                    command += ["--restricted", "--setting-sources", "", "--disable-slash-commands", "--settings", json.dumps(settings), "--mcp-config", json.dumps({"mcpServers": {"camp_context": grant.server}}), "--allowedTools", "mcp__camp_context__read_session", "--append-system-prompt-file", str(grant.instructions_path), "--system-prompt-snapshot", "off"]
+        env = runtime_env(s)
+        if grant and s["provider"] == "Claude":
+            env.pop("CLAUDE_CODE_SAFE_MODE", None)
+        connection = NativeConnection(command, s["cwd"], env)
 
         def read_controls():
             for line in input_stream:
@@ -224,6 +254,8 @@ def run(request, input_stream=None, emit=None, command=None):
     finally:
         if connection:
             connection.close()
+        if grant:
+            grant.close()
         for sig, handler in previous.items():
             signal.signal(sig, handler)
         lock.close()
@@ -234,7 +266,7 @@ def codex_turn(c, s, request, controls, emit):
     c.write({"method": "initialized", "params": {}})
     merged = c.rpc("config/read", {"includeLayers": False, "cwd": s["cwd"]}).get("config", {})
     params = {"threadId": s["sessionID"], "cwd": s["cwd"], "sandbox": "read-only", "approvalPolicy": "untrusted",
-              "config": codex_config(merged), "developerInstructions": "This is a chat-only preview. Answer the user directly without running tools or delegating work."}
+              "config": codex_config(merged, request.get("_camp_mcp")), "developerInstructions": "This is a chat-only preview. Answer directly. Only the Camp context read tool, when configured, is permitted; do not run project tools or delegate work." + request.get("_camp_context_instructions", "")}
     if request.get("model"):
         params["model"] = request["model"]
     c.rpc("thread/resume", params)
@@ -331,6 +363,9 @@ def claude_turn(c, s, request, controls, emit):
             raise RuntimeError("Claude closed before completing the turn")
         kind = event.get("type")
         if kind == "system" and event.get("subtype") == "init":
+            if request.get("_camp_mcp") and not any(server.get("name") == "camp_context" and server.get("status") == "connected" for server in event.get("mcp_servers", [])):
+                emit({"type": "error", "message": "The selected context tool did not connect. No context was supplied."})
+                return
             if not ready:
                 ready = True
                 emit({"type": "started"})

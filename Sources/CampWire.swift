@@ -58,7 +58,10 @@ struct CloudMessage: Codable, Identifiable, Equatable, Sendable {
     var model: String?; var effort: String?; var speed: String?; var revision: Int64
 }
 struct CloudTranscript: Codable, Sendable { var revision: Int64; var messages: [CloudMessage]; var before: Int64; var hasMore: Bool }
-struct CloudSourceRef: Codable, Equatable, Sendable { var sessionId: String; var transcriptRevision: Int64; var permissionRevision: Int64 = 0 }
+struct CloudSourceRef: Codable, Equatable, Sendable {
+    var sessionId: String; var transcriptRevision: Int64; var permissionRevision: Int64 = 0
+    var messageIds: [String]? = nil
+}
 struct CloudRequest: Codable, Identifiable, Equatable, Sendable {
     var id: String; var campId: String; var sessionId: String; var requesterUserId: String; var ownerUserId: String; var ownerDeviceId: String
     var permissionRevision: Int64; var revision: Int64; var prompt: String; var model: String; var effort: String; var speed: String; var state: String

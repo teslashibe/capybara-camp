@@ -38,7 +38,7 @@ else
   lipo -create "${BINARIES[@]}" -output "$STAGED/Contents/MacOS/CapybaraCamp"
 fi
 strip -S "$STAGED/Contents/MacOS/CapybaraCamp"
-cp -X Resources/bridge.py Resources/activity.py Resources/conversation.py Resources/transcript_index.py Resources/capybara.png "$STAGED/Contents/Resources/"
+cp -X Resources/bridge.py Resources/activity.py Resources/conversation.py Resources/context_tool.py Resources/transcript_index.py Resources/capybara.png "$STAGED/Contents/Resources/"
 for size in 16 32 128 256 512; do
   sips -s format png -z "$size" "$size" Resources/capybara.png --out "$WORK/AppIcon.iconset/icon_${size}x${size}.png" >/dev/null
   twice=$((size * 2))
@@ -56,6 +56,7 @@ info = {
     "CFBundleVersion": "1", "CFBundleIconFile": "AppIcon",
     "LSMinimumSystemVersion": "14.0", "NSHighResolutionCapable": True,
     "NSPrincipalClass": "NSApplication", "LSApplicationCategoryType": "public.app-category.developer-tools",
+    "CFBundleURLTypes": [{"CFBundleURLName": "Camp source links", "CFBundleURLSchemes": ["capybara"]}],
 }
 with (Path(app) / "Contents/Info.plist").open("wb") as f:
     plistlib.dump(info, f)

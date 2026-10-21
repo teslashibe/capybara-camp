@@ -77,7 +77,7 @@ actor WorkerFixture: CampPublishingTransport {
         worker.nativeSession = { _ in local }; worker.available = { _ in true }; worker.readHistory = { _ in [] }
         var starts = 0
         var finish: ((ConversationResult) -> Void)?
-        worker.execute = { native, _, prompt, history, completed in starts += 1; finish = completed; return LocalConversation(session: native, history: history, prompt: prompt) }
+        worker.execute = { native, _, prompt, history, _, completed in starts += 1; finish = completed; return LocalConversation(session: native, history: history, prompt: prompt) }
         worker.attach(scope: scope, actor: actor, transport: api, sessions: [remote])
         await worker.poll(); check(starts == 0)
         await worker.poll(); check(starts == 1)
@@ -102,7 +102,7 @@ actor WorkerFixture: CampPublishingTransport {
         let batchWorker = CampLocalWorker(cache: batchCache, automatic: false)
         batchWorker.nativeSession = { _ in local }; batchWorker.available = { _ in true }; batchWorker.readHistory = { _ in [] }
         var batchStarts = 0
-        batchWorker.execute = { native, _, prompt, history, _ in
+        batchWorker.execute = { native, _, prompt, history, _, _ in
             batchStarts += 1
             return LocalConversation(session: native, history: history, prompt: prompt)
         }
@@ -123,7 +123,7 @@ actor WorkerFixture: CampPublishingTransport {
         await lostAPI.configure(start: true)
         let lostWorker = CampLocalWorker(cache: lostCache, automatic: false)
         lostWorker.nativeSession = { _ in local }; lostWorker.available = { _ in true }; lostWorker.readHistory = { _ in [] }
-        lostWorker.execute = { _, _, _, _, _ in preconditionFailure("Unknown Start acknowledgement executed the provider") }
+        lostWorker.execute = { _, _, _, _, _, _ in preconditionFailure("Unknown Start acknowledgement executed the provider") }
         lostWorker.attach(scope: scope, actor: actor, transport: lostAPI, sessions: [remote])
         await lostWorker.poll()
         check(try await lostCache.attempts(scope).first?.state == "uncertain")
@@ -139,7 +139,7 @@ actor WorkerFixture: CampPublishingTransport {
         await clearedAPI.configure(hold: true)
         let clearedWorker = CampLocalWorker(cache: clearedCache, automatic: false)
         clearedWorker.nativeSession = { _ in local }; clearedWorker.available = { _ in true }
-        clearedWorker.execute = { _, _, _, _, _ in preconditionFailure("Revoked claim executed") }
+        clearedWorker.execute = { _, _, _, _, _, _ in preconditionFailure("Revoked claim executed") }
         clearedWorker.attach(scope: scope, actor: actor, transport: clearedAPI, sessions: [remote])
         let pending = Task { await clearedWorker.poll() }
         try await eventually("Claim did not reach fixture") { await clearedAPI.snapshot().2 }
@@ -153,7 +153,7 @@ actor WorkerFixture: CampPublishingTransport {
         let invalidWorker = CampLocalWorker(cache: invalidCache, automatic: false)
         invalidWorker.nativeSession = { _ in local }; invalidWorker.available = { _ in true }
         invalidWorker.readHistory = { _ in throw CampError.message("Fixture transcript is unavailable") }
-        invalidWorker.execute = { _, _, _, _, _ in preconditionFailure("Failed preflight started a provider") }
+        invalidWorker.execute = { _, _, _, _, _, _ in preconditionFailure("Failed preflight started a provider") }
         invalidWorker.attach(scope: scope, actor: actor, transport: invalidAPI, sessions: [remote])
         await invalidWorker.poll()
         check(await invalidAPI.snapshot().0.state == "failed")
@@ -163,7 +163,7 @@ actor WorkerFixture: CampPublishingTransport {
         let leaseAPI = WorkerFixture(request: request(), session: remote)
         let leaseWorker = CampLocalWorker(cache: leaseCache, automatic: false, heartbeatInterval: 0)
         leaseWorker.nativeSession = { _ in local }; leaseWorker.available = { _ in true }; leaseWorker.readHistory = { _ in [] }
-        leaseWorker.execute = { native, _, prompt, history, completed in
+        leaseWorker.execute = { native, _, prompt, history, _, completed in
             let run = LocalConversation(session: native, history: history, prompt: prompt)
             run.completed = completed
             try! run.start(prompt: prompt, model: "", tuning: ModelTuning(), makeProcess: {
