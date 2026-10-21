@@ -17,6 +17,7 @@ struct CampSession: Codable, Identifiable, Equatable {
     let archived: Bool
     var model: String = ""
     var project: String { URL(fileURLWithPath: cwd).lastPathComponent }
+    var isCloud: Bool { id.hasPrefix("camp:") && root.isEmpty }
 }
 struct CampSource: Codable, Identifiable, Equatable {
     let id: String
@@ -96,7 +97,10 @@ extension Color {
 
 enum Bridge {
     static var activeProcess: Process?
-    static let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Capybara Camp")
+    static let support: URL = {
+        if let path = ProcessInfo.processInfo.environment["CAPY_SUPPORT"], path.hasPrefix("/") { return URL(fileURLWithPath: path) }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Capybara Camp")
+    }()
     static let python: String = {
         let candidates = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"] +
             (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map { String($0) + "/python3" }
@@ -184,6 +188,13 @@ final class TranscriptWatch {
 }
 
 @MainActor final class CampStore: ObservableObject {
+    let cloud: CampConnection
+    @Published var cloudSessions: [String: CloudSession] = [:]
+    @Published var recentType = "All types"
+    @Published var remoteHasMore = false
+    private var cloudHistory: [String: [CloudMessage]] = [:]
+    private var cloudHistoryBefore: [String: Int64] = [:]
+    private var cloudHistoryRevision: [String: Int64] = [:]
     @Published var sessions: [CampSession] = [] { didSet { filterRevision += 1 } }
     @Published var sources: [CampSource] = []
     @Published var stages: [String: Stage] = [:]
@@ -210,7 +221,6 @@ final class TranscriptWatch {
     @Published var modelTuning: [String: [String: ModelTuning]] = [:]
     @Published var activityError = ""
     @Published var importError = ""
-    @Published var showSubagents = false
     @Published var subagentsParent: CampSession?
     @Published var children: [ChildSession] = []
     @Published var childrenLoading = false
@@ -236,6 +246,9 @@ final class TranscriptWatch {
     private var cachedFilterSearch = ""
     private var cachedFilterSource = ""
     private var cachedFiltered: [CampSession] = []
+    private var cachedRecentRevision = -1
+    private var cachedRecentType = ""
+    private var cachedRecent: [CampSession] = []
     private let stateDirectory: URL
     private let decoder = JSONDecoder()
     var selected: CampSession? { sessions.first { $0.id == selectedID } }
@@ -250,16 +263,60 @@ final class TranscriptWatch {
     }
     init(stateDirectory: URL = Bridge.support) {
         self.stateDirectory = stateDirectory
+        #if CAMP_TESTING || CAMP_DEVELOPMENT
+        cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"), allowLoopback: true)
+        #else
+        cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"))
+        #endif
         try? FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        if let index = LocalSessionIndex.read(directory: stateDirectory) {
+            sessions = index.sessions; sources = index.sources; selectedID = sessions.first?.id
+        }
         if let data = try? Data(contentsOf: stateDirectory.appendingPathComponent("model-tuning.json")), let saved = try? decoder.decode([String: [String: ModelTuning]].self, from: data) { modelTuning = saved }
         if let data = try? Data(contentsOf: stateDirectory.appendingPathComponent("models.json")), let saved = try? decoder.decode([String: String].self, from: data) { modelChoices = saved }
         if let data = try? Data(contentsOf: stateDirectory.appendingPathComponent("board.json")), let saved = try? decoder.decode([String: Stage].self, from: data) { stages = saved }
+        if let data = try? Data(contentsOf: stateDirectory.appendingPathComponent("recent-filter.json")), let saved = try? decoder.decode(String.self, from: data), ["All types", "Planning", "Codex", "Claude"].contains(saved) { recentType = saved }
         if let data = try? Data(contentsOf: stateDirectory.appendingPathComponent("queued-prompts.json")), let saved = try? decoder.decode([QueuedPrompt].self, from: data) {
             queuedPrompts = saved.map { item in var item = item; if item.state == "sending" { item.state = "needsReview" }; return item }
             saveQueue()
         }
+        cloud.sessionsChanged = { [weak self] sessions, projects, _ in self?.applyCloud(sessions, projects: projects) }
+        cloud.transcriptChanged = { [weak self] id in
+            guard let self, self.selectedID == "camp:" + id else { return }
+            self.loadHistory(silent: true)
+        }
     }
-    func isBusy(_ s: CampSession) -> Bool { runningID == s.id || activity[s.id]?.state == "running" }
+    var recentSessions: [CampSession] {
+        if cachedRecentRevision == filterRevision && cachedRecentType == recentType { return cachedRecent }
+        let type = recentType
+        cachedRecent = Array(sessions.lazy.filter { type == "All types" || $0.provider == type }.sorted { $0.updated > $1.updated }.prefix(10))
+        cachedRecentRevision = filterRevision; cachedRecentType = recentType
+        return cachedRecent
+    }
+    func setRecentType(_ value: String) {
+        guard ["All types", "Planning", "Codex", "Claude"].contains(value) else { return }
+        recentType = value
+        if let data = try? JSONEncoder().encode(value) { try? data.write(to: stateDirectory.appendingPathComponent("recent-filter.json"), options: .atomic) }
+    }
+    func applyCloud(_ values: [CloudSession], projects: [CloudProject]) {
+        let previous = cloudSessions
+        cloudSessions = Dictionary(uniqueKeysWithValues: values.map { ("camp:" + $0.id, $0) })
+        let names = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.name) })
+        let imported = values.map { value in
+            CampSession(id: "camp:" + value.id, sessionID: value.localSessionId, provider: value.provider, sourceID: "camp-profile:" + value.profileId, sourceLabel: value.profileLabel, root: "", title: value.title, cwd: names[value.projectId] ?? "Shared project", updated: value.updatedAt.timeIntervalSince1970, path: "", accountID: value.ownerUserId, archived: value.stage == "Done", model: value.model)
+        }
+        for (id, value) in cloudSessions where value.revision > (previous[id]?.revision ?? 0) { stages[id] = Stage(rawValue: value.stage) ?? .ready }
+        sessions = (sessions.filter { !$0.isCloud } + imported).sorted { $0.updated > $1.updated }
+        if let selectedID, selectedID.hasPrefix("camp:"), cloudSessions[selectedID] == nil {
+            self.selectedID = nil; messages = []; cloudHistory = [:]; readGeneration = UUID()
+        }
+    }
+    func isBusy(_ s: CampSession) -> Bool {
+        if let remote = cloudSessions[s.id] {
+            return remote.state == "running" || cloud.requests.contains { $0.sessionId == remote.id && ["claimed", "started", "cancel_requested"].contains($0.state) }
+        }
+        return runningID == s.id || activity[s.id]?.state == "running"
+    }
     func stage(_ session: CampSession) -> Stage {
         if isBusy(session) { return .progress }
         if let live = activity[session.id], ["waiting", "unknown"].contains(live.state) { return .attention }
@@ -303,6 +360,7 @@ final class TranscriptWatch {
     }
     func observeHistory() {
         guard view == "Chat", let s = selected else { transcriptWatch.stop(); return }
+        guard !s.isCloud else { transcriptWatch.stop(); return }
         var paths = Set<String>()
         if !s.path.isEmpty {
             paths.insert(s.path)
@@ -332,7 +390,7 @@ final class TranscriptWatch {
             defer { observing = false }
             do {
                 let values = try JSONSerialization.jsonObject(with: JSONEncoder().encode(homes))
-                let input = try JSONSerialization.data(withJSONObject: ["sources": values, "selectedID": (showSubagents ? subagentsParent?.id : selectedID) ?? ""])
+                let input = try JSONSerialization.data(withJSONObject: ["sources": values, "selectedID": selectedID ?? ""])
                 let result = try decoder.decode(ActivityResult.self, from: await Bridge.call("activity", input: input))
                 applyActivity(result)
             } catch {
@@ -355,11 +413,11 @@ final class TranscriptWatch {
             if let index = indexes[item.id] { sessions[index].title = item.title; sessions[index].model = item.model }
             else { indexes[item.id] = sessions.count; sessions.append(item) }
         }
-        if showSubagents, let parent = subagentsParent, let live = next[parent.id] { children = live.children }
-        if let selected = selected, let live = next[selected.id], !showSubagents { children = live.children }
+        if let selected = selected, let live = next[selected.id] { children = live.children }
     }
     func loadChildren(_ s: CampSession) {
-        subagentsParent = s; children = activity[s.id]?.children ?? []; showSubagents = true; childrenLoading = true
+        guard !s.isCloud else { banner = "Subagent transcripts have not been shared for this session"; return }
+        subagentsParent = s; children = activity[s.id]?.children ?? []; childrenLoading = true
         Task {
             defer { childrenLoading = false }
             do {
@@ -371,6 +429,11 @@ final class TranscriptWatch {
     }
     func move(_ id: String, _ stage: Stage) {
         guard let session = sessions.first(where: { $0.id == id }), !isBusy(session) else { return }
+        if let remote = cloudSessions[id] {
+            Task { do { try await cloud.queueStage(session: remote, stage: stage); stages[id] = stage }
+                catch { banner = error.localizedDescription } }
+            return
+        }
         stages[id] = stage
         if let data = try? JSONEncoder().encode(stages) {
             let url = stateDirectory.appendingPathComponent("board.json")
@@ -384,9 +447,10 @@ final class TranscriptWatch {
         let failedRoots = Set(result.failedRoots ?? [])
         let importedIDs = Set(result.sessions.map(\.id))
         // A temporary read failure must not remove chats or interrupt the open one.
-        let retained = sessions.filter { !importedIDs.contains($0.id) &&
+        let retained = sessions.filter { !$0.isCloud && !importedIDs.contains($0.id) &&
             (failedRoots.contains($0.root) || $0.id == selectedID || $0.id == runningID) }
-        let updated = (result.sessions + retained).sorted { $0.updated > $1.updated }
+        let updated = (result.sessions + retained + sessions.filter(\.isCloud)).sorted { $0.updated > $1.updated }
+        let indexChanged = sessions != updated || sources != result.sources
         if sessions != updated { sessions = updated }
         var updatedSources = result.sources
         for old in sources where failedRoots.contains(old.root) {
@@ -394,6 +458,11 @@ final class TranscriptWatch {
             updatedSources.append(old)
         }
         if sources != updatedSources { sources = updatedSources }
+        if indexChanged {
+            let snapshot = ImportResult(sessions: updated.filter { !$0.isCloud }, sources: updatedSources, errors: [])
+            let directory = stateDirectory
+            Task { await LocalSessionIndex.shared.save(snapshot, directory: directory) }
+        }
         importError = result.errors.joined(separator: " · ")
         if selectedID == nil { selectedID = sessions.first?.id }
         observeHistory()
@@ -438,6 +507,7 @@ final class TranscriptWatch {
     }
     func loadHistory(more: Bool = false, silent: Bool = false) {
         guard let s = selected, runningID == nil else { return }
+        if let remote = cloudSessions[s.id] { loadCloudHistory(remote, more: more, silent: silent); return }
         guard !silent || historyRequestID == nil else { return }
         if more { historyLimit += 120 }
         let generation = UUID(); readGeneration = generation; historyRequestID = s.id
@@ -458,15 +528,47 @@ final class TranscriptWatch {
             } catch { if readGeneration == generation && !silent { banner = error.localizedDescription } }
         }
     }
+    private func loadCloudHistory(_ session: CloudSession, more: Bool, silent: Bool) {
+        let id = "camp:" + session.id
+        if silent && historyRequestID != nil { return }
+        let generation = UUID(); readGeneration = generation; historyRequestID = id
+        if !silent { loading = true }
+        Task {
+            defer { if readGeneration == generation { loading = false; historyRequestID = nil } }
+            if !more && messages.isEmpty {
+                let cached = await cloud.cachedTranscript(session: session)
+                if readGeneration == generation { messages = cached.map { Message(id: $0.id, role: $0.role, text: $0.text) } }
+            }
+            do {
+                let page = try await cloud.transcript(session: session, before: more ? (cloudHistoryBefore[id] ?? 0) : 0, revision: more ? (cloudHistoryRevision[id] ?? 0) : 0)
+                guard readGeneration == generation, selectedID == id else { return }
+                let combined = more ? (cloudHistory[id] ?? []) + page.messages : page.messages
+                let unique = Dictionary(combined.map { ($0.id, $0) }, uniquingKeysWith: { a, b in a.revision > b.revision ? a : b })
+                let ordered = unique.values.filter { !$0.removed }.sorted { $0.ordinal < $1.ordinal }
+                cloudHistory[id] = ordered; cloudHistoryBefore[id] = page.before; cloudHistoryRevision[id] = page.revision
+                remoteHasMore = page.hasMore; messages = ordered.map { Message(id: $0.id, role: $0.role, text: $0.text) }
+                historyTotal = messages.count + (page.hasMore ? 1 : 0)
+            } catch { if readGeneration == generation && !silent { banner = error.localizedDescription } }
+        }
+    }
     func object(_ s: CampSession) -> [String: Any] { (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(s))) as? [String: Any] ?? [:] }
     func send() {
         guard let s = selected, runningID == nil, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if let remote = cloudSessions[s.id] {
+            let text = draft, model = modelChoices[s.id] ?? remote.model, choice = tuning(s)
+            Task {
+                do { try await cloud.queuePrompt(session: remote, text: text, model: model, tuning: choice); if draft == text { draft = "" } }
+                catch { banner = error.localizedDescription }
+            }
+            return
+        }
         guard activity[s.id] == nil else { banner = "This session is open in \(s.provider). Close it there before sending from Camp."; return }
         let prompt = draft
         draft = ""
         start(s, prompt: prompt, model: modelChoices[s.id] ?? "", tuning: tuning(s))
     }
     func start(_ s: CampSession, prompt: String, model: String, tuning: ModelTuning, queuedID: String? = nil) {
+        guard !s.isCloud else { banner = "Shared work must run on its owning Mac"; return }
         let p: Process
         do { p = try Bridge.process("conversation") } catch { draft = prompt; banner = error.localizedDescription; queuePaused = true; return }
         drafts[s.id] = nil; liveText = ""; banner = ""; runningID = s.id
@@ -620,6 +722,7 @@ struct Mascot: View {
 }
 struct RootView: View {
     @StateObject var store = CampStore()
+    @State private var showCamp = false
     var body: some View {
         HStack(spacing: 0) {
             sidebar
@@ -635,10 +738,11 @@ struct RootView: View {
         }.foregroundStyle(campInk).background(campCream)
         .frame(minWidth: 1060, minHeight: 720)
         .onAppear { store.refresh() }
+        .task { await store.cloud.restore() }
         .task { while !Task.isCancelled { try? await Task.sleep(for: .seconds(5)); if !Task.isCancelled { store.pollUpdates() } } }
         .onChange(of: store.view) { _, value in store.observeHistory(); if value == "Chat" { store.loadHistory() } }
         .sheet(isPresented: $store.sourceSheet) { SourcesView(store: store) }
-        .sheet(isPresented: $store.showSubagents) { SubagentsView(store: store) }
+        .sheet(isPresented: $showCamp) { CampConnectionView(cloud: store.cloud) }
     }
     var sidebar: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -678,7 +782,7 @@ struct RootView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 5) { Text(store.view == "Board" ? "Your Camp for big ideas" : store.selected?.title ?? "Choose a session").font(.system(size: 23, weight: .semibold)).lineLimit(1); Text(store.view == "Board" ? "\(store.filtered.count.formatted()) \(store.filtered.count == 1 ? "session" : "sessions") · Pick up where you left off" : "\(store.selected?.provider ?? "") · \(store.selected?.project ?? "")").font(.system(size: 12)).foregroundStyle(campMuted) }
                 Spacer()
-                Button { store.refresh() } label: { if store.importing { ProgressView().controlSize(.small) } else { Label("Refresh", systemImage: "arrow.clockwise").font(.system(size: 12)) } }.disabled(store.importing)
+                CampConnectionButton(cloud: store.cloud) { showCamp = true }
             }
             HStack {
                 Picker("View", selection: $store.view) { Text("Board").tag("Board"); Text("Chat").tag("Chat") }.pickerStyle(.segmented).frame(width: 180)
@@ -732,39 +836,38 @@ struct SessionCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(session.provider.uppercased()).font(.system(size: 9, weight: .semibold)).tracking(0.7).foregroundStyle(session.provider == "Codex" ? campGreen : Color(hex: 0xB57554))
+                ProviderMark(provider: session.provider, size: 17)
+                Text(session.provider).font(.system(size: 10, weight: .medium)).foregroundStyle(campMuted)
+                if session.isCloud { Image(systemName: "person.2").font(.system(size: 9)).foregroundStyle(campMuted).help("Shared Camp session") }
                 Spacer()
                 Menu { ForEach(Stage.allCases, id: \.self) { dest in Button("Move to \(dest.rawValue)") { store.move(session.id, dest) } } } label: { Image(systemName: "ellipsis").frame(width: 24, height: 20) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Move \(session.title)")
             }
             Button { store.open(session) } label: {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(3).multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading).frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34, alignment: .topLeading)
                     HStack(spacing: 4) { Image(systemName: "folder"); Text(session.project.isEmpty ? "No project" : session.project).lineLimit(1) }.font(.system(size: 10)).foregroundStyle(campMuted)
                     HStack { Text(session.sourceLabel).lineLimit(1); Spacer(); Text(Date(timeIntervalSince1970: session.updated), style: .relative).lineLimit(1) }.font(.system(size: 9)).foregroundStyle(campMuted)
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain)
             Divider().overlay(campInk.opacity(0.04))
             ModelMenu(store: store, session: session).frame(maxWidth: .infinity, alignment: .leading)
-            Button { store.loadChildren(session) } label: {
+            Button { store.open(session) } label: {
                 HStack { Label("Subagents", systemImage: "person.2"); Spacer(); Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold)) }.contentShape(Rectangle())
             }.buttonStyle(.plain).font(.system(size: 10)).foregroundStyle(campMuted).help("Show subagents")
-            if !store.queued(session).isEmpty {
-                Label("\(store.queued(session).count) queued", systemImage: "text.line.first.and.arrowtriangle.forward").font(.system(size: 10)).foregroundStyle(campGreen)
-            }
-            if running || live != nil {
-                VStack(alignment: .leading, spacing: 7) {
+            Spacer(minLength: 0)
+            HStack(alignment: .center, spacing: 6) {
+                if running || live != nil {
                     HStack(spacing: 7) {
                         if running { ProgressView().controlSize(.mini).frame(width: 12, height: 12).accessibilityLabel("Session running") }
                         else { Circle().fill(campGreen).frame(width: 5, height: 5) }
-                        Text(statusText).fixedSize(horizontal: false, vertical: true)
-                    }.foregroundStyle(campGreen)
-                    ForEach((live?.children ?? []).filter { $0.status == "running" }.prefix(3)) { child in
-                        Label("\(child.name) · \(child.phase)", systemImage: "arrow.turn.down.right").lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                    }
-                }.font(.system(size: 10)).frame(maxWidth: .infinity, alignment: .leading).padding(9).background(campGreen.opacity(0.07)).clipShape(RoundedRectangle(cornerRadius: 7))
-            }
-        }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(.white).clipShape(RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(campInk.opacity(0.08)))
+                        Text(statusText).lineLimit(1)
+                    }.foregroundStyle(campGreen).font(.system(size: 10))
+                } else { Text(store.stage(session).rawValue).font(.system(size: 10)).foregroundStyle(campMuted) }
+                Spacer(minLength: 0)
+                if !store.queued(session).isEmpty { Text("\(store.queued(session).count) queued").font(.system(size: 9)).foregroundStyle(campMuted) }
+            }.frame(height: 17)
+        }.padding(14).frame(maxWidth: .infinity).frame(height: 264, alignment: .topLeading).background(.white).clipShape(RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(campInk.opacity(0.08)))
             .contextMenu { ForEach(Stage.allCases, id: \.self) { dest in Button("Move to \(dest.rawValue)") { store.move(session.id, dest) } } }
     }
 }
@@ -775,21 +878,67 @@ struct TranscriptBottomKey: PreferenceKey {
 }
 struct ChatView: View {
     @ObservedObject var store: CampStore
-    @State private var followsLatest = true
+    @State private var pickedChild: ChildSession?
+    var currentChild: ChildSession? { store.children.first { $0.id == pickedChild?.id } ?? pickedChild }
     var body: some View {
         HStack(spacing: 0) {
-            ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Recent sessions").font(.system(size: 12, weight: .medium))
+                    Spacer()
+                    Menu { ForEach(["All types", "Planning", "Codex", "Claude"], id: \.self) { value in Button(value) { store.setRecentType(value) } } } label: { Image(systemName: "line.3.horizontal.decrease").frame(width: 28, height: 28) }
+                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Filter recent sessions").accessibilityLabel("Filter recent sessions")
+                }.padding(.horizontal, 16).padding(.top, 10)
+                Text(store.recentType).font(.system(size: 10)).foregroundStyle(campMuted).padding(.horizontal, 16)
+                ScrollView {
                 LazyVStack(spacing: 5) {
-                    ForEach(store.filtered.prefix(250)) { s in Button { store.open(s) } label: {
-                        VStack(alignment: .leading, spacing: 5) { Text(s.title).font(.system(size: 12, weight: .medium)).lineLimit(2); Text("\(s.provider) · \(s.project)").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1) }.frame(maxWidth: .infinity, alignment: .leading).padding(12).background(store.selectedID == s.id ? campGreen.opacity(0.10) : .clear).clipShape(RoundedRectangle(cornerRadius: 8))
+                    ForEach(store.recentSessions) { s in Button { store.open(s) } label: {
+                        HStack(alignment: .top, spacing: 8) {
+                            ProviderMark(provider: s.provider, size: 15).padding(.top, 2)
+                            VStack(alignment: .leading, spacing: 5) { Text(s.title).font(.system(size: 12, weight: .medium)).lineLimit(2); Text("\(s.provider) · \(s.project)").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1) }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(12).background(store.selectedID == s.id ? campGreen.opacity(0.10) : .clear).clipShape(RoundedRectangle(cornerRadius: 8))
                     }.buttonStyle(.plain) }
-                    if store.filtered.count > 250 { Text("Search to narrow \(store.filtered.count.formatted()) sessions").font(.caption).foregroundStyle(campMuted).padding() }
+                    if store.recentSessions.isEmpty { Text("No recent \(store.recentType == "All types" ? "" : store.recentType.lowercased() + " ")sessions").font(.caption).foregroundStyle(campMuted).padding() }
                 }.padding(10)
+                }
+                if let session = store.selected {
+                    Divider()
+                    Text("This session").font(.system(size: 11, weight: .medium)).padding(.horizontal, 16)
+                    Button { pickedChild = nil } label: {
+                        Label("Main chat", systemImage: "bubble.left").font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                            .background(pickedChild == nil ? campGreen.opacity(0.1) : .clear).clipShape(RoundedRectangle(cornerRadius: 8))
+                    }.buttonStyle(.plain).padding(.horizontal, 10)
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 5) {
+                            HStack { Text("Subagents"); Spacer(); if store.childrenLoading { ProgressView().controlSize(.mini) }; Text("\(store.children.count)") }
+                                .font(.system(size: 10)).foregroundStyle(campMuted).padding(.horizontal, 10)
+                            ForEach(store.children) { child in
+                                Button { pickedChild = child } label: {
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Image(systemName: "arrow.turn.down.right").foregroundStyle(campMuted)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(child.name).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                                            Text(child.phase.isEmpty ? child.status : "\(child.status) · \(child.phase)").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(2)
+                                        }
+                                        Spacer(minLength: 0)
+                                        if child.status == "running" { ProgressView().controlSize(.mini) }
+                                    }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                                        .background(pickedChild?.id == child.id ? campGreen.opacity(0.1) : .clear).clipShape(RoundedRectangle(cornerRadius: 8))
+                                }.buttonStyle(.plain)
+                            }
+                            if store.children.isEmpty && !store.childrenLoading {
+                                Text(session.isCloud ? "Subagents have not been shared" : "No saved subagents").font(.system(size: 10)).foregroundStyle(campMuted).padding(10)
+                            }
+                        }.padding(.horizontal, 10)
+                    }.frame(maxHeight: 230)
+                }
             }.frame(width: 230)
             Rectangle().fill(campInk.opacity(0.08)).frame(width: 1)
             VStack(spacing: 0) {
-                if let s = store.selected {
-                    HStack { ModelMenu(store: store, session: s); Button { store.loadChildren(s) } label: { Label("Subagents", systemImage: "person.2") }.buttonStyle(.plain).font(.system(size: 11)); Spacer() }.padding(.horizontal, 22).padding(.vertical, 8)
+                if let child = currentChild, let parent = store.selected {
+                    ChildTranscriptView(store: store, parent: parent, child: child)
+                } else if let s = store.selected {
+                    HStack { Label("Main chat", systemImage: "bubble.left").font(.system(size: 11)); Spacer(); ModelMenu(store: store, session: s) }.padding(.horizontal, 22).padding(.vertical, 8)
                     if let live = store.activity[s.id] { Text("\(live.owner) · \(live.state) · Model choice applies to the next Camp reply").font(.system(size: 11)).foregroundStyle(campGreen).padding(.bottom, 8) }
                     HStack { Text(s.sourceLabel).font(.system(size: 10, weight: .medium)); if !s.accountID.isEmpty { Text("· author \(s.accountID.prefix(8))").font(.system(size: 10)).foregroundStyle(campMuted) }; Spacer(); Menu(store.stage(s).rawValue) { ForEach(Stage.allCases, id: \.self) { stage in Button(stage.rawValue) { store.move(s.id, stage) } } }.fixedSize() }.padding(.horizontal, 22).padding(.vertical, 10)
                     GeometryReader { viewport in
@@ -798,7 +947,7 @@ struct ChatView: View {
                             // Pages are bounded to 120 messages; measure their real heights so
                             // scrolling to the end cannot land in a lazy stack's estimated gap.
                             VStack(alignment: .leading, spacing: 22) {
-                                if store.historyTotal > store.messages.count { Button("Load earlier messages (\(store.historyTotal - store.messages.count))") { store.loadHistory(more: true) }.font(.caption) }
+                                if s.isCloud ? store.remoteHasMore : store.historyTotal > store.messages.count { Button("Load earlier messages") { store.loadHistory(more: true) }.font(.caption) }
                                 if store.loading { ProgressView().controlSize(.small) }
                                 ForEach(store.messages) { m in MessageView(message: m) }
                                 if store.runningID == s.id { MessageView(message: Message(id: "live", role: "assistant", text: store.liveText.isEmpty ? "Thinking…" : store.liveText)) }
@@ -808,28 +957,21 @@ struct ChatView: View {
                                     })
                             }.padding(25)
                         }.coordinateSpace(name: "transcript")
-                        .onPreferenceChange(TranscriptBottomKey.self) { bottom in followsLatest = bottom <= viewport.size.height + 60 }
                         .onReceive(store.$messages) { new in
-                            // Published sends before the new message changes the measured
-                            // bottom. Capture the reader's position before that layout pass.
-                            let old = store.messages
-                            if old.isEmpty || (followsLatest && old.first?.id == new.first?.id) {
-                                DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo("bottom", anchor: .bottom) } }
-                            }
+                            DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo("bottom", anchor: .bottom) } }
                         }
                         .onReceive(store.$liveText) { _ in
-                            if followsLatest {
-                                DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo("bottom", anchor: .bottom) } }
-                            }
+                            DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo("bottom", anchor: .bottom) } }
                         }
-                        .onChange(of: store.selectedID) { _, _ in followsLatest = true }
+                        .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
                       }
                     }
                     VStack(alignment: .leading, spacing: 9) {
-                        PromptQueueView(store: store, session: s)
+                        if let remote = store.cloudSessions[s.id] { CloudRequestQueueView(cloud: store.cloud, session: remote) }
+                        else { PromptQueueView(store: store, session: s) }
                         TextEditor(text: $store.draft).font(.system(size: 13)).scrollContentBackground(.hidden).frame(minHeight: 55, maxHeight: 100).padding(8).background(.white).clipShape(RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(campInk.opacity(0.13)))
                         HStack(spacing: 10) {
-                            Text(store.runningID == s.id ? "Steer now or queue for after this turn" : store.activity[s.id] == nil ? "Uses \(s.sourceLabel) login · Chat-only local preview" : "Open in \(s.provider) · Camp queue waits until it is closed")
+                            Text(s.isCloud ? "Saved to Camp · Runs on the session owner's Mac after approval" : store.runningID == s.id ? "Steer now or queue for after this turn" : store.activity[s.id] == nil ? "Uses \(s.sourceLabel) login · Chat-only local preview" : "Open in \(s.provider) · Camp queue waits until it is closed")
                                 .font(.system(size: 10)).foregroundStyle(campMuted).fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 8)
                             if store.runningID == s.id || store.activity[s.id] != nil {
@@ -848,6 +990,11 @@ struct ChatView: View {
                     }.padding(20)
                 } else { Spacer(); Mascot(size: 120); Text("Choose a session to continue").foregroundStyle(campMuted); Spacer() }
             }.frame(maxWidth: .infinity)
+        }
+        .task(id: store.selectedID) {
+            pickedChild = nil
+            if let session = store.selected, !session.isCloud { store.loadChildren(session) }
+            else { store.children = [] }
         }
     }
 }
@@ -929,7 +1076,7 @@ struct ModelMenu: View {
                 if session.provider == "Claude" && !caps.speeds.contains("fast") { Text("Fast requires a supported Opus model") }
             }
         } label: {
-            Label(store.modelLabel(session), systemImage: "cpu").font(.system(size: 10)).lineLimit(1)
+            HStack(spacing: 6) { ProviderMark(provider: session.provider, size: 14); Text(store.modelLabel(session)).font(.system(size: 10)).lineLimit(1) }
         }
         .menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true)
         .disabled(store.runningID == session.id).accessibilityLabel("Model settings for \(session.title)")
@@ -937,53 +1084,6 @@ struct ModelMenu: View {
     }
     @ViewBuilder func row(_ title: String, checked: Bool) -> some View {
         if checked { Label(title, systemImage: "checkmark") } else { Text(title) }
-    }
-}
-struct SubagentsView: View {
-    @ObservedObject var store: CampStore
-    @State private var picked: ChildSession?
-    @State private var messages: [Message] = []
-    @State private var error = ""
-    var currentChild: ChildSession? { store.children.first { $0.id == picked?.id } ?? picked }
-    var loadKey: String { "\(currentChild?.id ?? ""):\(currentChild?.updated ?? 0)" }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("Subagents (\(store.children.count))").font(.title2); Spacer(); if store.childrenLoading { ProgressView().controlSize(.small) }; Button("Done") { store.showSubagents = false } }
-            Text("\(store.subagentsParent?.title ?? "Session") · Read-only transcripts").foregroundStyle(campMuted).lineLimit(1)
-            HStack(alignment: .top) {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(store.children) { child in
-                            Button { picked = child } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(child.name).fontWeight(.medium)
-                                    Text("\(child.status) · \(child.phase)").foregroundStyle(child.status == "running" ? campGreen : campMuted)
-                                    Text(child.model).font(.caption).foregroundStyle(campMuted)
-                                    Text(child.workflow).font(.caption).foregroundStyle(campMuted)
-                                }.frame(maxWidth: .infinity, alignment: .leading).padding(10).background(picked?.id == child.id ? campGreen.opacity(0.1) : .white).clipShape(RoundedRectangle(cornerRadius: 8))
-                            }.buttonStyle(.plain)
-                        }
-                        if store.children.isEmpty && !store.childrenLoading { Text("No saved subagents for this session").foregroundStyle(campMuted) }
-                    }
-                }.frame(width: 245)
-                Divider()
-                ScrollView { VStack(alignment: .leading, spacing: 18) {
-                    if picked == nil { Text("Select a subagent to read its latest messages").foregroundStyle(campMuted) }
-                    if !error.isEmpty { Text(error) }
-                    ForEach(messages) { MessageView(message: $0) }
-                }.padding(12).frame(maxWidth: .infinity, alignment: .leading) }
-            }
-        }.padding(22).frame(width: 880, height: 620).background(campCream)
-        .task(id: loadKey) {
-            messages = []; error = ""
-            guard let child = currentChild, let parent = store.subagentsParent else { return }
-            do {
-                var value = store.object(parent); value["path"] = child.path; value["sessionID"] = child.sessionID; value["isSubagent"] = true
-                let input = try JSONSerialization.data(withJSONObject: ["session": value, "limit": 120])
-                let result = try JSONDecoder().decode(Transcript.self, from: await Bridge.call("transcript", input: input))
-                if picked?.id == child.id { messages = result.messages }
-            } catch { self.error = error.localizedDescription }
-        }
     }
 }
 struct MessageView: View {

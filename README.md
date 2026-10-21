@@ -64,9 +64,12 @@ By default, builds go into `build/` and use ad-hoc signing. Set `CAMP_SIGN_IDENT
 
 ## V1 development
 
-The `codex/capybara-v1` work adds a shared Camp service and native collaboration.
-The service foundation and public Kubernetes/Hetzner templates are under development;
-these features are not included in v0.0.1. See [self-hosting](docs/self-hosting.md)
+The `codex/capybara-v1` work adds a Go shared-Camp service with PostgreSQL,
+email sign-in, membership, versioned transcripts, permission checks, a durable
+prompt queue and live events. The Swift client includes a scoped SQLite cache,
+an offline outbox, Camp connection controls and shared transcript viewing.
+CLI execution of cloud requests and the remaining V1 workflows are still in
+development. These features are not included in v0.0.1. See [self-hosting](docs/self-hosting.md)
 for the current implementation boundary and [the V1 epic](https://github.com/teslashibe/capybara-camp/issues/1)
 for release acceptance.
 
@@ -78,7 +81,7 @@ To publish a website update, upload a ZIP containing only `index.html` at the ar
 
 ## Local data and privacy
 
-Camp stores source paths, cached metadata, board positions, model settings and queued prompts under `~/Library/Application Support/Capybara Camp`. Provider credentials stay in the provider's own storage. Import reads are local; sending a prompt uses the selected CLI and updates that provider's session store.
+Camp stores source paths, cached metadata, board positions, model settings and queued prompts under `~/Library/Application Support/Capybara Camp`. `CAPY_SUPPORT` can select a separate absolute directory for local testing. Provider credentials stay in the provider's own storage. Import reads are local; sending a prompt uses the selected CLI and updates that provider's session store.
 
 Cloud-only conversations and unreadable files belonging to other macOS users are not imported. Camp does not upload transcripts to a Camp service. Do not attach your profile directories, application-support folder or unredacted transcripts to an issue. See [SECURITY.md](SECURITY.md).
 
@@ -89,6 +92,10 @@ Verified multi-account login management, a usage dashboard, automatic credential
 ## Source layout
 
 - `Sources/CapybaraCamp.swift` — SwiftUI app and native state
+- `Sources/CampConnection.swift`, `CampHTTP.swift`, `CampCache.swift` — native Camp connection, event stream and durable local cache
+- `Sources/CampCredentials.swift` — origin-bound native Camp device credentials
+- `server/` — Go API, PostgreSQL migrations and permission/lifecycle tests
+- `deploy/` — public Kubernetes and Hetzner K3s templates
 - `Resources/bridge.py` — local imports and transcript readers
 - `Resources/activity.py` — activity, subagents and model capabilities
 - `Resources/conversation.py` — native CLI connections, streaming and steering

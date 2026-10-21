@@ -27,7 +27,7 @@ for arch in $ARCHS; do
   swiftc -parse-as-library -swift-version 5 -module-name CapybaraCamp \
     -target "$arch-apple-macosx14.0" -O \
     -file-prefix-map "$ROOT=." -debug-prefix-map "$ROOT=." \
-    -framework SwiftUI -framework AppKit Sources/CapybaraCamp.swift -o "$binary"
+    -framework SwiftUI -framework AppKit -framework Security -lsqlite3 Sources/*.swift -o "$binary"
   BINARIES+=("$binary")
 done
 if [ "${#BINARIES[@]}" -eq 1 ]; then

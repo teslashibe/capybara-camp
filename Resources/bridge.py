@@ -6,6 +6,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import sqlite3
@@ -47,7 +48,22 @@ def text_blocks(value):
     return ""
 
 def title_for(value):
-    value = " ".join((value or "").split())
+    # Some CLI titles contain the entire original prompt. Only normalize the
+    # displayed 110 characters, without splitting a multi-megabyte prompt.
+    words, length = [], 0
+    for match in re.finditer(r"\S{1,110}", value or ""):
+        remaining = 110 - length - bool(words)
+        if remaining == 0:
+            words.append("")
+            break
+        if remaining < 0:
+            break
+        word = match.group()[:remaining]
+        words.append(word)
+        length += len(word) + (len(words) > 1)
+        if length >= 110:
+            break
+    value = " ".join(words)
     if value.startswith(("<", "# AGENTS.md", "You are ")):
         return "Imported session"
     return value[:110] or "Untitled session"

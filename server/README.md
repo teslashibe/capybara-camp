@@ -50,6 +50,7 @@ Use `Authorization: Bearer <device-token>` after sign-in.
 | `POST /v1/profiles` | `{local_id, provider, label}`; `local_id` is a SHA-256 hex identifier, never a filesystem path |
 | `GET /v1/camps/{camp}/sessions` | Authorized search with `q`, `limit` and opaque `before` cursor; returns `sessions` and `next` |
 | `PUT /v1/camps/{camp}/sessions/{id}` | Owner-device metadata, explicit sharing and expected revision |
+| `PATCH /v1/camps/{camp}/sessions/{id}/board` | Owner/editor stage change with expected revision; preserves execution ownership |
 | `GET /v1/camps/{camp}/sessions/{id}` | Current authorized metadata |
 | `POST /v1/camps/{camp}/sessions/{id}/transcript` | Expected transcript revision and up to 200 changed messages |
 | `GET /v1/camps/{camp}/sessions/{id}/transcript` | Pinned `revision`, `before` ordinal and `limit`; returns a bounded message page |
