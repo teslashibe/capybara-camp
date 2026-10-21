@@ -4,8 +4,10 @@ These are V1 development templates. The current server implements Camp sign-in,
 devices, membership, projects, selected session sharing, versioned transcripts,
 durable prompt requests and ordered events. The development desktop also runs
 approved shared requests through the owning Mac's local CLI, with leased
-execution and explicit review of uncertain outcomes. Memory and skills are still
-being built. Cloud provider login and execution are scoped
+execution and explicit review of uncertain outcomes. The Go server also persists
+versioned planning tickets and their bounded five-step queue. The native planning
+workspace, memory and skills are still being built. Cloud provider login and
+execution are scoped
 in [Local and cloud execution](cloud-execution.md); the current manifests do not
 yet deploy provider runners. Do not treat these templates
 as the completed V1 release or a production deployment sign-off.

@@ -17,6 +17,33 @@ CHAT_DISABLED_FEATURES = ("hooks", "shell_tool", "unified_exec", "multi_agent", 
                           "view_image", "image_generation", "apps", "plugins", "remote_plugin",
                           "skill_search", "tool_suggest", "sleep_tool", "goals", "request_permissions_tool")
 
+class PlanningOutputLimit(RuntimeError):
+    pass
+
+
+def emit_text(request, emit, text):
+    if request.get("mode") == "planning" and len(text.encode()) > 8192:
+        raise PlanningOutputLimit("The planning response exceeded 8 KB. This call used its allowance; restart with a shorter brief to try again.")
+    emit({"type": "text", "text": text})
+
+
+def emit_usage(emit, usage, codex=False):
+    if not isinstance(usage, dict):
+        return
+    names = ("inputTokens", "outputTokens") if codex else ("input_tokens", "output_tokens")
+    result = {"type": "usage"}
+    for source, target in zip(names, ("inputTokens", "outputTokens")):
+        value = usage.get(source)
+        if type(value) is int and value >= 0:
+            result[target] = value
+    if not codex and "inputTokens" in result:
+        for name in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+            value = usage.get(name, 0)
+            if type(value) is int and value >= 0:
+                result["inputTokens"] += value
+    if len(result) > 1:
+        emit(result)
+
 
 class NativeConnection:
     def __init__(self, command, cwd, env):
@@ -183,7 +210,12 @@ def run(request, input_stream=None, emit=None, command=None):
     request = dict(request)
     request.pop("_camp_mcp", None)
     request.pop("_camp_context_instructions", None)
-    s, prompt = request["session"], request["prompt"]
+    s, prompt = dict(request["session"]), request["prompt"]
+    planning = request.get("mode") == "planning"
+    if request.get("mode", "chat") not in ("chat", "planning"):
+        raise ValueError("Unknown conversation mode")
+    if planning and s.get("provider") == "Claude":
+        s["sessionID"] = str(uuid.uuid4())
     if s.get("provider") not in ("Codex", "Claude") or not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("Choose a session and write a message")
     if not s.get("cwd") or not Path(s["cwd"]).is_dir():
@@ -191,7 +223,8 @@ def run(request, input_stream=None, emit=None, command=None):
     # Validate model and tuning with the existing adapter before starting a process.
     native_command = runtime_command(s, request.get("model", ""), request.get("effort", ""), request.get("speed", ""))
     SUPPORT.mkdir(parents=True, exist_ok=True, mode=0o700)
-    lock_path = SUPPORT / ("run-" + hashlib.sha256(s["id"].encode()).hexdigest() + ".lock")
+    lock_key = "planning:" + s["provider"] if planning else s["id"]
+    lock_path = SUPPORT / ("run-" + hashlib.sha256(lock_key.encode()).hexdigest() + ".lock")
     lock = os.fdopen(os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600), "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -203,7 +236,8 @@ def run(request, input_stream=None, emit=None, command=None):
     controls = queue.Queue()
     previous = {}
     try:
-        assert_available(s)
+        if not planning:
+            assert_available(s)
         if request.get("context"):
             from context_tool import ContextGrant
             grant = ContextGrant(request["context"], SUPPORT)
@@ -213,6 +247,9 @@ def run(request, input_stream=None, emit=None, command=None):
                 command = codex_command(s, grant.server if grant else None)
             else:
                 command = [*native_command, "--input-format", "stream-json", "--replay-user-messages"]
+                if planning:
+                    index = command.index("--resume"); del command[index:index + 2]
+                    command += ["--session-id", s["sessionID"], "--no-session-persistence"]
                 if grant:
                     command.remove("--safe-mode")
                     settings = {"disableAllHooks": True, "autoMemoryEnabled": False}
@@ -251,6 +288,8 @@ def run(request, input_stream=None, emit=None, command=None):
             claude_turn(connection, s, request, controls, emit)
     except InterruptedError:
         emit({'type': 'cancelled', 'text': 'Stopped. Queued prompts are paused.'})
+    except PlanningOutputLimit as error:
+        emit({'type': 'error', 'message': str(error)})
     finally:
         if connection:
             connection.close()
@@ -269,7 +308,13 @@ def codex_turn(c, s, request, controls, emit):
               "config": codex_config(merged, request.get("_camp_mcp")), "developerInstructions": "This is a chat-only preview. Answer directly. Only the Camp context read tool, when configured, is permitted; do not run project tools or delegate work." + request.get("_camp_context_instructions", "")}
     if request.get("model"):
         params["model"] = request["model"]
-    c.rpc("thread/resume", params)
+    if request.get("mode") == "planning":
+        params.pop("threadId")
+        params["ephemeral"] = True
+        params["developerInstructions"] += " This is one bounded planning step. Do not execute the plan or change project files."
+        s["sessionID"] = c.rpc("thread/start", params)["thread"]["id"]
+    else:
+        c.rpc("thread/resume", params)
     turn_params = {"threadId": s["sessionID"], "input": [{"type": "text", "text": request["prompt"]}], "approvalPolicy": "untrusted"}
     for key in ("model", "effort"):
         if request.get(key):
@@ -294,6 +339,8 @@ def codex_turn(c, s, request, controls, emit):
                 return
             if control.get("type") == "steer":
                 try:
+                    if request.get("mode") == "planning":
+                        raise ValueError("Restart the plan to change its frozen brief")
                     if not control.get("text", "").strip():
                         raise ValueError("Write a steering message")
                     c.rpc("turn/steer", {"threadId": s["sessionID"], "expectedTurnId": turn_id,
@@ -311,14 +358,16 @@ def codex_turn(c, s, request, controls, emit):
         method, params = event.get("method"), event.get("params", {})
         if params.get("threadId") not in (None, s["sessionID"]) or params.get("turnId") not in (None, turn_id):
             continue
+        if method == "thread/tokenUsage/updated":
+            emit_usage(emit, params.get("tokenUsage", {}).get("total"), codex=True)
         if method == "item/agentMessage/delta":
             item_id = params["itemId"]
             texts[item_id] = texts.get(item_id, "") + params.get("delta", "")
-            emit({"type": "text", "text": "\n\n".join(texts.values())})
+            emit_text(request, emit, "\n\n".join(texts.values()))
         if method == "item/completed" and params.get("item", {}).get("type") == "agentMessage":
             item = params["item"]
             texts[item["id"]] = item.get("text", "")
-            emit({"type": "text", "text": "\n\n".join(texts.values())})
+            emit_text(request, emit, "\n\n".join(texts.values()))
         if method == "turn/completed" and params.get("turn", {}).get("id") == turn_id:
             turn = params["turn"]
             if turn["status"] != "completed":
@@ -351,7 +400,9 @@ def claude_turn(c, s, request, controls, emit):
                 emit({"type": "cancelled", "text": "Stopped. Queued prompts are paused."})
                 return
             if control.get("type") == "steer":
-                if pending or not ready or not control.get("text", "").strip():
+                if request.get("mode") == "planning":
+                    emit({"type": "steerRejected", "requestID": control.get("id"), "message": "Restart the plan to change its frozen brief"})
+                elif pending or not ready or not control.get("text", "").strip():
                     emit({"type": "steerRejected", "requestID": control.get("id"), "message": "Wait until the current steering request finishes"})
                 else:
                     pending = control
@@ -389,7 +440,7 @@ def claude_turn(c, s, request, controls, emit):
                 delta = event.get("event", {}).get("delta", {})
                 if delta.get("type") == "text_delta":
                     text += delta.get("text", "")
-                    emit({"type": "text", "text": text})
+                    emit_text(request, emit, text)
             elif kind == "assistant":
                 actual_speed = event.get("message", {}).get("usage", {}).get("speed")
                 if actual_speed in ("standard", "fast") and actual_speed != reported_speed:
@@ -399,8 +450,9 @@ def claude_turn(c, s, request, controls, emit):
                 complete = text_blocks(event.get("message", {}).get("content"))
                 if complete:
                     text = complete
-                    emit({"type": "text", "text": text})
+                    emit_text(request, emit, text)
             elif kind == "result":
+                emit_usage(emit, event.get("usage"))
                 if pending and not sent:
                     interrupted_result = True
                 else:

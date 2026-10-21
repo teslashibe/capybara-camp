@@ -82,6 +82,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/camps/{camp}/events", a.authorize(a.events))
 	a.sessionRoutes(mux)
 	a.requestRoutes(mux)
+	a.planningRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -135,6 +136,8 @@ func fail(w http.ResponseWriter, err error) bool {
 		problem(w, 409, "revision_conflict")
 	case errors.Is(err, camp.ErrTransition):
 		problem(w, 409, "request_state_changed")
+	case errors.Is(err, camp.ErrPlanningBudget):
+		problem(w, 409, "token_ceiling_unavailable")
 	case errors.Is(err, camp.ErrInput):
 		problem(w, 400, "invalid_input")
 	default:
