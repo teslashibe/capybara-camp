@@ -209,6 +209,7 @@ final class TranscriptWatch {
     let cloud: CampConnection
     let sharing: CampSharing
     let mentions: SessionMentions
+    let planning: LocalPlanning
     @Published var shareSheet: CampSession?
     @Published var contextInspection: ContextInspection?
     @Published var cloudSessions: [String: CloudSession] = [:]
@@ -316,6 +317,7 @@ final class TranscriptWatch {
     }
     private func stateSnapshot() -> SessionStateSnapshot {
         var running = Set(conversations.keys)
+        running.formUnion(planning.tickets.filter { $0.current.state == "running" }.map(\.id))
         for share in sharing.shares where running.contains(share.local.id) { running.insert("camp:" + share.id) }
         return SessionStateSnapshot(running: running, activity: activity, remote: cloudSessions,
             requests: Set(cloud.requests.filter { ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId)), stages: stages)
@@ -332,6 +334,7 @@ final class TranscriptWatch {
     init(stateDirectory: URL = Bridge.support, conversationProcess: @escaping () throws -> Process = { try Bridge.process("conversation") }) {
         self.stateDirectory = stateDirectory
         self.mentions = SessionMentions(directory: stateDirectory)
+        self.planning = LocalPlanning(directory: stateDirectory, makeProcess: conversationProcess)
         self.conversationProcess = conversationProcess
         #if CAMP_DEVELOPMENT
         cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"), vault: ProcessInfo.processInfo.environment["CAMP_DEV_EPHEMERAL_CREDENTIALS"] == "1" ? MemoryCampCredentials() : CampKeychain(), allowLoopback: true)
@@ -371,7 +374,7 @@ final class TranscriptWatch {
         cloud.worker.nativeSession = { [weak sharing] remote in sharing?.native(for: "camp:" + remote.id) }
         cloud.worker.available = { [weak self] local in
             guard let self else { return false }
-            return self.activity[local.id] == nil && self.conversations.count < 4 && !self.conversations.values.contains { $0.session.provider == local.provider && $0.session.root == local.root }
+            return self.activity[local.id] == nil && self.conversations.count + self.planning.activeCount < 4 && !self.planning.uses(local.provider) && !self.conversations.values.contains { $0.session.provider == local.provider && $0.session.root == local.root }
         }
         cloud.worker.execute = { [weak self] local, request, prompt, history, contexts, completed in
             guard let self else { return nil }
@@ -397,6 +400,38 @@ final class TranscriptWatch {
             guard let self, self.selectedID == "camp:" + id else { return }
             self.loadHistory(silent: true)
         }
+        planning.available = { [weak self] planner in
+            guard let self else { return false }
+            return self.conversations.count + self.planning.activeCount < 4 &&
+                !self.conversations.values.contains { $0.session.provider == planner.session.provider && $0.session.root == planner.session.root }
+        }
+        planning.prepare = { [weak self] planner, references in
+            guard let self, let current = self.sessions.first(where: { $0.id == planner.session.id }),
+                  current.root == planner.session.root, current.sourceID == planner.session.sourceID else {
+                throw CampError.message("This planner profile is no longer imported")
+            }
+            let caps = self.availableModels(current).first { $0.id == planner.model }
+            if let caps {
+                guard (planner.tuning.effort.isEmpty || caps.efforts.contains(planner.tuning.effort)), caps.speeds.contains(planner.tuning.speed) else {
+                    throw CampError.message("The selected planner settings are no longer supported")
+                }
+            } else if !planner.tuning.effort.isEmpty || planner.tuning.speed != "standard" {
+                throw CampError.message("Refresh the planner model's available settings before starting")
+            }
+            try self.mentions.record(references)
+            return try await self.resolveContexts(references, destination: current)
+        }
+        planning.changed = { [weak self] structural in
+            guard let self else { return }
+            if structural { self.syncPlans() }
+        }
+        syncPlans()
+    }
+    private func syncPlans() {
+        guard !planning.tickets.isEmpty else { return }
+        let plans = planning.tickets.map(\.session)
+        sessions = (plans + sessions.filter { $0.provider != "Planning" }).sorted { $0.updated > $1.updated }
+        for plan in planning.tickets { stages[plan.id] = plan.stage }
     }
     var recentSessions: [CampSession] {
         if cachedRecentRevision == filterRevision && cachedRecentType == recentType { return cachedRecent }
@@ -427,6 +462,7 @@ final class TranscriptWatch {
             guard let source = reference.cloud else { return false }
             return reference.scope != cloud.scope?.key || next[reference.id]?.permissionRevision != source.permissionRevision
         }) { run.stop() }
+        checkPlanningSources()
         if let selectedID, let binding = sharing.shares.first(where: { "camp:" + $0.id == selectedID && !$0.shared }),
            let remote = cloudSessions[selectedID], !remote.shared, sessions.contains(where: { $0.id == binding.local.id }) {
             self.selectedID = binding.local.id; readGeneration = UUID()
@@ -441,7 +477,8 @@ final class TranscriptWatch {
         stateSnapshot().busy(s)
     }
     func stage(_ session: CampSession) -> Stage {
-        stateSnapshot().stage(session)
+        if let plan = planning.ticket(session.id) { return plan.stage }
+        return stateSnapshot().stage(session)
     }
     func modelLabel(_ s: CampSession) -> String { modelChoices[s.id] ?? (s.model.isEmpty ? "Session default" : s.model) }
     func selectModel(_ s: CampSession, _ model: String) {
@@ -462,7 +499,15 @@ final class TranscriptWatch {
         let source = sharing.native(for: s.id)?.sourceID ?? s.sourceID
         return modelCatalogs[source] ?? []
     }
-    func shareSource(_ s: CampSession) -> CampSession? { s.isCloud ? sharing.native(for: s.id) : s }
+    func shareSource(_ s: CampSession) -> CampSession? { s.provider == "Planning" ? nil : s.isCloud ? sharing.native(for: s.id) : s }
+    private func checkPlanningSources() {
+        planning.sourcesChanged { references in
+            references.allSatisfy { ref in
+                if let source = ref.cloud { return ref.scope == self.cloud.scope?.key && self.cloudSessions[ref.id]?.permissionRevision == source.permissionRevision }
+                return self.sessions.contains { $0.id == ref.id && !$0.isCloud }
+            }
+        }
+    }
     func tuning(_ s: CampSession) -> ModelTuning { modelTuning[s.id]?[effectiveModel(s)] ?? ModelTuning() }
     func tune(_ s: CampSession, effort: String? = nil, speed: String? = nil) {
         guard conversation(s) == nil else { return }
@@ -486,7 +531,7 @@ final class TranscriptWatch {
     }
     func observeHistory() {
         guard view == "Chat", let s = selected else { transcriptWatch.stop(); return }
-        guard !s.isCloud else { transcriptWatch.stop(); return }
+        guard !s.isCloud, s.provider != "Planning" else { transcriptWatch.stop(); return }
         var paths = Set<String>()
         if !s.path.isEmpty {
             paths.insert(s.path)
@@ -543,6 +588,7 @@ final class TranscriptWatch {
         if let selected = selected, let live = next[sharing.native(for: selected.id)?.id ?? selected.id] { children = live.children }
         if previousActivity != next { sharing.localChanged() }
         if Set(previousActivity.keys) != Set(next.keys) { cloud.worker.scan() }
+        planning.drain()
     }
     func loadChildren(_ s: CampSession) {
         guard !s.isCloud else { banner = "Subagent transcripts have not been shared for this session"; return }
@@ -577,7 +623,7 @@ final class TranscriptWatch {
         let importedIDs = Set(result.sessions.map(\.id))
         // A temporary read failure must not remove chats or interrupt the open one.
         let retained = sessions.filter { !$0.isCloud && !importedIDs.contains($0.id) &&
-            (failedRoots.contains($0.root) || $0.id == selectedID || conversations[$0.id] != nil) }
+            ($0.provider == "Planning" || failedRoots.contains($0.root) || $0.id == selectedID || conversations[$0.id] != nil) }
         let updated = (result.sessions + retained + sessions.filter(\.isCloud)).sorted { $0.updated > $1.updated }
         let indexChanged = sessions != updated || sources != result.sources
         if sessions != updated { sessions = updated }
@@ -589,11 +635,12 @@ final class TranscriptWatch {
         if sources != updatedSources { sources = updatedSources }
         if indexChanged { sharing.localChanged() }
         if indexChanged {
-            let snapshot = ImportResult(sessions: updated.filter { !$0.isCloud }, sources: updatedSources, errors: [])
+            let snapshot = ImportResult(sessions: updated.filter { !$0.isCloud && $0.provider != "Planning" }, sources: updatedSources, errors: [])
             let directory = stateDirectory
             Task { await LocalSessionIndex.shared.save(snapshot, directory: directory) }
         }
         importError = result.errors.joined(separator: " · ")
+        checkPlanningSources(); planning.drain()
         if selectedID == nil { selectedID = sessions.first?.id }
         observeHistory()
     }
@@ -637,7 +684,7 @@ final class TranscriptWatch {
         if historyTotal != result.total { historyTotal = result.total }
     }
     func loadHistory(more: Bool = false, silent: Bool = false) {
-        guard let s = selected, runningID == nil else { return }
+        guard let s = selected, s.provider != "Planning", runningID == nil else { return }
         if let remote = cloudSessions[s.id] { loadCloudHistory(remote, more: more, silent: silent); return }
         guard !silent || historyRequestID == nil else { return }
         if more { historyLimit += 120 }
@@ -730,7 +777,7 @@ final class TranscriptWatch {
     func start(_ s: CampSession, prompt: String, model: String, tuning: ModelTuning, queuedID: String? = nil,
                history: [Message]? = nil, contexts: [SessionContext] = [], references: [SessionReference] = [], completion: ((ConversationResult) -> Void)? = nil) -> Bool {
         guard !s.isCloud, conversations[s.id] == nil else { banner = "This session already has a running turn"; return false }
-        guard conversations.count < 4, !conversations.values.contains(where: { $0.session.provider == s.provider && $0.session.root == s.root }) else {
+        guard conversations.count + planning.activeCount < 4, !planning.uses(s.provider), !conversations.values.contains(where: { $0.session.provider == s.provider && $0.session.root == s.root }) else {
             banner = "This profile is busy. Queue the prompt or wait for its current turn"; return false
         }
         guard activity[s.id] == nil else { banner = "Close this session in \(s.provider) before sending from Camp"; return false }
@@ -764,6 +811,7 @@ final class TranscriptWatch {
             completion?(result)
             self.sharing.localChanged()
             self.cloud.worker.scan()
+            self.planning.drain()
             if result.state == "completed" { self.runNextQueued(sessionID: s.id, history: Array(run.messages.suffix(240))) }
         }
         do {
@@ -882,7 +930,9 @@ struct RootView: View {
                     HStack(alignment: .top) { Image(systemName: "info.circle"); Text(store.banner).textSelection(.enabled); Spacer(); Button { store.banner = "" } label: { Image(systemName: "xmark") }.buttonStyle(.plain) }
                         .font(.system(size: 12)).padding(14).background(Color(hex: 0xF5E7D4))
                 }
-                if store.view == "Board" { BoardView(store: store) } else { ChatView(store: store) }
+                if store.view == "Board" { BoardView(store: store) }
+                else if let id = store.selectedID, store.planning.ticket(id) != nil { PlanningWorkspace(store: store, planning: store.planning, id: id) }
+                else { ChatView(store: store) }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }.foregroundStyle(campInk).background(campCream)
         .frame(minWidth: 1060, minHeight: 720)
@@ -938,6 +988,7 @@ struct RootView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 5) { Text(store.view == "Board" ? "Your Camp for big ideas" : store.selected?.title ?? "Choose a session").font(.system(size: 23, weight: .semibold)).lineLimit(1); Text(store.view == "Board" ? "\(store.filtered.count.formatted()) \(store.filtered.count == 1 ? "session" : "sessions") · Pick up where you left off" : "\(store.selected?.provider ?? "") · \(store.selected?.project ?? "")").font(.system(size: 12)).foregroundStyle(campMuted) }
                 Spacer()
+                Button("Plan together") { store.newPlan() }
                 CampConnectionButton(cloud: store.cloud) { showCamp = true }
             }
             HStack {
@@ -971,7 +1022,8 @@ struct BoardColumn: View {
             ScrollView {
                 LazyVStack(spacing: 10) {
                     ForEach(items.prefix(count)) { s in
-                        SessionCard(store: store, session: s)
+                        if s.provider == "Planning" { PlanningCard(store: store, planning: store.planning, id: s.id) }
+                        else { SessionCard(store: store, session: s) }
                     }
                     if items.count > count { Button("Show 50 more") { count += 50 }.font(.system(size: 11)).padding(8) }
                     if items.isEmpty { VStack(spacing: 10) { Image(systemName: stage == .done ? "leaf" : "tray"); Text("Room for another capybara").font(.system(size: 11)) }.foregroundStyle(campMuted).padding(.vertical, 35).frame(maxWidth: .infinity) }
@@ -1026,7 +1078,7 @@ struct SessionCard: View {
                 Spacer(minLength: 0)
                 if !store.queued(session).isEmpty { Text("\(store.queued(session).count) queued").font(.system(size: 9)).foregroundStyle(campMuted) }
             }.frame(height: 17)
-        }.padding(14).frame(maxWidth: .infinity).frame(height: 264, alignment: .topLeading).background(.white).clipShape(RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(campInk.opacity(0.08)))
+        }.modifier(CampCardStyle())
             .contextMenu { ForEach(Stage.allCases, id: \.self) { dest in Button("Move to \(dest.rawValue)") { store.move(session.id, dest) } } }
     }
 }
@@ -1035,13 +1087,11 @@ struct TranscriptBottomKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
-struct ChatView: View {
+
+struct RecentSessionsList: View {
     @ObservedObject var store: CampStore
-    @State private var pickedChild: ChildSession?
-    var currentChild: ChildSession? { store.children.first { $0.id == pickedChild?.id } ?? pickedChild }
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("Recent sessions").font(.system(size: 12, weight: .medium))
                     Spacer()
@@ -1060,6 +1110,17 @@ struct ChatView: View {
                     if store.recentSessions.isEmpty { Text("No recent \(store.recentType == "All types" ? "" : store.recentType.lowercased() + " ")sessions").font(.caption).foregroundStyle(campMuted).padding() }
                 }.padding(10)
                 }
+        }
+    }
+}
+struct ChatView: View {
+    @ObservedObject var store: CampStore
+    @State private var pickedChild: ChildSession?
+    var currentChild: ChildSession? { store.children.first { $0.id == pickedChild?.id } ?? pickedChild }
+    var body: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                RecentSessionsList(store: store)
                 if let session = store.selected {
                     Divider()
                     Text("This session").font(.system(size: 11, weight: .medium)).padding(.horizontal, 16)
@@ -1202,8 +1263,27 @@ struct PromptQueueView: View {
 struct ModelMenu: View {
     @ObservedObject var store: CampStore
     let session: CampSession
-    var caps: ModelOption { store.capabilities(session) }
-    var choice: ModelTuning { store.tuning(session) }
+    static func effortName(_ value: String) -> String { ModelSettingsMenu.effortName(value) }
+    static func speedName(_ value: String) -> String { ModelSettingsMenu.speedName(value) }
+    var body: some View {
+        ModelSettingsMenu(provider: session.provider, title: session.title, sessionModel: session.model,
+            modelLabel: store.modelLabel(session), models: store.availableModels(session), caps: store.capabilities(session),
+            choice: store.tuning(session), locked: store.conversation(session) != nil,
+            selectModel: { store.selectModel(session, $0) }, tune: { store.tune(session, effort: $0, speed: $1) })
+    }
+}
+struct ModelSettingsMenu: View {
+    let provider: String
+    let title: String
+    let sessionModel: String
+    let modelLabel: String
+    let models: [ModelOption]
+    let caps: ModelOption
+    let choice: ModelTuning
+    let locked: Bool
+    var context = "Model for the next Camp reply"
+    let selectModel: (String) -> Void
+    let tune: (String?, String?) -> Void
     var effortTitle: String { Self.effortName(choice.effort) }
     static func effortName(_ value: String) -> String {
         switch value { case "": return "Default"; case "xhigh": return "Extra high"; default: return value.capitalized }
@@ -1211,41 +1291,48 @@ struct ModelMenu: View {
     static func speedName(_ value: String) -> String { value == "ultrafast" ? "Ultra Fast" : value.capitalized }
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            settingsMenu
+            if locked {
+                modelLabelView.accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Model settings for \(title)")
+                    .accessibilityValue("\(modelLabel), \(effortTitle) effort, \(Self.speedName(choice.speed)) speed, fixed for this run")
+            } else { settingsMenu }
             Text("\(effortTitle) effort · \(Self.speedName(choice.speed))")
                 .font(.system(size: 9)).foregroundStyle(campMuted).lineLimit(1)
         }
     }
     var settingsMenu: some View {
         Menu {
-            Text("Model for the next Camp reply")
-            Button("Use session model") { store.selectModel(session, "") }
-            if !session.model.isEmpty { Button(session.model) { store.selectModel(session, session.model) } }
-            ForEach(store.availableModels(session).filter(\.showInPicker)) { option in
-                Button(option.label) { store.selectModel(session, option.id) }
+            Text(context)
+            Button("Use session model") { selectModel("") }
+            if !sessionModel.isEmpty { Button(sessionModel) { selectModel(sessionModel) } }
+            ForEach(models.filter(\.showInPicker)) { option in
+                Button(option.label) { selectModel(option.id) }
             }
             Divider()
             Menu("Effort · \(effortTitle)") {
                 Text("More reasoning can take longer and use more tokens")
-                Button { store.tune(session, effort: "") } label: { row("Default", checked: choice.effort.isEmpty) }
+                Button { tune("", nil) } label: { row("Default", checked: choice.effort.isEmpty) }
                 ForEach(caps.efforts, id: \.self) { level in
-                    Button { store.tune(session, effort: level) } label: { row(Self.effortName(level), checked: choice.effort == level) }
+                    Button { tune(level, nil) } label: { row(Self.effortName(level), checked: choice.effort == level) }
                 }
                 if caps.efforts.isEmpty { Text("Effort is not advertised for this model") }
             }
             Menu("Speed · \(Self.speedName(choice.speed))") {
                 Text("Faster modes can use more allowance or credits")
                 ForEach(caps.speeds, id: \.self) { speed in
-                    Button { store.tune(session, speed: speed) } label: { row(Self.speedName(speed), checked: choice.speed == speed) }
+                    Button { tune(nil, speed) } label: { row(Self.speedName(speed), checked: choice.speed == speed) }
                 }
-                if session.provider == "Claude" && !caps.speeds.contains("fast") { Text("Fast requires a supported Opus model") }
+                if provider == "Claude" && !caps.speeds.contains("fast") { Text("Fast requires a supported Opus model") }
             }
         } label: {
-            HStack(spacing: 6) { ProviderMark(provider: session.provider, size: 14); Text(store.modelLabel(session)).font(.system(size: 10)).lineLimit(1) }
+            modelLabelView
         }
         .menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true)
-        .disabled(store.conversation(session) != nil).accessibilityLabel("Model settings for \(session.title)")
-        .accessibilityValue("\(store.modelLabel(session)), \(effortTitle) effort, \(Self.speedName(choice.speed)) speed")
+        .disabled(locked).accessibilityLabel("Model settings for \(title)")
+        .accessibilityValue("\(modelLabel), \(effortTitle) effort, \(Self.speedName(choice.speed)) speed")
+    }
+    private var modelLabelView: some View {
+        HStack(spacing: 6) { ProviderMark(provider: provider, size: 14); Text(modelLabel).font(.system(size: 10)).foregroundStyle(campInk).lineLimit(1) }
     }
     @ViewBuilder func row(_ title: String, checked: Bool) -> some View {
         if checked { Label(title, systemImage: "checkmark") } else { Text(title) }

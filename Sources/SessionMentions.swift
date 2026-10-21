@@ -106,6 +106,13 @@ extension CampStore {
     }
     func contextPreview(_ candidate: CampSession, limit: Int = 120) async throws -> ContextPreview {
         guard let session = sessions.first(where: { $0.id == candidate.id }) else { throw CampError.message("This session is no longer available") }
+        if let plan = planning.ticket(session.id) {
+            let messages = plan.versions.flatMap { version in
+                [Message(id: "\(plan.id):\(version.number):brief", role: "user", text: version.brief)] +
+                    version.steps.filter { !$0.output.isEmpty }.map { Message(id: "\(plan.id):\(version.number):\($0.ordinal)", role: "assistant", text: $0.output) }
+            }
+            return ContextPreview(messages: Array(messages.suffix(limit)), total: messages.count)
+        }
         if let remote = cloudSessions[session.id] {
             let page = try await cloud.transcript(session: remote, before: 0, revision: 0)
             return ContextPreview(messages: page.messages.filter { !$0.removed }.map { Message(id: $0.id, role: $0.role, text: $0.text) }, total: page.messages.count + (page.hasMore ? 1 : 0), cloud: CloudSourceRef(sessionId: remote.id, transcriptRevision: page.revision, permissionRevision: remote.permissionRevision), before: page.before)

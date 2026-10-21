@@ -1,8 +1,24 @@
 # Planning workflow
 
-The V1 development server has a durable five-step planning queue. The native
-planning workspace and its worker integration are still being built. This is
-not yet a usable end-to-end Plan together feature.
+The V1 development server has a durable five-step planning queue. The Mac app
+also has a private local planning coordinator and paired-chat workspace. Local
+plans persist on the owning Mac and use isolated official CLI turns. The native
+workspace is not yet connected to the shared planning queue or cloud runners;
+implementation approval and execution remain release work.
+
+The local workspace includes a saved board card, independently selected
+profiles and model settings, pinned session context, separate draft/review
+transcripts, combined output and version history. It shares the ordinary
+session card dimensions, provider marks, model menu and recent-session list.
+Leaving the workspace keeps planning active. Pause stops the next step from
+starting; cancellation stops active turns. Start over preserves the prior
+version, and an unconfirmed result requires explicit review before restarting.
+
+Private state is bounded to 200 tickets, 100 versions per ticket and a 16 MiB
+file. It is stored with owner-only permissions. Every step is persisted before
+launch, and a saved starting/running step becomes outcome unknown after an app
+restart. A failed save prevents new provider work. Streaming text updates only
+the open planning workspace; board updates occur at state transitions.
 
 One ticket retains every plan version. A version freezes its brief, selected
 source message ranges, two provider profiles, model/effort/speed settings and
@@ -28,7 +44,8 @@ The initial API defaults to strict token ceilings and refuses to start because
 these CLI adapters cannot guarantee those ceilings. Explicit `budget_policy:
 "calls"` enables the five-step workflow with 40,000 input and 8,000 output token
 targets for reporting only. The release default is awaiting the owner's budget
-choice; these targets must not be described as enforced caps.
+choice; these targets must not be described as enforced caps. The native
+workspace requires an explicit five-turn selection and leaves it off by default.
 
 Pause prevents another claim or start. Cancellation requests stop active work
 and fences queued steps. Restart creates a new immutable version under the same
@@ -61,5 +78,9 @@ same image for the migration job and API.
 Tests cover the five-step sequence, preserved output/settings, private events,
 strict-budget refusal, cancellation, paused claims, version restart, late
 completion, source revocation, unknown-outcome recovery and provider concurrency.
-Actual two-provider planning, implementation approval and the native paired-chat
-workspace remain release work.
+Native tests exercise isolated mode, five-step ordering, independent settings,
+pause/resume, preserved restart history, unknown-outcome recovery, bounded
+outputs and usage parsing. Computer-use checks use a clearly synthetic provider
+fixture in a disposable development app; they do not prove actual provider
+execution. Real two-provider validation, shared worker integration and
+implementation approval remain release work.

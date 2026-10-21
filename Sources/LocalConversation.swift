@@ -10,10 +10,19 @@ private func conversationChunk(_ handle: FileHandle, limit: Int) throws -> Data 
     }
 }
 
+struct ConversationUsage: Codable, Equatable, Sendable {
+    var inputTokens: Int64?
+    var outputTokens: Int64?
+}
+
+enum ConversationMode: String { case chat, planning }
+
 struct ConversationResult: Sendable {
     let state: String
     let message: String
     let accepted: Bool
+    var output = ""
+    var usage = ConversationUsage()
 }
 
 // A single official CLI conversation. Its state is independent of the visible
@@ -41,6 +50,8 @@ struct ConversationResult: Sendable {
     private var terminal: String?
     private var stopped = false
     private var finished = false
+    private var mode = ConversationMode.chat
+    private var usage = ConversationUsage()
     static let lineLimit = 4 * 1024 * 1024
 
     init(session: CampSession, history: [Message], prompt: String, queueID: String? = nil, references: [SessionReference] = []) {
@@ -50,12 +61,13 @@ struct ConversationResult: Sendable {
     }
 
     func start(prompt: String, model: String, tuning: ModelTuning,
-               contexts: [SessionContext] = [],
+               contexts: [SessionContext] = [], mode: ConversationMode = .chat,
                makeProcess: () throws -> Process = { try Bridge.process("conversation") }) throws {
         guard process == nil, !finished, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               prompt.utf8.count <= 65536 else { throw CampError.message("Write a prompt under 64 KB") }
+        self.mode = mode
         let p = try makeProcess(), out = Pipe(), err = Pipe(), stdin = Pipe()
-        var payload = try JSONSerialization.data(withJSONObject: ["session": try JSONSerialization.jsonObject(with: JSONEncoder().encode(session)), "prompt": prompt, "model": model, "effort": tuning.effort, "speed": tuning.speed, "context": JSONSerialization.jsonObject(with: JSONEncoder().encode(contexts))])
+        var payload = try JSONSerialization.data(withJSONObject: ["session": try JSONSerialization.jsonObject(with: JSONEncoder().encode(session)), "prompt": prompt, "model": model, "effort": tuning.effort, "speed": tuning.speed, "context": JSONSerialization.jsonObject(with: JSONEncoder().encode(contexts)), "mode": mode.rawValue])
         payload.append(10)
         p.standardOutput = out; p.standardError = err; p.standardInput = stdin
         let writer = ConversationInput(stdin.fileHandleForWriting)
@@ -86,7 +98,8 @@ struct ConversationResult: Sendable {
                         guard let value = try JSONSerialization.jsonObject(with: line) as? [String: Any], let type = value["type"] as? String else {
                             throw CampError.message("The local CLI returned an unreadable event")
                         }
-                        await self?.receive(type, text: value["text"] as? String ?? value["message"] as? String ?? "", requestID: value["requestID"] as? String)
+                        let usage = ConversationUsage(inputTokens: Self.tokenCount(value["inputTokens"]), outputTokens: Self.tokenCount(value["outputTokens"]))
+                        await self?.receive(type, text: value["text"] as? String ?? value["message"] as? String ?? "", requestID: value["requestID"] as? String, usage: usage)
                     }
                     guard buffer.count <= limit else { throw CampError.message("The CLI response exceeded the event size limit") }
                 }
@@ -99,11 +112,21 @@ struct ConversationResult: Sendable {
         }
     }
 
-    private func receive(_ type: String, text value: String, requestID: String?) {
-        guard !finished else { return }
+    nonisolated private static func tokenCount(_ value: Any?) -> Int64? {
+        guard let number = value as? NSNumber, String(cString: number.objCType) != "c" else { return nil }
+        let count = number.doubleValue
+        guard count.isFinite, count >= 0, count <= 9_007_199_254_740_991, count.rounded() == count else { return nil }
+        return number.int64Value
+    }
+    private func receive(_ type: String, text value: String, requestID: String?, usage: ConversationUsage = ConversationUsage()) {
+        guard !finished, terminal != "failed" else { return }
         switch type {
         case "started": accepted = true; ready = true; didAccept?()
         case "text":
+            if mode == .planning, messages.filter({ $0.role == "assistant" }).reduce(0, { $0 + $1.text.utf8.count + 2 }) + value.utf8.count > 8192 {
+                terminal = "failed"; notice = "The planning response exceeded 8 KB. Restart with a shorter brief to try again."
+                stop(); changed?(); return
+            }
             pendingText = value
             if flushTask == nil {
                 flushTask = Task { [weak self] in
@@ -121,6 +144,11 @@ struct ConversationResult: Sendable {
         case "cancelled": terminal = "cancelled"; notice = value
         case "error": terminal = "failed"; notice = value
         case "notice": notice = value
+        case "usage":
+            // Codex chat counters are cumulative for the resumed thread. Planning
+            // starts fresh, so its final counters describe this isolated step.
+            if let input = usage.inputTokens { self.usage.inputTokens = input }
+            if let output = usage.outputTokens { self.usage.outputTokens = output }
         default: return
         }
         changed?()
@@ -145,7 +173,8 @@ struct ConversationResult: Sendable {
         else if terminal == "failed" { state = "failed" }
         else { state = "uncertain" }
         let message = notice.isEmpty && state != "completed" ? (error.isEmpty ? "The CLI stopped before confirming the result. Check the transcript before retrying." : error) : notice
-        completed?(ConversationResult(state: state, message: message, accepted: accepted))
+        completed?(ConversationResult(state: state, message: message, accepted: accepted,
+            output: messages.filter { $0.role == "assistant" }.map(\.text).joined(separator: "\n\n"), usage: usage))
         changed = nil; completed = nil; didAccept = nil
     }
     func stop() {
@@ -160,7 +189,7 @@ struct ConversationResult: Sendable {
         }
     }
     func steer(_ value: String) throws {
-        guard ready, !steering, pendingSteer == nil, !stopped, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, value.utf8.count <= 65536, let input else {
+        guard mode == .chat, ready, !steering, pendingSteer == nil, !stopped, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, value.utf8.count <= 65536, let input else {
             throw CampError.message("Wait for the active turn before steering")
         }
         let id = UUID().uuidString

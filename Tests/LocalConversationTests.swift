@@ -123,6 +123,43 @@ import Foundation
         try await until { result != nil }
         precondition(result?.state == "uncertain")
         precondition(Bridge.activeProcesses.isEmpty)
-        print("PASS: background navigation, per-session queues, profile serialization, cancellation and bounded process IO")
+        result = nil
+        let isolated = LocalConversation(session: a, history: [], prompt: "plan")
+        isolated.completed = { result = $0 }
+        try isolated.start(prompt: "plan", model: "fixture", tuning: ModelTuning(), mode: .planning, makeProcess: {
+            process("""
+            import json,sys,time
+            request=json.loads(sys.stdin.readline())
+            assert request['mode']=='planning'
+            print('{"type":"started"}',flush=True)
+            time.sleep(.15)
+            print('{"type":"text","text":"first"}',flush=True)
+            print('{"type":"boundary"}',flush=True)
+            print('{"type":"text","text":"second"}',flush=True)
+            print('{"type":"usage","inputTokens":123,"outputTokens":true}',flush=True)
+            print('{"type":"done"}',flush=True)
+            """)
+        })
+        try await until { isolated.ready }
+        do { try isolated.steer("Change the frozen plan"); preconditionFailure("Planning accepted steering") } catch {}
+        try await until { result != nil }
+        precondition(result?.state == "completed" && result?.output == "first\n\nsecond")
+        precondition(result?.usage.inputTokens == 123 && result?.usage.outputTokens == nil)
+
+        result = nil
+        let overflow = LocalConversation(session: a, history: [], prompt: "plan")
+        overflow.completed = { result = $0 }
+        try overflow.start(prompt: "plan", model: "fixture", tuning: ModelTuning(), mode: .planning, makeProcess: {
+            process("""
+            import json,sys
+            sys.stdin.readline()
+            for event in [{'type':'started'},{'type':'text','text':'a'*8000},{'type':'boundary'},{'type':'text','text':'b'*300},{'type':'done'}]:
+                print(json.dumps(event),flush=True)
+            """)
+        })
+        try await until { result != nil }
+        precondition(result?.state == "failed" && result!.output.utf8.count <= 8192)
+        precondition(Bridge.activeProcesses.isEmpty)
+        print("PASS: background navigation, queues, cancellation, isolated planning, usage and bounded process IO")
     }
 }
