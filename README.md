@@ -62,6 +62,12 @@ Tests use local fixtures and fake CLI processes; they do not need provider accou
 
 By default, builds go into `build/` and use ad-hoc signing. Set `CAMP_SIGN_IDENTITY` for your own certificate, `CAMP_APP_PATH` for a different output bundle, or `CAMP_BUNDLE_ID` for a different identifier. The default identifier is `com.capybaracamp.app`. Repeated builds keep that identifier; a matching binary hash across different builds is not promised.
 
+## Website
+
+The public website is hosted on Cloudflare Pages at [capybaracamp.com](https://capybaracamp.com), using the `capybara-camp` Direct Upload project. Its source is `docs/index.html`; `docs/_redirects` sends the `www` address to the main domain.
+
+To publish a website update, upload a ZIP containing only those two files at the archive root. Do not upload the repository or a build directory: those can include local diagnostics. Direct Upload is separate from GitHub pushes. The GitHub Pages build remains a preview mirror.
+
 ## Local data and privacy
 
 Camp stores source paths, cached metadata, board positions, model settings and queued prompts under `~/Library/Application Support/Capybara Camp`. Provider credentials stay in the provider's own storage. Import reads are local; sending a prompt uses the selected CLI and updates that provider's session store.
