@@ -138,7 +138,7 @@ enum Bridge {
     }()
     static func process(_ action: String) throws -> Process {
         let p = Process()
-        if ["scan", "transcript", "export-page", "add-source", "children"].contains(action) {
+        if ["scan", "transcript", "export-page", "add-source", "children", "activity"].contains(action) {
             let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/camp-local")
             guard FileManager.default.isExecutableFile(atPath: helper.path) else { throw CampError.message("The bundled Go session helper is missing. Rebuild the app.") }
             p.executableURL = helper; p.arguments = [action]

@@ -9,6 +9,7 @@ import (
 type Local struct {
 	Home, UsersDir, Support string
 	ProfileRoots            []string
+	Environment             []string
 }
 
 func LoadLocal() (Local, error) {
@@ -16,7 +17,7 @@ func LoadLocal() (Local, error) {
 	if err != nil {
 		return Local{}, err
 	}
-	c := Local{Home: home, UsersDir: "/Users", Support: filepath.Join(home, "Library/Application Support/Capybara Camp")}
+	c := Local{Home: home, UsersDir: "/Users", Support: filepath.Join(home, "Library/Application Support/Capybara Camp"), Environment: os.Environ()}
 	if value := os.Getenv("CAPY_SUPPORT"); value != "" {
 		c.Support = value
 	}

@@ -15,7 +15,10 @@ import (
 	"github.com/teslashibe/capybara-camp/server/internal/config"
 )
 
-type App struct{ Config config.Local }
+type App struct {
+	Config      config.Local
+	commandPath func(string, []string) (string, error)
+}
 
 func New(c config.Local) *App { return &App{Config: c} }
 
@@ -71,6 +74,22 @@ func (a *App) Run(ctx context.Context, action string, input io.Reader) (any, err
 			return nil, errors.New("Profile path is too long")
 		}
 		return map[string]bool{"ok": true}, a.AddSource(ctx, strings.TrimSpace(string(data)))
+	}
+	if action == "activity" {
+		data, err := io.ReadAll(io.LimitReader(input, 1<<20+1))
+		if err != nil || len(data) > 1<<20 {
+			return nil, errors.New("Invalid activity request")
+		}
+		var request ActivityRequest
+		if strings.HasPrefix(strings.TrimSpace(string(data)), "[") {
+			err = json.Unmarshal(data, &request.Sources)
+		} else {
+			err = json.Unmarshal(data, &request)
+		}
+		if err != nil || request.Sources == nil {
+			return nil, errors.New("Invalid activity request")
+		}
+		return a.Activity(ctx, request)
 	}
 	var r request
 	decoder := json.NewDecoder(io.LimitReader(input, 1<<20+1))
