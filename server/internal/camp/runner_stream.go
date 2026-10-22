@@ -14,12 +14,14 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
+	"github.com/teslashibe/capybara-camp/server/internal/localcli"
 )
 
 type RunnerTurn struct {
-	Request           Request         `json:"request"`
-	Context           json.RawMessage `json:"context"`
-	ProviderSessionID string          `json:"provider_session_id"`
+	Request           Request                  `json:"request"`
+	Context           json.RawMessage          `json:"context"`
+	ProviderSessionID string                   `json:"provider_session_id"`
+	History           []localcli.HistorySource `json:"history,omitempty"`
 }
 type StreamEvent struct {
 	Seq   int64           `json:"seq"`
@@ -122,6 +124,12 @@ func (g *GitStore) lockedRunnerRequest(ctx context.Context, tx pgx.Tx, token, wo
 }
 
 func (g *GitStore) RunnerTurn(ctx context.Context, token, workspaceID, id string) (RunnerTurn, error) {
+	return g.runnerTurn(ctx, token, workspaceID, id, false)
+}
+func (g *GitStore) PagedRunnerTurn(ctx context.Context, token, workspaceID, id string) (RunnerTurn, error) {
+	return g.runnerTurn(ctx, token, workspaceID, id, true)
+}
+func (g *GitStore) runnerTurn(ctx context.Context, token, workspaceID, id string, paged bool) (RunnerTurn, error) {
 	s := g.store
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -153,8 +161,17 @@ func (g *GitStore) RunnerTurn(ctx context.Context, token, workspaceID, id string
 	sources := []map[string]any{}
 	size := 0
 	refs := append([]SourceRef{}, r.Sources...)
-	if r.ContextRevision > 0 && (providerSession == "" || r.Mode == "planning") {
-		refs = append([]SourceRef{{SessionID: r.SessionID, TranscriptRevision: r.ContextRevision}}, refs...)
+	history := []localcli.HistorySource{}
+	if r.ContextRevision > 0 && (paged || providerSession == "" || r.Mode == "planning") {
+		if !paged {
+			refs = append([]SourceRef{{SessionID: r.SessionID, TranscriptRevision: r.ContextRevision}}, refs...)
+		} else {
+			session, e := s.readSession(ctx, tx, auth.Actor{UserID: r.OwnerUserID}, r.CampID, r.SessionID)
+			if e != nil {
+				return RunnerTurn{}, e
+			}
+			history = append(history, localcli.HistorySource{ID: "camp:" + r.SessionID, Title: session.Title, Revision: strconv.FormatInt(r.ContextRevision, 10)})
+		}
 	}
 	for index, ref := range refs {
 		var messages []Message
@@ -199,7 +216,7 @@ func (g *GitStore) RunnerTurn(ctx context.Context, token, workspaceID, id string
 		return RunnerTurn{}, ErrInput
 	}
 	contextJSON, _ := json.Marshal(sources)
-	return RunnerTurn{Request: r, Context: contextJSON, ProviderSessionID: providerSession}, nil
+	return RunnerTurn{Request: r, Context: contextJSON, ProviderSessionID: providerSession, History: history}, nil
 }
 
 func validStreamEvent(raw json.RawMessage) (map[string]any, []byte, error) {

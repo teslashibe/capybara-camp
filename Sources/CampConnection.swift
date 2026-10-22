@@ -462,10 +462,17 @@ import SwiftUI
         pending = try await cache.outbox(scope, limit:1000); flush()
     }
     func context(session: CloudSession, source: CloudSourceRef) async throws -> CloudTranscript {
+        try await readContext(session:session,source:source,path:"context")
+    }
+    func contextMessage(session: CloudSession, source: CloudSourceRef) async throws -> CloudTranscript {
+        guard source.messageIds?.count == 1 else { throw CampCloudError.invalidResponse }
+        return try await readContext(session:session,source:source,path:"message")
+    }
+    private func readContext(session: CloudSession, source: CloudSourceRef, path: String) async throws -> CloudTranscript {
         guard let scope, let client, let credential, session.campId == scope.campId,
               session.id == source.sessionId, session.permissionRevision == source.permissionRevision else { throw CampCloudError.invalidResponse }
         let origin = scope
-        let data = try await client.data("POST", path: "/v1/camps/\(scope.campId)/sessions/\(session.id)/context", body: CampWire.encoder().encode(source), token: credential.token)
+        let data = try await client.data("POST", path: "/v1/camps/\(scope.campId)/sessions/\(session.id)/\(path)", body: CampWire.encoder().encode(source), token: credential.token)
         guard self.scope == origin, self.credential?.token == credential.token else { throw CancellationError() }
         return try CampWire.decoder().decode(CloudTranscript.self, from: data)
     }

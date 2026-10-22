@@ -168,6 +168,9 @@ func contextDigest(messages []contextMessage) string {
 
 type contextTool struct {
 	sources []contextSource
+	history []HistorySource
+	reader  HistoryReader
+	ctx     context.Context
 }
 
 func (t contextTool) read(raw any) (map[string]any, error) {
@@ -175,7 +178,41 @@ func (t contextTool) read(raw any) (map[string]any, error) {
 	if !ok {
 		return nil, errors.New("Read accepts only a selected session ID, offset and limit")
 	}
+	for _, h := range t.history {
+		if h.ID != str(args["session_id"]) {
+			continue
+		}
+		in, err := historyInput(args)
+		if err != nil {
+			return nil, err
+		}
+		if t.reader == nil {
+			return nil, errors.New("History is unavailable")
+		}
+		ctx := t.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		page, err := t.reader(ctx, in)
+		if err != nil {
+			return nil, err
+		}
+		if err = validateHistoryPage(h, in, page); err != nil {
+			return nil, err
+		}
+		for i := range page.Messages {
+			page.Messages[i].Source = contextLink(contextSource{ID: h.ID, Revision: h.Revision}, contextMessage{ID: page.Messages[i].ID})
+		}
+		return map[string]any{"session_id": h.ID, "title": h.Title, "revision": h.Revision, "messages": page.Messages, "next_offset": page.NextOffset, "next_text_offset": page.NextTextOffset}, nil
+	}
 	for key := range args {
+		if key == "text_offset" {
+			n, ok := args[key].(json.Number)
+			if !ok || n.String() != "0" {
+				return nil, errors.New("Text offsets apply only to complete history")
+			}
+			continue
+		}
 		if key != "session_id" && key != "offset" && key != "limit" {
 			return nil, errors.New("Read accepts only a selected session ID, offset and limit")
 		}
@@ -255,9 +292,12 @@ func (t contextTool) handle(request map[string]any) map[string]any {
 		for _, source := range t.sources {
 			ids = append(ids, source.ID)
 		}
+		for _, source := range t.history {
+			ids = append(ids, source.ID)
+		}
 		response["result"] = map[string]any{"tools": []any{map[string]any{
-			"name": "read_session", "description": "Read selected messages from a Camp session attached by the user. Returns pinned source links. Cannot read files, discover other sessions or send prompts.",
-			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"session_id": map[string]any{"type": "string", "enum": ids}, "offset": map[string]any{"type": "integer", "minimum": 0}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 120}}, "required": []string{"session_id"}, "additionalProperties": false},
+			"name": "read_session", "description": "Read attached Camp snapshots or complete conversation history with pinned source links. Follow next_offset and next_text_offset for history pages; text offsets count UTF-8 bytes at character boundaries. Cannot discover sessions or send prompts.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"session_id": map[string]any{"type": "string", "enum": ids}, "offset": map[string]any{"type": "integer", "minimum": 0}, "text_offset": map[string]any{"type": "integer", "minimum": 0}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 120}}, "required": []string{"session_id"}, "additionalProperties": false},
 			"annotations": map[string]any{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false, "idempotentHint": true},
 		}}}
 	case "tools/call":
@@ -318,11 +358,33 @@ func (a *App) ServeContext(ctx context.Context, path string, input io.Reader, ou
 	if err != nil {
 		return err
 	}
-	sources, err := decodeContext(data)
-	if err != nil {
-		return err
+	if !utf8.Valid(data) {
+		return errors.New("Context manifest is not valid UTF-8")
 	}
-	tool := contextTool{sources: sources}
+	tool := contextTool{ctx: ctx}
+	if bytes.HasPrefix(bytes.TrimSpace(data), []byte("{")) {
+		var manifest contextManifest
+		d := json.NewDecoder(bytes.NewReader(data))
+		d.DisallowUnknownFields()
+		if d.Decode(&manifest) != nil || d.Decode(new(any)) != io.EOF || manifest.Version != 2 || len(manifest.History) == 0 {
+			return errors.New("Invalid history manifest")
+		}
+		raw, _ := json.Marshal(manifest.Sources)
+		tool.sources, err = decodeContext(raw)
+		if err != nil {
+			return err
+		}
+		if err = validateHistoryCatalog(tool.sources, manifest.History); err != nil {
+			return err
+		}
+		tool.history = manifest.History
+		tool.reader = manifest.Proxy.reader
+	} else {
+		tool.sources, err = decodeContext(data)
+		if err != nil {
+			return err
+		}
+	}
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 16<<10), 128<<10+1)
 	encoder := json.NewEncoder(output)

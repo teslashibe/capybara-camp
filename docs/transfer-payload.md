@@ -318,9 +318,15 @@ history migration operation yet.
 
 ## Remaining integration
 
+The cloud runtime can now read the stored main transcript through a paged
+context tool, without loading the whole history into a startup request. Its
+reads use the queued transcript revision and current request permissions.
+This removes the earlier 120-message startup boundary. It does not yet supply
+child histories, file attachments or the final transfer commit.
+
 The agreed transfer flow still requires:
 
-1. Transfer transcript, child-session and attachment provenance, including
+1. Finish transcript transfer, child-session and attachment provenance, including
    provider continuation and commits not available from the remote repository
 2. Native conflict review and the complete base-repository credential policy,
    followed by cloud-to-local and cross-account destination acceptance

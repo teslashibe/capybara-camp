@@ -13,6 +13,18 @@ func (s *Store) ReadContext(ctx context.Context, a auth.Actor, campID, id string
 	return retryRead(ctx, func() (Transcript, error) { return s.readContextOnce(ctx, a, campID, id, input) })
 }
 func (s *Store) readContextOnce(ctx context.Context, a auth.Actor, campID, id string, input SourceRef) (Transcript, error) {
+	return s.readContextBudget(ctx, a, campID, id, input, 256<<10)
+}
+
+// ReadMessage opens one cited message in the native transcript inspector.
+// Selected model context retains its smaller aggregate budget.
+func (s *Store) ReadMessage(ctx context.Context, a auth.Actor, campID, id string, input SourceRef) (Transcript, error) {
+	if len(input.MessageIDs) != 1 {
+		return Transcript{}, ErrInput
+	}
+	return retryRead(ctx, func() (Transcript, error) { return s.readContextBudget(ctx, a, campID, id, input, 1<<20) })
+}
+func (s *Store) readContextBudget(ctx context.Context, a auth.Actor, campID, id string, input SourceRef, budget int) (Transcript, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
 		return Transcript{}, err
@@ -32,7 +44,7 @@ func (s *Store) readContextOnce(ctx context.Context, a auth.Actor, campID, id st
 		return Transcript{}, ErrRevision
 	}
 	input.SessionID = id
-	messages, err := readContextMessages(ctx, tx, input)
+	messages, err := readContextMessagesBudget(ctx, tx, input, budget)
 	if err != nil {
 		return Transcript{}, err
 	}
@@ -40,6 +52,9 @@ func (s *Store) readContextOnce(ctx context.Context, a auth.Actor, campID, id st
 }
 
 func readContextMessages(ctx context.Context, tx pgx.Tx, ref SourceRef) ([]Message, error) {
+	return readContextMessagesBudget(ctx, tx, ref, 256<<10)
+}
+func readContextMessagesBudget(ctx context.Context, tx pgx.Tx, ref SourceRef, budget int) ([]Message, error) {
 	if len(ref.MessageIDs) < 1 || len(ref.MessageIDs) > 120 {
 		return nil, ErrInput
 	}
@@ -66,7 +81,7 @@ func readContextMessages(ctx context.Context, tx pgx.Tx, ref SourceRef) ([]Messa
 			return nil, err
 		}
 		size += len(m.Text)
-		if size > 256<<10 {
+		if size > budget {
 			return nil, ErrInput
 		}
 		messages = append(messages, m)

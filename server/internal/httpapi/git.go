@@ -14,6 +14,7 @@ import (
 
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
 	"github.com/teslashibe/capybara-camp/server/internal/camp"
+	"github.com/teslashibe/capybara-camp/server/internal/localcli"
 )
 
 func (a *API) gitAuthorize(next authorizedHandler) http.HandlerFunc {
@@ -84,7 +85,21 @@ func (a *API) gitRoutes(mux *http.ServeMux) {
 		}
 	}))
 	mux.HandleFunc("GET /v1/runner/workspaces/{workspace}/requests/{request}", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
-		out, err := a.Git.RunnerTurn(r.Context(), token(r), r.PathValue("workspace"), r.PathValue("request"))
+		read := a.Git.RunnerTurn
+		if r.URL.Query().Get("history") == "paged" {
+			read = a.Git.PagedRunnerTurn
+		}
+		out, err := read(r.Context(), token(r), r.PathValue("workspace"), r.PathValue("request"))
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
+	mux.HandleFunc("POST /v1/runner/workspaces/{workspace}/requests/{request}/history", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
+		var in localcli.HistoryRead
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := a.Git.RunnerHistory(r.Context(), token(r), r.PathValue("workspace"), r.PathValue("request"), in)
 		if !fail(w, err) {
 			write(w, 200, out)
 		}

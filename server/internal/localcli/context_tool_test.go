@@ -127,7 +127,7 @@ func TestContextWireValidationAndBounds(t *testing.T) {
 	for i := range sources[0].Messages {
 		sources[0].Messages[i].Text = strings.Repeat("x", 40<<10)
 	}
-	if _, err := (contextTool{sources}).read(contextArguments(t, `{"session_id":"local-source"}`)); err == nil {
+	if _, err := (contextTool{sources: sources}).read(contextArguments(t, `{"session_id":"local-source"}`)); err == nil {
 		t.Fatal("Oversized read was not rejected")
 	}
 }

@@ -308,7 +308,7 @@ func (w *Worker) turnTick(ctx context.Context, state camp.RunnerAccountState, wo
 		return w.finishTurn(ctx, r)
 	}
 	var work camp.RunnerTurn
-	if err = w.client.call(ctx, "GET", turnPath(r), nil, &work); err != nil {
+	if err = w.client.call(ctx, "GET", turnPath(r)+"?history=paged", nil, &work); err != nil {
 		if errors.Is(err, ErrRejected) {
 			return w.checkout.holdTurn(r)
 		}
@@ -319,6 +319,12 @@ func (w *Worker) turnTick(ctx context.Context, state camp.RunnerAccountState, wo
 		return err
 	}
 	input := localcli.ConversationRequest{Session: localcli.Session{Provider: state.Provider, Root: root, CWD: w.checkout.workdir(workspace), SessionID: work.ProviderSessionID}, Prompt: work.Request.Prompt, Model: work.Request.Model, Effort: work.Request.Effort, Speed: work.Request.Speed, Mode: work.Request.Mode, Permissions: work.Request.Permissions, Context: work.Context}
+	input.History = work.History
+	input.ReadHistory = func(readCtx context.Context, in localcli.HistoryRead) (localcli.HistoryPage, error) {
+		var out localcli.HistoryPage
+		err := w.client.call(readCtx, "POST", turnPath(r)+"/history", in, &out)
+		return out, err
+	}
 	input.NewSession = input.Session.SessionID == ""
 	if input.NewSession {
 		input.Session.SessionID = uuid.NewString()

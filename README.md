@@ -206,6 +206,10 @@ the current app blocks that move. The local runner implementation retains a
 separate checkout and provider history for each ticket and schedules work
 serially per account. [Cloud controls](docs/cloud-controls.md) use the same
 steer, queue and stop actions as local chat, with durable delivery tracking.
+The runner can read its complete stored conversation through the context tool
+in bounded pages, including long messages. History remains pinned to the queued
+prompt and each page checks the current request and permissions. This does not
+yet migrate child sessions or file attachments.
 Default settings, the prepared-workspace requirement and unfinished transfer
 behavior are documented in [execution locations](docs/execution-locations.md)
 and the delivery status.

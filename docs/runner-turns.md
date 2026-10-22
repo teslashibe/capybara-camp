@@ -48,6 +48,37 @@ standard error. The limits apply to the pipe-copy path as well as direct
 writes; exceeding one fails checkout before its output is accepted. Raw Git
 errors remain private. A regression test checks an actual oversized Git blob.
 
+## Conversation history
+
+The runner requests `?history=paged` when loading a turn. Its own conversation
+is exposed through the existing `read_session` context tool at the transcript
+revision pinned when the prompt was queued. This remains available when the
+provider already has a native conversation ID. The older inline response is
+retained for earlier clients; it still has its original context limits.
+
+`POST /v1/runner/workspaces/{workspace}/requests/{request}/history` returns
+at most 20 message segments and 48 KiB of text. Individual segments contain at
+most 16 KiB. `next_offset` selects the next message ordinal;
+`next_text_offset` continues within a long message using UTF-8 byte positions
+at character boundaries. Clients use the returned values together. There is
+no 120-message cap on this conversation history. Selected `@` attachments keep
+their existing limits.
+
+Every page rechecks the runner grant, account, workspace, request lease,
+execution assignment and session permissions. Cancelled, finished or revoked
+work cannot fetch more history. Reads retain original message IDs and pinned
+revision links; a later transcript edit does not replace the queued snapshot.
+
+The context helper calls a temporary loopback reader owned by the running
+conversation. Its private manifest contains a random read capability and the
+allowed source, not the runner credential. The parent runner makes the
+authenticated Camp request. The reader accepts no other sources, file paths
+or mutations, limits concurrent reads, and closes with the conversation.
+
+This supplies the stored main transcript to a new provider conversation.
+It does not copy an opaque provider session ID between accounts. Child-session
+and attachment migration and the final reviewed transfer remain separate work.
+
 ## Multiple tickets on one account
 
 Each ticket retains its own checkout, branch and provider conversation ID. One

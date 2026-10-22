@@ -77,6 +77,13 @@ func runTurnFixture(provider, mode, record string) {
 			case "configRequirements/read":
 				result["requirements"] = map[string]any{}
 			case "thread/start", "thread/resume":
+				if mode == "history" {
+					server := object(object(object(params["config"])["mcp_servers"])["camp_context"])
+					if err := readFixtureHistory(server, record); err != nil {
+						fixtureRecord(record, "history-error:"+err.Error())
+						os.Exit(6)
+					}
+				}
 				fixtureRecord(record, v["method"].(string))
 				thread, _ = params["threadId"].(string)
 				if thread == "" {
@@ -124,7 +131,24 @@ func runTurnFixture(provider, mode, record string) {
 	}
 	fixtureRecord(record, "turn")
 	session := v["session_id"]
-	out(map[string]any{"type": "system", "subtype": "init", "session_id": session, "permissionMode": "default"})
+	init := map[string]any{"type": "system", "subtype": "init", "session_id": session, "permissionMode": "default"}
+	var mcpConfig map[string]any
+	for i, arg := range os.Args {
+		if arg == "--mcp-config" && i+1 < len(os.Args) {
+			_ = json.Unmarshal([]byte(os.Args[i+1]), &mcpConfig)
+		}
+	}
+	campContext := object(object(mcpConfig["mcpServers"])["camp_context"])
+	if len(campContext) > 0 {
+		init["mcp_servers"] = []any{map[string]any{"name": "camp_context", "status": "connected"}}
+	}
+	out(init)
+	if mode == "history" {
+		if err := readFixtureHistory(campContext, record); err != nil {
+			fixtureRecord(record, "history-error:"+err.Error())
+			os.Exit(6)
+		}
+	}
 	if mode == "approval" {
 		out(map[string]any{"type": "control_request", "request_id": "fixture-approval", "request": map[string]any{"subtype": "can_use_tool", "tool_name": "Bash", "input": map[string]any{"command": "echo synthetic"}}})
 		answer := read()

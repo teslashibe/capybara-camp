@@ -29,6 +29,8 @@ type conversationRequest struct {
 	ExecutionContext  string             `json:"executionContext"`
 	Permissions       PermissionSettings `json:"permissions"`
 	Context           json.RawMessage    `json:"context"`
+	History           []HistorySource    `json:"-"`
+	ReadHistory       HistoryReader      `json:"-"`
 	grant             *contextGrant
 }
 
@@ -210,17 +212,21 @@ func (a *App) runConversation(ctx context.Context, request conversationRequest, 
 			return err
 		}
 	}
-	if len(request.Context) != 0 && !bytes.Equal(bytes.TrimSpace(request.Context), []byte("null")) {
-		sources, err := decodeContext(request.Context)
+	if len(request.Context) != 0 && !bytes.Equal(bytes.TrimSpace(request.Context), []byte("null")) || len(request.History) > 0 {
+		data := request.Context
+		if len(data) == 0 || bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+			data = []byte("[]")
+		}
+		sources, err := decodeContext(data)
 		if err != nil {
 			return err
 		}
-		if len(sources) != 0 {
+		if len(sources) != 0 || len(request.History) > 0 {
 			self, err := os.Executable()
 			if err != nil {
 				return errors.New("Could not locate the bundled context helper")
 			}
-			request.grant, err = newContextGrant(sources, a.Config.Support, self)
+			request.grant, err = newContextGrantWithHistory(sources, request.History, request.ReadHistory, a.Config.Support, self)
 			if err != nil {
 				return err
 			}

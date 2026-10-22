@@ -79,6 +79,22 @@ transfer and local-adapter suites also pass after adding subdirectory support,
 and the Linux commands build. These are synthetic/local checks, not a completed
 native transfer walkthrough or cloud deployment.
 
+Cloud continuation now exposes the stored main transcript through paged
+`read_session` calls at the queued prompt's revision. A fresh or resumed
+provider can recover older context without the previous 120-message startup
+limit. The local read channel keeps the runner credential in its parent
+process and checks authorization again on every page. Both synthetic provider
+protocols read all 150 fixture messages, including a 300 KB Unicode message,
+through the actual helper and Go API. History links use the existing native
+snapshot inspector and an authorized single-message read, including messages
+larger than the `@` selection budget. Child histories, attachments, complete
+transfer review and the final assignment commit remain open.
+The Go race suite and vet passed for the paged runtime, followed by focused
+citation authorization tests. Native state, cloud and context suites passed
+after adding citation inspection and dismissal on sign-out, source removal or
+permission changes. Linux commands build and the staged secret scan is clean.
+Live provider and full native transfer acceptance remain open.
+
 The native account form and synthetic provider walkthrough now pass locally.
 The Go controller provisions per-installation workers, renews managed grants,
 and removes old Pods before deleting their storage and Secrets. It fences stale

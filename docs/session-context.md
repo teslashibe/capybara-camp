@@ -41,10 +41,31 @@ passed; live Claude verification is pending because the configured account
 reported its weekly limit. Unit and protocol checks are not a substitute for
 that remaining provider check.
 
-This is a foundation for Plan together, not a completed planning workflow.
-Attaching new sources to an already-running turn currently requires queuing the
-prompt for its next turn. Cross-device validation, cloud-hosted execution and
-the release performance/soak gates remain separate work.
+Planning reuses these selected snapshots. Attaching a new source to an
+already-running turn requires queuing the prompt for its next turn.
+
+Cloud conversations also expose their own complete stored transcript through
+`read_session`, including after a provider conversation has been created. This
+history is pinned to the queued prompt's transcript revision and read in pages;
+it is separate from the limits on selected `@` attachments above. Long messages
+continue at the returned UTF-8 byte offset without splitting a character.
+Every page checks the active request and current permissions. The parent runner
+keeps its service credential; a temporary local reader gives the context helper
+access to that one transcript. See [provider turns](runner-turns.md#conversation-history).
+
+History citations use the same native snapshot inspector. For a citation not
+stored as an `@` attachment, the app requests exactly that message and revision
+through `POST /v1/camps/{camp}/sessions/{session}/message`. This read requires
+current session access and the current permission revision. It accepts one
+message, up to 1 MiB, so a long historical response can be inspected without
+increasing the model-context selection limit. Missing or mismatched revisions
+and message IDs are rejected. The fetched citation is not added to the local
+attachment archive.
+The inspector closes when the Camp changes, the source disappears or its
+permission revision changes.
+
+Child histories, file attachments, live-provider acceptance and the release
+performance/soak gates remain in the V1 delivery scope.
 
 Integration references: [Codex app-server](https://learn.chatgpt.com/docs/app-server)
 and [Claude CLI reference](https://code.claude.com/docs/en/cli-reference).

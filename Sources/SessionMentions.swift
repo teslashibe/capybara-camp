@@ -85,6 +85,19 @@ struct ContextInspection: Identifiable {
     var title: String
     var messages: [Message]
     var selectedMessage: String
+    var scope: String? = nil
+    var permissionRevision: Int64? = nil
+    func remainsVisible(scope current: String?, permissionRevision observed: Int64?) -> Bool {
+        guard let scope else { return true }
+        return scope == current && observed != nil && permissionRevision == observed
+    }
+}
+
+func inspectHistoryMessage(id:String,title:String,scope:String,reference:CloudSourceRef,snapshot:CloudTranscript) throws -> ContextInspection {
+    guard snapshot.revision==reference.transcriptRevision, snapshot.messages.count==1,
+          let expected=reference.messageIds, expected.count==1, let value=snapshot.messages.first,
+          value.id==expected[0], !value.removed else {throw CampCloudError.invalidResponse}
+    return ContextInspection(sourceID:id,title:title,messages:[value.transcriptMessage],selectedMessage:value.id,scope:scope,permissionRevision:reference.permissionRevision)
 }
 
 struct ContextPreview: Sendable {
@@ -100,13 +113,35 @@ extension CampStore {
         let id = String(parts.path.dropFirst())
         let revision = parts.queryItems?.first { $0.name == "revision" }?.value ?? ""
         let message = parts.queryItems?.first { $0.name == "message" }?.value ?? ""
-        guard let source = mentions.source(id: id, revision: revision, message: message), let destination = selected else { banner = "This source snapshot is not saved in this Camp"; return }
+        guard let source = mentions.source(id: id, revision: revision, message: message), let destination = selected else {
+            openCloudHistoryLink(id:id,revision:revision,message:message)
+            return
+        }
         Task {
             do {
                 let contexts = try await resolveContexts([source], destination: destination)
                 guard let value = contexts.first else { return }
-                contextInspection = ContextInspection(sourceID: source.id, title: value.title, messages: value.messages, selectedMessage: message)
+                contextInspection = ContextInspection(sourceID: source.id, title: value.title, messages: value.messages, selectedMessage: message,scope:source.scope,permissionRevision:source.cloud?.permissionRevision)
             } catch { banner = error.localizedDescription }
+        }
+    }
+    private func openCloudHistoryLink(id:String,revision:String,message:String) {
+        guard id.hasPrefix("camp:"),let remote=cloudSessions[id],let scope=cloud.scope,
+              remote.campId==scope.campId,let version=Int64(revision),version>0,version<=remote.transcriptRevision else {
+            banner = "This source snapshot is not saved in this Camp";return
+        }
+        if message.isEmpty {
+            if let original=sessions.first(where:{$0.id==id}){open(original)}
+            return
+        }
+        guard message.utf8.count<=256 else {banner="Invalid source message";return}
+        let reference=CloudSourceRef(sessionId:remote.id,transcriptRevision:version,permissionRevision:remote.permissionRevision,messageIds:[message])
+        Task {
+            do {
+                let snapshot=try await cloud.contextMessage(session:remote,source:reference)
+                guard cloud.scope==scope,cloudSessions[id]?.permissionRevision==reference.permissionRevision else {throw CampCloudError.invalidResponse}
+                contextInspection=try inspectHistoryMessage(id:id,title:remote.title,scope:scope.key,reference:reference,snapshot:snapshot)
+            } catch is CancellationError {} catch {if cloud.scope==scope {banner=error.localizedDescription}}
         }
     }
     func contextTitle(_ reference: SessionReference) -> String {

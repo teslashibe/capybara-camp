@@ -9,7 +9,21 @@ import Foundation
         precondition(sessionMentionQuery("@" + String(repeating: "a", count: 81)) == nil)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("camp-context-tests-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
+        let historyRef=CloudSourceRef(sessionId:UUID().uuidString,transcriptRevision:3,permissionRevision:1,messageIds:["cited"])
+        let longMessage=CloudMessage(id:"cited",ordinal:250,role:"assistant",text:String(repeating:"😀",count:75000),removed:false,model:"recorded-model",effort:"high",speed:"fast",revision:3)
+        let historyPage=CloudTranscript(revision:3,messages:[longMessage],before:250,hasMore:false)
+        let history=try inspectHistoryMessage(id:"camp:"+historyRef.sessionId,title:"History",scope:"scope",reference:historyRef,snapshot:historyPage)
+        precondition(history.messages.first?.text==longMessage.text && history.messages.first?.model=="recorded-model" && history.selectedMessage=="cited","History citation truncated or lost its metadata")
+        precondition(history.remainsVisible(scope:"scope",permissionRevision:1))
+        precondition(!history.remainsVisible(scope:nil,permissionRevision:1) && !history.remainsVisible(scope:"other",permissionRevision:1) && !history.remainsVisible(scope:"scope",permissionRevision:2) && !history.remainsVisible(scope:"scope",permissionRevision:nil),"Revoked citation remained visible")
+        var wrongHistory=historyPage;wrongHistory.revision=4
+        do {_ = try inspectHistoryMessage(id:"camp:"+historyRef.sessionId,title:"History",scope:"scope",reference:historyRef,snapshot:wrongHistory);preconditionFailure("Newer snapshot accepted for old citation")}catch{}
+        wrongHistory=historyPage;wrongHistory.messages[0].id="another"
+        do {_ = try inspectHistoryMessage(id:"camp:"+historyRef.sessionId,title:"History",scope:"scope",reference:historyRef,snapshot:wrongHistory);preconditionFailure("Different message accepted for citation")}catch{}
         let store = CampStore(stateDirectory: root)
+        store.contextInspection=history
+        store.applyCloud([],projects:[])
+        precondition(store.contextInspection==nil,"Disconnect did not dismiss cloud source inspector")
         let source = CampSession(id: "local-source", sessionID: "native-source", provider: "Claude", sourceID: "fixture", sourceLabel: "Fixture", root: root.path, title: "Synthetic source", cwd: root.path, updated: 1, path: "", accountID: "", archived: false)
         let target = CampSession(id: "local-target", sessionID: "native-target", provider: "Codex", sourceID: "fixture", sourceLabel: "Fixture", root: root.path, title: "Synthetic target", cwd: root.path, updated: 2, path: "", accountID: "", archived: false)
         store.sessions = [source, target]
