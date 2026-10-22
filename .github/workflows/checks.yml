@@ -14,6 +14,8 @@ jobs:
           cache-dependency-path: server/go.sum
       - name: Test fixture-only adapters and native state
         run: ./test.sh
+      - name: Test release packaging and recovery without Apple credentials
+        run: ./tools/test-release.sh
       - name: Build universal macOS app
         run: ./build.sh --universal
       - name: Verify app signature and version

@@ -16,7 +16,7 @@ and acceptance are separate milestones.
 | Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments, native Run on controls and private transcript copy, multi-ticket per-account scheduling, native steering/queue/stop controls, durable approval/control delivery, a shared request queue, provider subprocess consumption, event streaming and credential revision fencing, mandatory Linux child-process isolation | Execution defaults, remaining signed-in recovery states, target-runtime isolation validation, reviewed transfers, complete reported runtime settings and usage states, live sandbox/network/login/control validation and disconnected-Mac execution |
 | Git | Project repository links, local CLI project execution, owner-bound GitHub App authorization, native repository browsing, encrypted tokens, signed revocation, exact-commit and scoped read-token adapters, workspace records, exclusive claims and isolated runner checkouts with restart/cancellation recovery | Execution grants, Git actor attribution in execution, branch/push/PR recovery and live two-user GitHub validation |
 | Memory and skills | Approved Cortex/shared Markdown design | Actual native and Go integrations, provider/model consolidation, memory inspection, skill editing/version rollout and permission tests |
-| Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image and local development builds | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, Developer ID/notarization, universal V1 release and recorded website demo |
+| Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
 Next: finish execution defaults and reviewed transfers, then memory/skills
 and shared execution. Continue the native design audit as those surfaces are
@@ -64,6 +64,21 @@ It also found and corrected a chat layout stall. The final Go race/vet run
 passed with schema 18, and 84 native cloud checks plus execution and state suites
 passed. Runtime effort is shown from the open cloud stream; complete reporting
 across unopened cards remains in scope. See [cloud controls](cloud-controls.md).
+
+The release tooling now separates development archives from public candidates.
+It verifies the expected Developer ID team, stable bundle identity, both
+architectures, secure timestamps and hardened runtime; it rejects unexpected
+bundle files. Notarization keeps the original upload and resumes by submission
+ID. Public artifacts appear only after stapling, Gatekeeper checks and fresh
+archive extraction, with committed notes, build metadata and checksums.
+Synthetic Apple-tool tests cover rejection, response loss, source/archive
+changes, wrong receipts and failed verification without any Apple credentials.
+The universal build passed on the Mac; both executable signatures and
+architectures were checked, and the release verifier correctly refused that
+ad-hoc build. ShellCheck and the staged secret scan passed.
+This is tooling evidence only. Actual Developer ID signing, Apple notarization,
+downloaded-app acceptance, Git push/tag/release and the website demo remain open.
+See the [release procedure](releasing.md).
 
 Local tests cover concurrency, limited database permissions, cleanup ordering
 and restart behavior. The runner image, database bootstrap and rendered

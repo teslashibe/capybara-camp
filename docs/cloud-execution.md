@@ -5,8 +5,10 @@
 Approved V1 scope, October 21, 2026. This is an implementation contract, not a
 claim that cloud model execution is shipped. The current Go service stores
 shared sessions, prompt requests, prepared workspaces and Local/Cloud execution
-assignments. The native app can publish selected local transcripts. The runner
-handles sign-in and checkout; provider-turn consumption is still pending.
+assignments. The native app can publish selected local transcripts, prepare and
+assign cloud workspaces, and stream and control cloud turns. The runner handles
+sign-in, checkout and provider subprocesses. These paths have local automated
+and synthetic native evidence; live cloud acceptance remains pending.
 
 ## What people see
 
@@ -28,11 +30,10 @@ handles sign-in and checkout; provider-turn consumption is still pending.
 
 ## Identities and authentication
 
-The complete cloud first-run flow will extend the native [setup sheet](onboarding.md)
-with Add accounts and Choose defaults once those services are implemented.
-Today's sheet supports local profile import, optional Camp sign-in, projects and
-notifications; it does not claim to provision provider accounts or cloud runners.
-Connecting
+The native [setup sheet](onboarding.md) supports local profile import, optional
+Camp sign-in, cloud provider accounts, GitHub, projects and notifications.
+Account setup uses the same controls as Manage sources. Choose defaults remains
+unfinished and will reuse the per-task location/account control. Connecting
 Camp uses the person's verified email and saved server address. Add accounts
 offers Codex or Claude, an optional name, and the official provider sign-in.
 After one account connects, Add another returns to the same flow. People may
@@ -95,8 +96,9 @@ rotation remains outside this release.
 The implemented control-plane boundary is described in
 [execution assignments](execution-assignments.md). It reuses the existing prompt
 queue and event log. Choosing Cloud requires a prepared owner-bound workspace;
-only its assigned installation may claim that session's requests. The new API
-does not yet enable the native Run on control or submit cloud prompts to a CLI.
+only its assigned installation may claim that session's requests. The native
+[Run on control](execution-locations.md) uses this API; the runner submits
+assigned requests through the existing provider CLI adapters.
 
 Reuse the Go API, PostgreSQL, event stream and native cache. Add one Go
 `camp-runner` binary with Codex and Claude adapters; use official CLI stdio
@@ -111,8 +113,8 @@ authenticates with a narrowly scoped, revocable installation credential; it may
 claim only its own assigned work. It never receives a human's broad Camp token.
 
 Start with one isolated Linux pod and private persistent volume per owner/provider
-installation, one active project workspace per pod, and one provider process at
-a time. Serialize work within that installation; different installations may run
+installation, retained per-ticket project workspaces, and one active preparation
+or provider process at a time. Serialize work within that installation; different installations may run
 independently under a configured global cap. Use unprivileged users, dropped Linux
 capabilities, resource and disk limits, restricted egress, no hostPath, no cluster
 service-account token in the workload, and no shared writable provider homes.

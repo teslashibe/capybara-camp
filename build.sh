@@ -5,11 +5,13 @@ cd "$ROOT"
 
 SWIFT_FLAGS=()
 GO_LDFLAGS='-s -w'
+RELEASE=false
 case "${1:-}" in
   --universal) ARCHS="arm64 x86_64" ;;
+  --release) ARCHS="arm64 x86_64"; RELEASE=true ;;
   --development) ARCHS="$(uname -m)"; SWIFT_FLAGS=(-D CAMP_DEVELOPMENT); GO_LDFLAGS="$GO_LDFLAGS -X github.com/teslashibe/capybara-camp/server/internal/config.developmentBuild=1" ;;
   "") ARCHS="$(uname -m)" ;;
-  *) echo "Usage: ./build.sh [--universal | --development]" >&2; exit 2 ;;
+  *) echo "Usage: ./build.sh [--universal | --development | --release]" >&2; exit 2 ;;
 esac
 
 VERSION="$(cat VERSION)"
@@ -17,6 +19,16 @@ OUTPUT="$ROOT/build"
 APP="${CAMP_APP_PATH:-$OUTPUT/Capybara Camp.app}"
 IDENTITY="${CAMP_SIGN_IDENTITY:--}"
 IDENTIFIER="${CAMP_BUNDLE_ID:-com.capybaracamp.app}"
+SIGN_FLAGS=(--timestamp=none)
+if [ "$RELEASE" = true ]; then
+  if [ "$IDENTITY" = - ] || [ -z "$IDENTITY" ] || [[ ! "${CAMP_SIGN_TEAM_ID:-}" =~ ^[A-Z0-9]{10}$ ]]; then
+    echo "Release builds require CAMP_SIGN_IDENTITY and the expected CAMP_SIGN_TEAM_ID" >&2; exit 2
+  fi
+  if [ "$IDENTIFIER" != com.capybaracamp.app ]; then
+    echo "Release builds must keep the stable com.capybaracamp.app identifier" >&2; exit 2
+  fi
+  SIGN_FLAGS=(--timestamp --options runtime)
+fi
 mkdir -p "$OUTPUT"
 WORK="$(mktemp -d "$OUTPUT/.camp-build.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
@@ -67,9 +79,10 @@ plutil -insert NSHighResolutionCapable -bool YES "$PLIST"
 plutil -insert NSPrincipalClass -string NSApplication "$PLIST"
 plutil -insert LSApplicationCategoryType -string public.app-category.developer-tools "$PLIST"
 plutil -insert CFBundleURLTypes -json '[{"CFBundleURLName":"Camp source links","CFBundleURLSchemes":["capybara"]}]' "$PLIST"
-codesign --force --sign "$IDENTITY" --timestamp=none "$STAGED/Contents/MacOS/camp-local"
-codesign --force --sign "$IDENTITY" --timestamp=none "$STAGED"
+codesign --force --sign "$IDENTITY" "${SIGN_FLAGS[@]}" --identifier "$IDENTIFIER.camp-local" "$STAGED/Contents/MacOS/camp-local"
+codesign --force --sign "$IDENTITY" "${SIGN_FLAGS[@]}" "$STAGED"
 codesign --verify --strict "$STAGED"
+if [ "$RELEASE" = true ]; then "$ROOT/tools/verify-macos-release.sh" "$STAGED"; fi
 # Only replace the exact requested app bundle after compilation and signing pass.
 case "$APP" in *.app) ;; *) echo "CAMP_APP_PATH must end in .app" >&2; exit 2 ;; esac
 mkdir -p "$(dirname "$APP")"

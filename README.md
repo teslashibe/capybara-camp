@@ -215,6 +215,7 @@ findings through the process in [SECURITY.md](SECURITY.md).
 ./test.sh
 ./tools/test-server.sh
 ./tools/test-processguard.sh
+./tools/test-release.sh
 ./build.sh --universal
 ```
 
@@ -224,6 +225,8 @@ PostgreSQL for Go race tests and vet; it removes the container on exit. An expli
 `CAMP_TEST_DATABASE_URL` uses isolated schemas in that test database instead.
 Never point it at production. `tools/test-processguard.sh` exercises the required
 Linux process boundary; on macOS it uses Docker.
+`tools/test-release.sh` checks notarization recovery and packaging with synthetic
+Apple tools. It needs no certificate, Apple login or provider account.
 
 These tests do not require real provider accounts or API keys. They cover import
 isolation, transcript notifications, streaming, cancellation, steering, queue
@@ -300,10 +303,17 @@ updated README and versioned release notes, a final code push, a tag pointing to
 the tested commit, and a published GitHub release with verified artifacts and
 checksums. The website must show matching downloads and a recorded native demo.
 
-`tools/package-release.sh` currently packages a universal development app and
-the setup HTML into `dist/`. It does not notarize, push, tag or publish a release.
-The signing/notarization work and full V1 acceptance must finish before using
-its output as the public V1 download.
+`./tools/package-release.sh --development` creates an explicitly named development
+archive. Public candidates use `--release` with a Developer ID Application
+identity, an expected team ID and a saved notarytool credential profile. That
+path checks both architectures, submits to Apple, resumes processing by
+submission ID, staples the accepted ticket and verifies the extracted archive.
+It writes the app, setup HTML, notes, build information and checksums under
+`dist/vVERSION/`. It refuses to overwrite an existing artifact directory.
+
+Packaging does not push, tag, publish to GitHub or deploy the website. Follow the
+[release procedure](docs/releasing.md) after the full V1 acceptance work passes.
+The tooling's synthetic tests are not evidence of a notarized public V1 build.
 
 ## Scope and remaining work
 
