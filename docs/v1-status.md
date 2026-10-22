@@ -15,7 +15,7 @@ and acceptance are separate milestones.
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
 | Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments and new-plan defaults, native Run on controls, reviewed Local-to-Cloud file capture and private transcript copy, multi-ticket per-account scheduling, native steering/queue/stop controls, durable approval/control delivery, a shared request queue, provider subprocess consumption, event streaming and credential revision fencing, mandatory Linux child-process isolation | Native plan-import acceptance, remaining signed-in recovery states, target-runtime isolation validation, complete history/attachment and reverse transfers, complete reported runtime settings and usage states, live sandbox/network/login/control validation and disconnected-Mac execution |
 | Git | Project repository links, local CLI project execution, owner-bound GitHub App authorization, native repository browsing, encrypted tokens, signed revocation, exact-commit and scoped read-token adapters, workspace records, exclusive claims and isolated runner checkouts with restart/cancellation recovery | Execution grants, Git actor attribution in execution, branch/push/PR recovery and live two-user GitHub validation |
-| Memory and skills | Merged Cortex exact-selection and transactional guard API; embedded store, private/project observation API, saved job metadata, derived-memory source checks, replay and migration protection; isolated CLI inference and Cortex model adapter | Job dispatch, native provider/model selection and memory inspection, skill editing/version rollout and live permission tests |
+| Memory and skills | Merged Cortex exact-selection and transactional guard API; embedded store, private/project observation API, saved job metadata, derived-memory source checks, replay and migration protection; isolated CLI inference, Cortex model adapter and durable coordinator with guarded atomic commit and saved-response recovery | Runtime dispatch transport/admission, native provider/model selection and memory inspection, skill editing/version rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
 Next: finish the remaining transfer cases and full-history migration, then memory/skills
@@ -69,6 +69,16 @@ Server responses were synthetic, with no provider execution or cloud upload.
 The invalidated/expired/released hold regressions and packaged-helper checks
 pass. This closes those focused component walkthroughs, not the signed-in
 full-app or two-Mac transfer acceptance gates.
+
+The memory coordinator now runs the actual Cortex engine against an approved
+saved job, binds inference to its claim and exact prompt, persists responses and
+commits job completion with the memory changes. PostgreSQL race tests cover
+concurrent runs, cancellation, revoked sources, cloud installation changes,
+malformed output and recovery across repeated coordinator restarts without
+another provider call. The log is `build/memory-coordinator-final-tests.log`;
+focused model-adapter tests and Go vet also pass. This remains an internal
+coordinator: runtime dispatch/admission, native controls and live provider
+acceptance are not connected by this change.
 
 The memory dependency is merged in
 [Cortex PR #1](https://github.com/teslashibe/cortex/pull/1): exact input selection,

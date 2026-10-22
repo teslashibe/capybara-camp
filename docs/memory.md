@@ -1,9 +1,9 @@
 # Project memory
 
 Memory remains in development. The Camp observation API, saved job metadata,
-memory reads and embedded Cortex adapter are implemented; job dispatch and the
-native memory interface are not. The CLI inference primitive and Cortex model adapter are
-implemented, but no user-facing consolidation command queues them yet.
+memory reads, embedded Cortex adapter and durable consolidation coordinator are
+implemented. Runtime dispatch transports and the native memory interface are
+not connected yet. Creating a job still does not start provider work.
 [Cortex PR #1](https://github.com/teslashibe/cortex/pull/1)
 is merged and supplies the exact-selection and permission-guard API needed by
 [the memory issue](https://github.com/teslashibe/capybara-camp/issues/5).
@@ -140,9 +140,41 @@ labelled as such.
 ### Inference adapter
 
 `internal/memory.CLIModel` preserves Cortex's system and user messages and
-supplies their model-bound hash to its dispatcher. The dispatcher still needs
-to bind that hash to a durable, authorized job before calling the selected
-installation. It receives no credential or local profile path from Cortex.
+supplies their model-bound hash to its dispatcher. The Camp coordinator binds
+that hash to the durable, authorized job before invoking its runtime adapter.
+It receives no credential or local profile path from Cortex.
+
+`camp.Store.RunMemoryJob` is the internal coordination boundary. It freezes a
+four-minute claim around a three-minute operation, persists the exact request
+before calling the selected runtime once, and stores the response and its hash
+before Cortex applies it. The Cortex commit guard checks source access, selected
+memory digests, project membership, the local device or cloud installation epoch
+and the current claim. It marks the Camp job complete and emits its event in the
+same transaction as the Cortex memory changes. No Camp transaction remains open
+during inference. A bounded watcher cancels inference if the job, device, source
+permission or installation becomes unavailable.
+
+A received response survives a disconnected caller. An expired claim can replay
+that response through Cortex without another provider call, including after a
+second coordinator restart. A changed response hash or prompt hash is rejected.
+An expired running claim becomes `outcome_unknown`; neither that state nor an
+uncertain transport failure retries provider work. Malformed output fails the
+job and keeps observations pending. Cancellation preserves its terminal state
+and prevents the memory commit. Raw runtime errors are replaced with a bounded
+failure message before Cortex retains the outcome; job failure codes contain
+no provider error text.
+
+The runtime callback is an internal boundary, not an HTTP endpoint or a
+client-supplied function. The authenticated local-device/runner claim and payload
+transport, admission across other account work, scheduler recovery and native
+worker still need to be connected. The coordinator must not be exposed as a way
+for a client to choose another machine's profile or bypass runner isolation.
+
+PostgreSQL race tests exercise the actual Cortex engine and saved memory store
+with a synthetic inference callback: exact request persistence, provenance,
+concurrent admission, cancellation, malformed output, saved-response recovery,
+hash tampering, source revocation, cloud provider/epoch binding and expired
+claims. These tests do not claim live CLI dispatch or cloud acceptance.
 
 `camp-local memory-inference` accepts the selected profile, model, effort,
 speed, system message and prompt through JSON on stdin. It makes one call
