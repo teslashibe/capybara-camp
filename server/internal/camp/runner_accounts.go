@@ -7,13 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
+	"github.com/teslashibe/capybara-camp/server/internal/providerlogin"
 )
 
 type LoginChallenge struct {
@@ -158,49 +157,7 @@ func (s *Store) ClaimRunnerLogin(ctx context.Context, token, attempt, claim stri
 	return out, tx.Commit(ctx)
 }
 func validateLoginChallenge(provider string, c LoginChallenge) bool {
-	if len(c.URL) > 4096 || len(c.UserCode) > 32 || strings.ContainsAny(c.URL, "\r\n\t") {
-		return false
-	}
-	u, err := url.Parse(c.URL)
-	if err != nil || u.Scheme != "https" || u.User != nil || u.Fragment != "" || u.Port() != "" || u.RawPath != "" {
-		return false
-	}
-	if provider == "Codex" {
-		if u.Host != "auth.openai.com" || u.Path != "/codex/device" || u.RawQuery != "" || len(c.UserCode) < 4 {
-			return false
-		}
-		for _, r := range c.UserCode {
-			if (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' {
-				return false
-			}
-		}
-		return true
-	}
-	if provider != "Claude" || u.Host != "claude.ai" || u.Path != "/oauth/authorize" || c.UserCode != "" {
-		return false
-	}
-	q, err := url.ParseQuery(u.RawQuery)
-	if err != nil {
-		return false
-	}
-	allowed := map[string]bool{"client_id": true, "response_type": true, "redirect_uri": true, "scope": true, "state": true, "code_challenge": true, "code_challenge_method": true}
-	for k, v := range q {
-		if !allowed[k] || len(v) != 1 {
-			return false
-		}
-	}
-	if q.Get("response_type") != "code" || !validID(q.Get("client_id")) || len(q.Get("state")) < 16 || len(q.Get("state")) > 256 || q.Get("code_challenge_method") != "S256" || len(q.Get("code_challenge")) != 43 {
-		return false
-	}
-	redirect, err := url.Parse(q.Get("redirect_uri"))
-	if err != nil || redirect.User != nil || redirect.RawQuery != "" || redirect.Fragment != "" {
-		return false
-	}
-	if redirect.String() == "https://console.anthropic.com/oauth/code/callback" || redirect.String() == "https://platform.claude.com/oauth/code/callback" {
-		return true
-	}
-	port, e := strconv.Atoi(redirect.Port())
-	return e == nil && port > 0 && port <= 65535 && redirect.Scheme == "http" && (redirect.Hostname() == "localhost" || redirect.Hostname() == "127.0.0.1") && redirect.Path == "/callback" && redirect.RawPath == ""
+	return providerlogin.ValidChallenge(provider, c.URL, c.UserCode)
 }
 func credentialBinding(a ProviderAccount, revision int64) string {
 	return fmt.Sprintf("credentials:v1:%s:%s:%s:%s:%d", a.OwnerUserID, a.ID, a.InstallationID, a.Provider, revision)

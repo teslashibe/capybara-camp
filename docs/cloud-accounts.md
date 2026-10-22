@@ -1,9 +1,9 @@
 # Cloud provider account service
 
-This is the first cloud account slice for V1. The Go service stores owner-bound
-accounts, installation grants and login attempts. The official CLI login worker,
-native account setup screen and cloud execution are still required. These
-endpoints alone do not start a cloud provider session.
+The Go service stores owner-bound accounts, installation grants and login
+attempts. Go sign-in adapters now drive the official CLIs inside disposable
+private profiles. The worker control loop, native account setup screen and cloud
+execution are still required. These endpoints alone do not start a cloud session.
 
 ## Ownership and storage
 
@@ -84,7 +84,9 @@ activate credentials. A failed or cancelled reconnect retains the existing login
 
 Waiting reports contain only an allowlisted HTTPS provider URL and optional
 device code. Codex uses the official device verification route. Claude URLs must
-carry a PKCE authorization request with an allowed callback. Arbitrary CLI output,
+carry a PKCE authorization request for the verified Claude Code subscription
+client with an allowed callback. Both the current `claude.com/cai/oauth/authorize`
+route and the older `claude.ai/oauth/authorize` route are supported. Arbitrary CLI output,
 URLs with embedded credentials and external redirects are rejected. Live CLI
 compatibility tests are still required before enabling the native login UI.
 
@@ -106,3 +108,22 @@ expiry, cancellation/completion races, identity mismatch, encrypted state bindin
 cleanup-only access and HTTP token separation. These tests use synthetic provider
 proofs. They do not establish successful Codex or Claude cloud sign-in or workload
 isolation.
+
+The sign-in adapters use an empty private HOME and provider directory, discard
+ambient credentials and set a fixed non-browser command for headless login.
+Codex uses its app-server device-code flow and verifies `account/read` after the
+matching completion event. Claude uses `auth login --claudeai`, accepts one
+authorization code through stdin and verifies `auth status --json`. Identity is
+extracted from the fresh CLI-owned credential state after these checks. This is
+not an independent JWT verification API for caller-supplied credentials.
+
+Snapshots include only fixed provider credential files, with a 256 KiB total
+limit. Reads reject symlinks, pipes and foreign-owned files. The candidate profile
+is removed on success, cancellation or failure; a cleanup failure is reported.
+The future runner must encrypt and persist a successful snapshot before reporting
+completion and handle uncertain delivery without repeating provider sign-in.
+
+Tests exercise each adapter with fake CLIs, credential identity checks, inherited
+credential rejection, one-code input, cancellation and profile cleanup. An opt-in
+preflight also exercised the installed Claude CLI's actual authorization URL and
+cancelled before signing in. It proves URL compatibility, not a completed login.

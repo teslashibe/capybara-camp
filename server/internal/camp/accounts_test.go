@@ -346,7 +346,7 @@ func TestCloudAuthURLsAndDisabledKey(t *testing.T) {
 			t.Fatal("unsafe URL", raw)
 		}
 	}
-	q := url.Values{"client_id": {uuid.NewString()}, "response_type": {"code"}, "state": {strings.Repeat("s", 32)}, "code_challenge": {strings.Repeat("c", 43)}, "code_challenge_method": {"S256"}, "redirect_uri": {"http://localhost:54545/callback"}}
+	q := url.Values{"client_id": {"9d1c250a-e61b-44d9-88ed-5944d1962f5e"}, "response_type": {"code"}, "state": {strings.Repeat("s", 32)}, "code_challenge": {strings.Repeat("c", 43)}, "code_challenge_method": {"S256"}, "redirect_uri": {"http://localhost:54545/callback"}}
 	claude := LoginChallenge{URL: "https://claude.ai/oauth/authorize?" + q.Encode()}
 	if !validateLoginChallenge("Claude", claude) {
 		t.Fatal("Claude callback rejected")
