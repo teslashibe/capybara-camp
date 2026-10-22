@@ -55,6 +55,7 @@ type Workspace struct {
 	CreatedAt              time.Time `json:"created_at"`
 	UpdatedAt              time.Time `json:"updated_at"`
 	FailureCode            string    `json:"failure_code,omitempty"`
+	TransferID             string    `json:"transfer_id,omitempty"`
 }
 
 type WorkspaceCancel struct {
@@ -131,6 +132,17 @@ func validWorkspaceInput(input WorkspaceInput) bool {
 // GitHub reads may repeat after a lost response; the row, branch and event do
 // not. No credential, checkout, provider process or assignment is created here.
 func (g *GitStore) CreateWorkspace(ctx context.Context, a auth.Actor, campID, sessionID, requestID string, input WorkspaceInput) (Workspace, error) {
+	return g.createWorkspace(ctx, a, campID, sessionID, requestID, "", input)
+}
+
+func (g *GitStore) CreateTransferWorkspace(ctx context.Context, a auth.Actor, campID, sessionID, transferID, requestID string, input WorkspaceInput) (Workspace, error) {
+	if !validID(transferID) {
+		return Workspace{}, ErrInput
+	}
+	return g.createWorkspace(ctx, a, campID, sessionID, requestID, transferID, input)
+}
+
+func (g *GitStore) createWorkspace(ctx context.Context, a auth.Actor, campID, sessionID, requestID, transferID string, input WorkspaceInput) (Workspace, error) {
 	if err := g.store.cloudEnabled(); err != nil {
 		return Workspace{}, err
 	}
@@ -148,12 +160,18 @@ func (g *GitStore) CreateWorkspace(ctx context.Context, a auth.Actor, campID, se
 		return Workspace{}, err
 	}
 	defer tx.Rollback(work)
+	if _, err = g.transferWorkspaceSource(work, tx, a, campID, sessionID, transferID, input.ProviderAccountID); err != nil {
+		return Workspace{}, err
+	}
 	before, err := g.workspaceAuthority(work, tx, a, campID, sessionID, input)
 	if err != nil {
 		return Workspace{}, err
 	}
 	var existing Workspace
 	action := "workspace.prepare:" + sessionID
+	if transferID != "" {
+		action = "transfer.workspace:" + transferID
+	}
 	if hit, err := g.store.beginCommand(work, tx, a, requestID, action, input, &existing); err != nil {
 		return Workspace{}, err
 	} else if hit {
@@ -218,6 +236,10 @@ func (g *GitStore) CreateWorkspace(ctx context.Context, a auth.Actor, campID, se
 		return Workspace{}, err
 	}
 	defer tx.Rollback(work)
+	reviewed, err := g.transferWorkspaceSource(work, tx, a, campID, sessionID, transferID, input.ProviderAccountID)
+	if err != nil {
+		return Workspace{}, err
+	}
 	after, err := g.workspaceAuthority(work, tx, a, campID, sessionID, input)
 	if err != nil {
 		return Workspace{}, err
@@ -229,6 +251,9 @@ func (g *GitStore) CreateWorkspace(ctx context.Context, a auth.Actor, campID, se
 	}
 	if after.git.Epoch != before.git.Epoch || after.account.Epoch != before.account.Epoch || after.session.Revision != input.ExpectedSessionRevision ||
 		after.project.ID != before.project.ID || after.project.Revision != input.ExpectedProjectRevision {
+		return Workspace{}, ErrRevision
+	}
+	if transferID != "" && sha != reviewed.BaseCommit {
 		return Workspace{}, ErrRevision
 	}
 	linked := false
@@ -247,10 +272,10 @@ func (g *GitStore) CreateWorkspace(ctx context.Context, a auth.Actor, campID, se
 	}
 	id := uuid.NewString()
 	_, err = tx.Exec(work, `INSERT INTO ticket_workspaces(id,camp_id,session_id,project_id,owner_user_id,provider_account_id,provider_installation_id,provider_epoch,
- git_connection_id,git_epoch,github_user_id,github_login,github_installation_id,repository_id,repository_name,requested_ref,base_commit,branch,purpose,source_revision,project_revision,installation_page,repository_page)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
- ON CONFLICT(session_id) WHERE state IN ('queued','preparing','ready') DO NOTHING`, id, campID, sessionID, after.project.ID, a.UserID, after.account.ID, after.account.InstallationID, after.account.Epoch,
-		after.git.ID, after.git.Epoch, after.git.GitHubUserID, after.git.Login, installation.ID, repository.ID, repository.FullName, ref, sha, "camp/"+sessionID+"/"+id, input.Purpose, after.session.Revision, after.project.Revision, input.InstallationPage, input.RepositoryPage)
+ git_connection_id,git_epoch,github_user_id,github_login,github_installation_id,repository_id,repository_name,requested_ref,base_commit,branch,purpose,source_revision,project_revision,installation_page,repository_page,transfer_id)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,NULLIF($24,'')::uuid)
+ ON CONFLICT DO NOTHING`, id, campID, sessionID, after.project.ID, a.UserID, after.account.ID, after.account.InstallationID, after.account.Epoch,
+		after.git.ID, after.git.Epoch, after.git.GitHubUserID, after.git.Login, installation.ID, repository.ID, repository.FullName, ref, sha, "camp/"+sessionID+"/"+id, input.Purpose, after.session.Revision, after.project.Revision, input.InstallationPage, input.RepositoryPage, transferID)
 	if err != nil {
 		return Workspace{}, err
 	}
@@ -272,7 +297,7 @@ func (g *GitStore) CreateWorkspace(ctx context.Context, a auth.Actor, campID, se
 
 const workspaceColumns = `w.id,w.camp_id,w.session_id,w.project_id,w.owner_user_id,w.provider_account_id,w.provider_installation_id,w.provider_epoch,
  w.git_connection_id,w.git_epoch,w.github_user_id,w.github_login,w.github_installation_id,w.repository_id,w.repository_name,w.requested_ref,w.base_commit,w.branch,w.purpose,
- w.source_revision,w.project_revision,w.state,w.revision,w.created_at,w.updated_at,w.failure_code`
+ w.source_revision,w.project_revision,w.state,w.revision,w.created_at,w.updated_at,w.failure_code,COALESCE(w.transfer_id::text,'')`
 
 func readWorkspace(ctx context.Context, tx pgx.Tx, a auth.Actor, campID, id string) (Workspace, error) {
 	var out Workspace
@@ -283,7 +308,7 @@ func readWorkspace(ctx context.Context, tx pgx.Tx, a auth.Actor, campID, id stri
  WHERE w.owner_user_id=$1 AND w.camp_id=$2 AND w.id=$3`, a.UserID, campID, id).Scan(&out.ID, &out.CampID, &out.SessionID, &out.ProjectID, &out.OwnerUserID,
 		&out.ProviderAccountID, &out.ProviderInstallationID, &out.ProviderEpoch, &out.GitConnectionID, &out.GitEpoch, &out.GitHubUserID, &out.GitHubLogin,
 		&out.GitHubInstallationID, &out.RepositoryID, &out.RepositoryName, &out.RequestedRef, &out.BaseCommit, &out.Branch, &out.Purpose,
-		&out.SourceRevision, &out.ProjectRevision, &out.State, &out.Revision, &out.CreatedAt, &out.UpdatedAt, &out.FailureCode)
+		&out.SourceRevision, &out.ProjectRevision, &out.State, &out.Revision, &out.CreatedAt, &out.UpdatedAt, &out.FailureCode, &out.TransferID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = ErrDenied
 	}
@@ -375,7 +400,7 @@ func (g *GitStore) CancelWorkspace(ctx context.Context, a auth.Actor, campID, id
 		return out, ErrRevision
 	}
 	if out.State != "cancelled" {
-		if err = g.retireWorkspaceToken(ctx, tx, id); err != nil {
+		if err = retireWorkspaceToken(ctx, tx, id); err != nil {
 			return out, err
 		}
 		if _, err = tx.Exec(ctx, `UPDATE ticket_workspaces SET state='cancelled',revision=revision+1,updated_at=now() WHERE id=$1`, id); err != nil {

@@ -130,7 +130,7 @@ func (a *API) gitRoutes(mux *http.ServeMux) {
 			if !decode(w, r, &in) {
 				return
 			}
-			if operation != "report" && (in.State != "" || in.BaseCommit != "" || in.Branch != "" || in.FailureCode != "") {
+			if operation != "report" && (in.State != "" || in.BaseCommit != "" || in.Branch != "" || in.FailureCode != "" || in.TransferReceipt != nil) {
 				problem(w, 400, "invalid_input")
 				return
 			}

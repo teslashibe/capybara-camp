@@ -27,27 +27,26 @@ or provisioned for this goal.
 
 The transfer work includes a read-only Go capture layer for selected Git
 changes and owner-bound, encrypted, resumable upload storage. Completion checks
-payload and review hashes against the pinned source revisions. These APIs do
-not yet stage a destination, move an assignment, or connect to the native
-transfer UI. They do not make used workspaces movable. The current contract,
-validation and remaining integration are in [transfer payload](transfer-payload.md).
-The complete Go race suite and vet passed locally with disposable PostgreSQL 17
-after the upload API and schema 20 changes. Targeted tests cover resumable
-chunks, encrypted storage, owner-only access, stale source/account snapshots,
-cross-Camp quotas, HTTP limits and retained data during migration. The staged
-secret scan was clean. Native transfer and real destination acceptance remain open.
+payload and review hashes against the pinned source revisions. The staging
+helper verifies the Git base and file preimages before applying files, retains
+a private recovery journal, and rejects conflicting work. The contract and
+remaining integration are in [transfer payload](transfer-payload.md).
 
-The internal destination helper now verifies the pinned Git base and file
-preimages, applies reviewed files to a private checkout and journals partial
-progress for recovery. It rejects staged, untracked, ignored and conflicting
-work before the initial apply. This helper still needs the scoped runner
-claim/download path, source fence, history migration and assignment handoff;
-the native transfer action remains unavailable.
-Real-Git staging tests pass, including an abrupt child-process exit and resume,
-with no source changes. The full Go race suite and vet passed against disposable
-PostgreSQL 17; the final staging checks passed after cancellation and overlap
-handling were tightened. A Linux test binary compiles, while Linux runtime
-staging and native end-to-end transfer acceptance still need verification.
+The Go runner now consumes an owner-authorized destination job, downloads the
+reviewed payload under its preparation claim, stages it in a separate checkout
+and reports the required file-verification receipt. The integration test uses
+the real Go API and Git transport with disposable PostgreSQL, drops download and
+completion responses, and verifies recovery without changing the source. Schema
+21 retains older uploads and adds the destination binding. Ordinary Run on
+assignment rejects these workspaces until the final handoff exists. Source
+locking, complete history/commit migration and native transfer review remain open.
+The targeted upload, staging and runner tests pass, including an abrupt
+staging-process exit and recovery, owner-only access, stale snapshots, concurrent
+quotas and migration retention. Native end-to-end transfer and deployed Linux
+acceptance remain open.
+The full Go race suite and vet also pass with disposable PostgreSQL 17 at schema
+21. This evidence covers the local Go implementation and synthetic integrations;
+it does not complete the provider, native UI or two-Mac acceptance gates.
 
 The native account form and synthetic provider walkthrough now pass locally.
 The Go controller provisions per-installation workers, renews managed grants,

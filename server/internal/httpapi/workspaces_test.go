@@ -3,6 +3,8 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http/httptest"
 	"net/url"
@@ -15,6 +17,7 @@ import (
 	"github.com/teslashibe/capybara-camp/server/internal/camp"
 	"github.com/teslashibe/capybara-camp/server/internal/gitprovider"
 	"github.com/teslashibe/capybara-camp/server/internal/testdb"
+	"github.com/teslashibe/capybara-camp/server/internal/transfer"
 )
 
 type workspaceHTTPProvider struct{ gitHTTPProvider }
@@ -250,4 +253,65 @@ func TestWorkspaceHTTPRequiresOwnerAndReplaysReceipt(t *testing.T) {
 	if err = json.Unmarshal(raw, &workspace); err != nil || workspace.State != "cancelled" {
 		t.Fatal("cancellation failed", err)
 	}
+
+	// A transfer uses a separate destination and only its claimed runner reads
+	// the file payload. A staging receipt does not authorize execution.
+	current, err := store.Session(ctx, actors[0], c.ID, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := func(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
+	data := []byte("reviewed source contents")
+	manifest := transfer.Manifest{Version: 1, BaseCommit: strings.Repeat("a", 40), Files: []transfer.File{{Path: "file.txt", Data: data, SHA256: digest(data)}}}
+	payload, _ := json.Marshal(manifest)
+	review, err := manifest.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	create, _ := json.Marshal(camp.TransferInput{TargetLocation: "cloud", TargetAccountID: account.ID, ExpectedEpoch: current.ExecutionEpoch, ExpectedRevision: current.Revision, ExpectedTranscriptRevision: current.TranscriptRevision, ExpectedPermissionRevision: current.PermissionRevision, PayloadSHA256: digest(payload), ReviewSHA256: review, PayloadBytes: len(payload)})
+	transferBase := "/v1/camps/" + c.ID + "/sessions/" + session.ID + "/transfers"
+	var upload camp.Transfer
+	if err = json.Unmarshal(call("POST", transferBase, tokens[0], uuid.NewString(), create, 201), &upload); err != nil {
+		t.Fatal(err)
+	}
+	transferPath := transferBase + "/" + upload.ID
+	chunkBody, _ := json.Marshal(camp.TransferChunk{Data: payload, SHA256: digest(payload)})
+	call("PUT", transferPath+"/chunks/0", tokens[0], "", chunkBody, 200)
+	call("POST", transferPath+"/complete", tokens[0], "", []byte(`{}`), 200)
+	call("POST", transferPath+"/workspaces", tokens[1], uuid.NewString(), body, 404)
+	var destination camp.Workspace
+	if err = json.Unmarshal(call("POST", transferPath+"/workspaces", tokens[0], uuid.NewString(), body, 201), &destination); err != nil {
+		t.Fatal(err)
+	}
+	if destination.TransferID != upload.ID {
+		t.Fatal("missing transfer binding")
+	}
+	destinationPath := "/v1/runner/workspaces/" + destination.ID
+	transferClaim := uuid.NewString()
+	claimBody, _ := json.Marshal(map[string]string{"claim_id": transferClaim})
+	call("POST", destinationPath+"/transfer", tokens[0], "", claimBody, 401)
+	call("POST", destinationPath+"/transfer", grant.Token, "", claimBody, 404)
+	call("POST", destinationPath+"/claim", grant.Token, "", claimBody, 200)
+	call("POST", destinationPath+"/transfer", grant.Token, "", claimBody, 200)
+	call("POST", destinationPath+"/transfer/chunks/-1", grant.Token, "", claimBody, 400)
+	var received camp.TransferChunk
+	if err = json.Unmarshal(call("POST", destinationPath+"/transfer/chunks/0", grant.Token, "", claimBody, 200), &received); err != nil || !bytes.Equal(received.Data, payload) {
+		t.Fatal("runner payload", err)
+	}
+	call("POST", destinationPath+"/token", grant.Token, "", claimBody, 200)
+	stageReport := struct {
+		ClaimID string `json:"claim_id"`
+		camp.WorkspaceReport
+	}{transferClaim, camp.WorkspaceReport{State: "ready", BaseCommit: destination.BaseCommit, Branch: destination.Branch}}
+	stageBody, _ := json.Marshal(stageReport)
+	call("POST", destinationPath+"/report", grant.Token, "", stageBody, 400)
+	stageReport.TransferReceipt = &transfer.StageReceipt{ReviewSHA256: review, BaseCommit: destination.BaseCommit, Branch: destination.Branch, Files: 1}
+	stageBody, _ = json.Marshal(stageReport)
+	if err = json.Unmarshal(call("POST", destinationPath+"/report", grant.Token, "", stageBody, 200), &destination); err != nil {
+		t.Fatal(err)
+	}
+	assignment, _ = json.Marshal(camp.ExecutionInput{Location: "cloud", WorkspaceID: destination.ID, ExpectedEpoch: current.ExecutionEpoch, ExpectedSessionRevision: current.Revision, ExpectedTranscriptRevision: current.TranscriptRevision, ExpectedWorkspaceRevision: destination.Revision})
+	call("PUT", executionPath, tokens[0], uuid.NewString(), assignment, 409)
+	call("POST", transferPath+"/cancel", tokens[0], "", []byte(`{}`), 200)
+	call("POST", destinationPath+"/transfer/chunks/0", grant.Token, "", claimBody, 409)
 }

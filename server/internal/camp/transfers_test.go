@@ -111,6 +111,18 @@ func TestTransferResumesEncryptedChunksWithoutMovingSession(t *testing.T) {
 	if err != nil || value.State != "ready" {
 		t.Fatal("complete", err)
 	}
+	if value.BaseCommit != strings.Repeat("a", 40) || value.FileCount != 1 {
+		t.Fatal("missing reviewed base metadata")
+	}
+	// A schema-20 upload keeps its ciphertext and is validated once to populate
+	// the additive metadata needed by destination preparation.
+	if _, err = pool.Exec(ctx, `UPDATE session_transfers SET base_commit=NULL,source_branch=NULL,file_count=NULL WHERE id=$1`, value.ID); err != nil {
+		t.Fatal(err)
+	}
+	value, err = s.CompleteTransfer(ctx, owner, c.ID, session.ID, value.ID)
+	if err != nil || value.BaseCommit != strings.Repeat("a", 40) || value.FileCount != 1 {
+		t.Fatal("upgraded upload did not resume", err)
+	}
 	revision := value.Revision
 	value, err = s.CompleteTransfer(ctx, owner, c.ID, session.ID, value.ID)
 	if err != nil || value.Revision != revision {

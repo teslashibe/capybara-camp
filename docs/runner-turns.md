@@ -69,6 +69,12 @@ unavailable or malformed replies do not delete anything. A used checkout stays
 on disk for reviewed transfer or account erasure even after its server record
 is retired. The endpoint returns no other account's workspace metadata.
 
+Transfer destinations also retain their local checkout and private staging
+files after cancellation or rejection. The [reviewed transfer protocol](transfer-payload.md)
+uses the existing preparation claim to authorize downloads and requires a
+verified staging receipt. These destinations cannot execute through ordinary
+Run on assignment; the final session handoff is still pending.
+
 Schema 17 permits multiple ready workspaces per installation while retaining a
 unique preparing workspace. It adds request/workspace scheduling indexes and
 preserves existing prepared checkouts. Upgrade the API and every runner with

@@ -138,6 +138,7 @@ accepted yet.
 
 The [transfer payload](transfer-payload.md) has Go capture, validation, resumable
 encrypted upload storage and an isolated file-staging helper with a private
-recovery journal. The runner and native app still need to connect these pieces.
-Source locking, history migration, server acceptance of destination receipts
-and the assignment commit remain open before the app can move a used workspace.
+recovery journal. An owner-authorized destination job connects the upload to
+the cloud runner and validates its staging receipt. Source locking, history
+migration, native review and the assignment commit remain open before the app
+can move a used workspace.

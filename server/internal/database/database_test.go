@@ -126,11 +126,18 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO request_controls(id,request_id,provider_id,kind,input_hash,accepted_text,state) VALUES($1,$2,$4,'steer',$3,'Preserved direction','resolved')`, controlID, request, bytes.Repeat([]byte{19}, 32), controlID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = provider.UpTo(ctx, 19); err != nil {
+	if _, err = provider.UpTo(ctx, 20); err != nil {
+		t.Fatal(err)
+	}
+	transfer := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO session_transfers(id,camp_id,session_id,owner_user_id,source_location,source_epoch,source_revision,source_transcript_revision,source_permission_revision,target_location,target_device_id,payload_sha256,review_sha256,payload_bytes,uploaded_bytes,state) VALUES($1,$2,$3,$4,'local',1,1,0,1,'local',$5,$6,$7,2,2,'ready')`, transfer, camp, session, id, device, strings.Repeat("a", 64), strings.Repeat("b", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO transfer_chunks(transfer_id,ordinal,sha256,size,encrypted_data) VALUES($1,0,$2,2,$3)`, transfer, strings.Repeat("c", 64), bytes.Repeat([]byte{18}, 30)); err != nil {
 		t.Fatal(err)
 	}
 	if Ready(ctx, pool) == nil {
-		t.Fatal("schema 19 accepted without transfer storage")
+		t.Fatal("schema 20 accepted without transfer workspace bindings")
 	}
 	if err = Migrate(ctx, u.String()); err != nil {
 		t.Fatal(err)
@@ -142,8 +149,12 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 		t.Fatal(err)
 	}
 	var transferCount int
-	if err = pool.QueryRow(ctx, `SELECT count(*) FROM session_transfers`).Scan(&transferCount); err != nil || transferCount != 0 {
-		t.Fatal("migration invented session transfers", err)
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM session_transfers WHERE id=$1 AND state='ready' AND base_commit IS NULL AND source_branch IS NULL AND file_count IS NULL`, transfer).Scan(&transferCount); err != nil || transferCount != 1 {
+		t.Fatal("migration lost or invented transfer review metadata", err)
+	}
+	var chunk []byte
+	if err = pool.QueryRow(ctx, `SELECT encrypted_data FROM transfer_chunks WHERE transfer_id=$1`, transfer).Scan(&chunk); err != nil || !bytes.Equal(chunk, bytes.Repeat([]byte{18}, 30)) {
+		t.Fatal("migration changed stored chunks", err)
 	}
 	var unrecorded bool
 	if err = pool.QueryRow(ctx, `SELECT execution_location IS NULL AND execution_epoch IS NULL AND execution_workspace_id IS NULL FROM planning_participants WHERE plan_id=$1`, plan).Scan(&unrecorded); err != nil || !unrecorded {

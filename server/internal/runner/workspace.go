@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/teslashibe/capybara-camp/server/internal/camp"
+	"github.com/teslashibe/capybara-camp/server/internal/transfer"
 )
 
 // Workspace journals hold identifiers and immutable checkout metadata only.
@@ -27,7 +28,7 @@ type workspaceRecord struct {
 }
 
 func sameWorkspace(a, b camp.Workspace) bool {
-	return a.ID == b.ID && a.SessionID == b.SessionID && a.CampID == b.CampID && a.OwnerUserID == b.OwnerUserID && a.ProjectID == b.ProjectID && a.ProviderAccountID == b.ProviderAccountID && a.ProviderInstallationID == b.ProviderInstallationID && a.ProviderEpoch == b.ProviderEpoch && a.GitConnectionID == b.GitConnectionID && a.GitEpoch == b.GitEpoch && a.GitHubUserID == b.GitHubUserID && a.GitHubInstallationID == b.GitHubInstallationID && a.RepositoryName == b.RepositoryName && a.RepositoryID == b.RepositoryID && a.BaseCommit == b.BaseCommit && a.Branch == b.Branch && a.Purpose == b.Purpose && a.SourceRevision == b.SourceRevision && a.ProjectRevision == b.ProjectRevision
+	return a.ID == b.ID && a.SessionID == b.SessionID && a.CampID == b.CampID && a.OwnerUserID == b.OwnerUserID && a.ProjectID == b.ProjectID && a.ProviderAccountID == b.ProviderAccountID && a.ProviderInstallationID == b.ProviderInstallationID && a.ProviderEpoch == b.ProviderEpoch && a.GitConnectionID == b.GitConnectionID && a.GitEpoch == b.GitEpoch && a.GitHubUserID == b.GitHubUserID && a.GitHubInstallationID == b.GitHubInstallationID && a.RepositoryName == b.RepositoryName && a.RepositoryID == b.RepositoryID && a.BaseCommit == b.BaseCommit && a.Branch == b.Branch && a.Purpose == b.Purpose && a.SourceRevision == b.SourceRevision && a.ProjectRevision == b.ProjectRevision && a.TransferID == b.TransferID
 }
 
 func validWorkspaceRecord(r *workspaceRecord) bool {
@@ -201,20 +202,24 @@ func (w *Worker) workspaceTick(ctx context.Context, account camp.RunnerAccountSt
 		if err != nil {
 			return err
 		}
-		err = w.prepareWorkspace(ctx, r, token)
+		receipt, prepareErr := w.prepareWorkspace(ctx, r, token)
+		err = prepareErr
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if errors.Is(err, ErrUnavailable) {
+			return err
 		}
 		if errors.Is(err, ErrRejected) {
 			return w.reconcileWorkspace(ctx, r)
 		}
-		report := camp.WorkspaceReport{State: "ready", BaseCommit: r.Workspace.BaseCommit, Branch: r.Workspace.Branch}
+		report := camp.WorkspaceReport{State: "ready", BaseCommit: r.Workspace.BaseCommit, Branch: r.Workspace.Branch, TransferReceipt: receipt}
 		if err != nil {
 			code := "checkout_failed"
-			if errors.Is(err, errCheckoutUnsafe) {
+			if errors.Is(err, errCheckoutUnsafe) || errors.Is(err, transfer.ErrInput) || errors.Is(err, transfer.ErrDestination) {
 				code = "checkout_unsafe"
 			}
-			if errors.Is(err, errCheckoutSize) {
+			if errors.Is(err, errCheckoutSize) || errors.Is(err, transfer.ErrLimit) {
 				code = "checkout_too_large"
 			}
 			report = camp.WorkspaceReport{State: "failed", FailureCode: code}
@@ -317,11 +322,23 @@ func (w *Worker) reconcileWorkspace(ctx context.Context, r *workspaceRecord) err
 	}
 }
 
-func (w *Worker) prepareWorkspace(parent context.Context, r *workspaceRecord, token camp.RunnerWorkspaceToken) error {
+func (w *Worker) prepareWorkspace(parent context.Context, r *workspaceRecord, token camp.RunnerWorkspaceToken) (*transfer.StageReceipt, error) {
 	ctx, cancel := context.WithDeadline(parent, r.Deadline)
 	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- w.checkout.prepare(ctx, r.Workspace, token) }()
+	type result struct {
+		receipt *transfer.StageReceipt
+		err     error
+	}
+	done := make(chan result, 1)
+	workspace, claim := r.Workspace, r.ClaimID
+	go func() {
+		if workspace.TransferID != "" {
+			receipt, err := w.prepareTransfer(ctx, workspace, claim, token)
+			done <- result{receipt, err}
+		} else {
+			done <- result{err: w.checkout.prepare(ctx, workspace, token)}
+		}
+	}()
 	joined := false
 	defer func() {
 		cancel()
@@ -339,13 +356,13 @@ func (w *Worker) prepareWorkspace(parent context.Context, r *workspaceRecord, to
 	defer leaseTimer.Stop()
 	for {
 		select {
-		case err := <-done:
+		case out := <-done:
 			joined = true
-			return err
+			return out.receipt, out.err
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-leaseTimer.C:
-			return ErrRejected
+			return nil, ErrRejected
 		case <-tick.C:
 			heartbeatCtx, stop := context.WithDeadline(ctx, r.LeaseUntil)
 			claim, err := w.client.workspaceClaim(heartbeatCtx, r, "heartbeat")
@@ -354,7 +371,7 @@ func (w *Worker) prepareWorkspace(parent context.Context, r *workspaceRecord, to
 				continue
 			}
 			if err != nil {
-				return err
+				return nil, err
 			}
 			r.LeaseUntil = claim.LeaseUntil
 			if !leaseTimer.Stop() {

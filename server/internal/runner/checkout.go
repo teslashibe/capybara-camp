@@ -35,7 +35,11 @@ func validRepository(value string) bool {
 func validWorkspace(w camp.Workspace) bool {
 	_, err := uuid.Parse(w.ID)
 	_, sessionErr := uuid.Parse(w.SessionID)
-	return err == nil && sessionErr == nil && validRepository(w.RepositoryName) && objectID.MatchString(w.BaseCommit) && w.Branch == "camp/"+w.SessionID+"/"+w.ID
+	var transferErr error
+	if w.TransferID != "" {
+		_, transferErr = uuid.Parse(w.TransferID)
+	}
+	return err == nil && sessionErr == nil && transferErr == nil && validRepository(w.RepositoryName) && objectID.MatchString(w.BaseCommit) && w.Branch == "camp/"+w.SessionID+"/"+w.ID
 }
 
 type checkout struct {
@@ -96,6 +100,11 @@ func (c *checkout) removeUnused(id string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return ErrState
 	}
+	if _, err := c.root.Lstat("transfer-workspace-" + id + ".json"); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return ErrState
+	}
 	return c.root.RemoveAll("workspace-" + id)
 }
 
@@ -146,7 +155,7 @@ func (c *checkout) keepWorkspace(id string) error {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return ErrState
 		}
-		if err = c.root.RemoveAll(entry.Name()); err != nil {
+		if err = c.removeUnused(name); err != nil {
 			return ErrState
 		}
 	}
@@ -250,6 +259,15 @@ func (c *checkout) verify(ctx context.Context, w camp.Workspace) error {
 			return ctx.Err()
 		}
 		return err
+	}
+	if w.TransferID != "" {
+		held, err := c.transferHeld(w)
+		if err != nil {
+			return err
+		}
+		if held {
+			return c.verifyTransfer(ctx, w)
+		}
 	}
 	status, err := c.git(ctx, w, "", "status", "--porcelain=v1", "--untracked-files=all")
 	if err != nil && ctx.Err() != nil {

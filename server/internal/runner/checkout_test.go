@@ -335,7 +335,7 @@ func TestCheckoutLostHeartbeatStopsAtLeaseDeadline(t *testing.T) {
 	worker := &Worker{checkout: c, client: &client{origin: service.URL, http: service.Client()}, interval: 10 * time.Millisecond}
 	now := time.Now()
 	record := &workspaceRecord{Workspace: workspace, ClaimID: token.ClaimID, Phase: "preparing", LeaseUntil: now.Add(200 * time.Millisecond), Deadline: now.Add(5 * time.Second)}
-	err := worker.prepareWorkspace(t.Context(), record, token)
+	_, err := worker.prepareWorkspace(t.Context(), record, token)
 	if !errors.Is(err, ErrRejected) || time.Since(now) > time.Second {
 		t.Fatal("lost heartbeat exceeded lease", err, time.Since(now))
 	}

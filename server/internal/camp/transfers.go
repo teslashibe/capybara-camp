@@ -49,6 +49,9 @@ type Transfer struct {
 	TargetDeviceID           string    `json:"target_device_id,omitempty"`
 	PayloadSHA256            string    `json:"payload_sha256"`
 	ReviewSHA256             string    `json:"review_sha256"`
+	BaseCommit               string    `json:"base_commit,omitempty"`
+	SourceBranch             string    `json:"source_branch,omitempty"`
+	FileCount                int       `json:"file_count"`
 	PayloadBytes             int       `json:"payload_bytes"`
 	UploadedBytes            int       `json:"uploaded_bytes"`
 	Uploaded                 []int     `json:"uploaded_chunks"`
@@ -121,7 +124,7 @@ func readTransfer(ctx context.Context, tx pgx.Tx, a auth.Actor, campID, sessionI
 	if !validID(id) {
 		return t, ErrDenied
 	}
-	err := tx.QueryRow(ctx, `SELECT id,camp_id,session_id,owner_user_id,source_location,COALESCE(source_workspace_id::text,''),source_epoch,source_revision,source_transcript_revision,source_permission_revision,target_location,COALESCE(target_account_id::text,''),COALESCE(target_account_epoch,0),COALESCE(target_device_id::text,''),payload_sha256,review_sha256,payload_bytes,uploaded_bytes,state,revision,expires_at FROM session_transfers WHERE id=$1 AND camp_id=$2 AND session_id=$3 AND owner_user_id=$4 FOR UPDATE`, id, campID, sessionID, a.UserID).Scan(&t.ID, &t.CampID, &t.SessionID, &t.OwnerUserID, &t.SourceLocation, &t.SourceWorkspaceID, &t.SourceEpoch, &t.SourceRevision, &t.SourceTranscriptRevision, &t.SourcePermissionRevision, &t.TargetLocation, &t.TargetAccountID, &t.TargetAccountEpoch, &t.TargetDeviceID, &t.PayloadSHA256, &t.ReviewSHA256, &t.PayloadBytes, &t.UploadedBytes, &t.State, &t.Revision, &t.ExpiresAt)
+	err := tx.QueryRow(ctx, `SELECT id,camp_id,session_id,owner_user_id,source_location,COALESCE(source_workspace_id::text,''),source_epoch,source_revision,source_transcript_revision,source_permission_revision,target_location,COALESCE(target_account_id::text,''),COALESCE(target_account_epoch,0),COALESCE(target_device_id::text,''),payload_sha256,review_sha256,payload_bytes,uploaded_bytes,state,revision,expires_at,COALESCE(base_commit,''),COALESCE(source_branch,''),COALESCE(file_count,0) FROM session_transfers WHERE id=$1 AND camp_id=$2 AND session_id=$3 AND owner_user_id=$4 FOR UPDATE`, id, campID, sessionID, a.UserID).Scan(&t.ID, &t.CampID, &t.SessionID, &t.OwnerUserID, &t.SourceLocation, &t.SourceWorkspaceID, &t.SourceEpoch, &t.SourceRevision, &t.SourceTranscriptRevision, &t.SourcePermissionRevision, &t.TargetLocation, &t.TargetAccountID, &t.TargetAccountEpoch, &t.TargetDeviceID, &t.PayloadSHA256, &t.ReviewSHA256, &t.PayloadBytes, &t.UploadedBytes, &t.State, &t.Revision, &t.ExpiresAt, &t.BaseCommit, &t.SourceBranch, &t.FileCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, ErrDenied
 	}
@@ -379,10 +382,10 @@ func (s *Store) CompleteTransfer(ctx context.Context, a auth.Actor, campID, sess
 	if err != nil {
 		return t, err
 	}
-	if t.State == "ready" {
+	if t.State == "ready" && t.BaseCommit != "" {
 		return t, tx.Commit(ctx)
 	}
-	if t.State != "uploading" || t.UploadedBytes != t.PayloadBytes {
+	if !oneOf(t.State, "uploading", "ready") || t.UploadedBytes != t.PayloadBytes {
 		return t, ErrTransition
 	}
 	if err = transferSource(ctx, tx, session, t); err != nil {
@@ -434,7 +437,7 @@ func (s *Store) CompleteTransfer(ctx context.Context, a auth.Actor, campID, sess
 	if err != nil || review != t.ReviewSHA256 {
 		return t, ErrInput
 	}
-	if _, err = tx.Exec(ctx, `UPDATE session_transfers SET state='ready',revision=revision+1,updated_at=now() WHERE id=$1`, id); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE session_transfers SET state='ready',base_commit=$2,source_branch=$3,file_count=$4,revision=revision+1,updated_at=now() WHERE id=$1`, id, manifest.BaseCommit, manifest.Branch, len(manifest.Files)); err != nil {
 		return t, err
 	}
 	t, err = readTransfer(ctx, tx, a, campID, sessionID, id)
@@ -462,6 +465,9 @@ func (s *Store) CancelTransfer(ctx context.Context, a auth.Actor, campID, sessio
 	}
 	if oneOf(t.State, "cancelled", "expired") {
 		return t, tx.Commit(ctx)
+	}
+	if err = s.cancelTransferWorkspaces(ctx, tx, a, t); err != nil {
+		return t, err
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM transfer_chunks WHERE transfer_id=$1`, id); err != nil {
 		return t, err
@@ -498,16 +504,9 @@ func (s *Store) TransferChunk(ctx context.Context, a auth.Actor, campID, session
 	if t.State != "ready" {
 		return TransferChunk{}, ErrTransition
 	}
-	var out TransferChunk
-	var encrypted []byte
-	if err = tx.QueryRow(ctx, `SELECT sha256,encrypted_data FROM transfer_chunks WHERE transfer_id=$1 AND ordinal=$2`, id, index).Scan(&out.SHA256, &encrypted); errors.Is(err, pgx.ErrNoRows) {
-		return out, ErrDenied
-	} else if err != nil {
+	out, err := s.readTransferChunk(ctx, tx, t, index)
+	if err != nil {
 		return out, err
-	}
-	out.Data, err = s.openProvider(encrypted, transferBinding(t, index))
-	if err != nil || transferDigest(out.Data) != out.SHA256 {
-		return TransferChunk{}, ErrInput
 	}
 	return out, tx.Commit(ctx)
 }

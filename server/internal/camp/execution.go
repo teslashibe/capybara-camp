@@ -252,6 +252,9 @@ func (s *Store) AssignExecution(ctx context.Context, a auth.Actor, campID, id, k
 		if w.SessionID != id || w.OwnerUserID != a.UserID || w.State != "ready" {
 			return out, ErrDenied
 		}
+		if w.TransferID != "" {
+			return out, ErrTransition
+		}
 		if w.Revision != in.ExpectedWorkspaceRevision || w.SourceRevision != session.Revision || w.ProjectID != session.ProjectID {
 			return out, ErrRevision
 		}

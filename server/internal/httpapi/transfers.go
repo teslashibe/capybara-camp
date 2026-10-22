@@ -10,6 +10,41 @@ import (
 
 func (a *API) transferRoutes(mux *http.ServeMux) {
 	const base = "/v1/camps/{camp}/sessions/{session}/transfers"
+	mux.HandleFunc("POST "+base+"/{transfer}/workspaces", a.gitAuthorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		var input camp.WorkspaceInput
+		if !decode(w, r, &input) {
+			return
+		}
+		value, err := a.Git.CreateTransferWorkspace(r.Context(), u, r.PathValue("camp"), r.PathValue("session"), r.PathValue("transfer"), r.Header.Get("Idempotency-Key"), input)
+		if !fail(w, err) {
+			write(w, http.StatusCreated, value)
+		}
+	}))
+	for _, suffix := range []string{"", "/chunks/{ordinal}"} {
+		mux.HandleFunc("POST /v1/runner/workspaces/{workspace}/transfer"+suffix, a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
+			var input struct {
+				ClaimID string `json:"claim_id"`
+			}
+			if !decode(w, r, &input) {
+				return
+			}
+			var value any
+			var err error
+			if suffix == "" {
+				value, err = a.Git.RunnerTransfer(r.Context(), token(r), r.PathValue("workspace"), input.ClaimID)
+			} else {
+				index, parseErr := strconv.Atoi(r.PathValue("ordinal"))
+				if parseErr != nil || index < 0 {
+					fail(w, camp.ErrInput)
+					return
+				}
+				value, err = a.Git.RunnerTransferChunk(r.Context(), token(r), r.PathValue("workspace"), input.ClaimID, index)
+			}
+			if !fail(w, err) {
+				write(w, http.StatusOK, value)
+			}
+		}))
+	}
 	mux.HandleFunc("POST "+base, a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		var input camp.TransferInput
 		if !decode(w, r, &input) {

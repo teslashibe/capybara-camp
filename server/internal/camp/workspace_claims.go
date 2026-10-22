@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
+	"github.com/teslashibe/capybara-camp/server/internal/transfer"
 )
 
 type RunnerWorkspaceClaim struct {
@@ -20,10 +21,11 @@ type RunnerWorkspaceClaim struct {
 }
 
 type WorkspaceReport struct {
-	State       string `json:"state"`
-	BaseCommit  string `json:"base_commit,omitempty"`
-	Branch      string `json:"branch,omitempty"`
-	FailureCode string `json:"failure_code,omitempty"`
+	State           string                 `json:"state"`
+	BaseCommit      string                 `json:"base_commit,omitempty"`
+	Branch          string                 `json:"branch,omitempty"`
+	FailureCode     string                 `json:"failure_code,omitempty"`
+	TransferReceipt *transfer.StageReceipt `json:"transfer_receipt,omitempty"`
 }
 
 type workspaceLease struct {
@@ -36,6 +38,7 @@ type workspaceLease struct {
 	tokenState       string
 	installationPage int
 	repositoryPage   int
+	transfer         *Transfer
 }
 
 // The Camp lock precedes account/connection locks, as it does during human
@@ -58,16 +61,26 @@ func (g *GitStore) lockRunnerWorkspace(ctx context.Context, tx pgx.Tx, token, id
 	if _, err = g.store.lock(ctx, tx, a, campID, true); err != nil {
 		return out, err
 	}
+	out.value, err = readWorkspace(ctx, tx, a, campID, id)
+	if err != nil {
+		return out, err
+	}
+	if out.value.TransferID != "" {
+		t, err := g.transferWorkspaceSource(ctx, tx, a, campID, out.value.SessionID, out.value.TransferID, out.value.ProviderAccountID)
+		if err != nil {
+			return out, err
+		}
+		if t.BaseCommit != out.value.BaseCommit || t.SourceRevision != out.value.SourceRevision {
+			return out, ErrRevision
+		}
+		out.transfer = &t
+	}
 	out.runner, err = g.store.lockRunner(ctx, tx, token)
 	if err != nil {
 		return out, err
 	}
 	if out.runner.cleanup {
 		return out, ErrDenied
-	}
-	out.value, err = readWorkspace(ctx, tx, a, campID, id)
-	if err != nil {
-		return out, err
 	}
 	if out.runner.account.ID != out.value.ProviderAccountID || out.runner.account.Epoch != out.value.ProviderEpoch || out.runner.account.State != "connected" {
 		return out, ErrDenied
@@ -106,6 +119,7 @@ func (g *GitStore) NextRunnerWorkspace(ctx context.Context, token string) (*Work
  WHERE w.provider_installation_id=$1 AND w.provider_epoch=$2 AND w.state IN ('queued','preparing','ready')
  AND s.revision=w.source_revision AND s.project_id=w.project_id AND p.revision=w.project_revision AND NOT p.archived
  AND g.state='connected' AND g.epoch=w.git_epoch AND m.role<>'viewer'
+ AND `+validWorkspaceTransferSQL+`
  ORDER BY CASE WHEN requests.active THEN 0 WHEN w.state='preparing' THEN 1
  WHEN w.state='queued' OR requests.queued_at IS NOT NULL THEN 2 ELSE 3 END,
  COALESCE(requests.queued_at,w.created_at),w.id LIMIT 1`, state.InstallationID, state.Epoch).Scan(&id)
@@ -229,7 +243,7 @@ func (g *GitStore) ReportRunnerWorkspace(ctx context.Context, token, id, claim s
 	if input.State != "ready" && input.State != "failed" {
 		return Workspace{}, ErrInput
 	}
-	if input.State == "ready" && input.FailureCode != "" || input.State == "failed" && (!oneOf(input.FailureCode, "checkout_failed", "checkout_unsafe", "checkout_too_large", "checkout_cancelled") || input.BaseCommit != "" || input.Branch != "") {
+	if input.State == "ready" && input.FailureCode != "" || input.State == "failed" && (!oneOf(input.FailureCode, "checkout_failed", "checkout_unsafe", "checkout_too_large", "checkout_cancelled") || input.BaseCommit != "" || input.Branch != "" || input.TransferReceipt != nil) {
 		return Workspace{}, ErrInput
 	}
 	tx, err := g.store.pool.Begin(ctx)
@@ -246,6 +260,15 @@ func (g *GitStore) ReportRunnerWorkspace(ctx context.Context, token, id, claim s
 	}
 	if input.State == "ready" && (input.BaseCommit != lease.value.BaseCommit || input.Branch != lease.value.Branch) {
 		return Workspace{}, ErrInput
+	}
+	if lease.transfer == nil && input.TransferReceipt != nil {
+		return Workspace{}, ErrInput
+	}
+	if lease.transfer != nil && input.State == "ready" {
+		expected := transfer.StageReceipt{ReviewSHA256: lease.transfer.ReviewSHA256, BaseCommit: lease.transfer.BaseCommit, Branch: lease.value.Branch, Files: lease.transfer.FileCount}
+		if input.TransferReceipt == nil || *input.TransferReceipt != expected {
+			return Workspace{}, ErrInput
+		}
 	}
 	raw, _ := json.Marshal(input)
 	hash := sha256.Sum256(raw)
@@ -265,7 +288,7 @@ func (g *GitStore) ReportRunnerWorkspace(ctx context.Context, token, id, claim s
 	if input.State == "ready" && lease.tokenState != "ready" {
 		return Workspace{}, ErrTransition
 	}
-	if err = g.retireWorkspaceToken(ctx, tx, id); err != nil {
+	if err = retireWorkspaceToken(ctx, tx, id); err != nil {
 		return Workspace{}, err
 	}
 	_, err = tx.Exec(ctx, `UPDATE ticket_workspaces SET state=$2,failure_code=$3,result_hash=$4,revision=revision+1,updated_at=now() WHERE id=$1`, id, input.State, input.FailureCode, hash[:])
@@ -282,7 +305,7 @@ func (g *GitStore) ReportRunnerWorkspace(ctx context.Context, token, id, claim s
 	return out, tx.Commit(ctx)
 }
 
-func (g *GitStore) retireWorkspaceToken(ctx context.Context, tx pgx.Tx, id string) error {
+func retireWorkspaceToken(ctx context.Context, tx pgx.Tx, id string) error {
 	if _, err := tx.Exec(ctx, `UPDATE git_revocations SET not_before=LEAST(not_before,now()) WHERE id=(SELECT read_revocation_id FROM ticket_workspaces WHERE id=$1)`, id); err != nil {
 		return err
 	}

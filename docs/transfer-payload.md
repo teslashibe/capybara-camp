@@ -2,11 +2,12 @@
 
 `server/internal/transfer` captures selected files for review. The Go Camp API
 stores resumable, encrypted uploads of that manifest. The internal staging
-helper applies it to an isolated destination checkout. These components are not
-connected to the native transfer UI or runner handoff yet. Upload completion means the payload
-passed validation and is ready for destination staging. It does not write a
-destination, move a session, or change its assignment. Used cloud workspaces
-remain protected by the existing transfer requirement.
+helper applies it to an isolated destination checkout. The cloud runner can
+prepare that destination through an owner-authorized workspace job. The native
+review flow and final session handoff remain unfinished. Upload completion
+means the payload passed validation and is ready for staging; it does not
+change the session's assignment. Used cloud workspaces remain protected by
+the existing transfer requirement.
 
 ## Captured state
 
@@ -77,6 +78,7 @@ Use `/v1/camps/{camp}/sessions/{session}/transfers` as the route prefix.
 | `POST /{id}/complete` | Send `{}` to validate the complete payload and change its state to `ready` |
 | `GET /{id}/chunks/{ordinal}` | Read one verified chunk from a `ready` transfer |
 | `POST /{id}/cancel` | Send `{}` to discard the stored chunks without touching the source |
+| `POST /{id}/workspaces` | Authorize a separate Cloud destination using the existing workspace input |
 
 Creation accepts these fields:
 
@@ -139,9 +141,12 @@ Replaying completion of a ready transfer only reports its stored validation
 result. The future handoff must recheck source and destination eligibility even
 when this earlier validation succeeded.
 
-Schema 20 adds `session_transfers` and `transfer_chunks`. Existing sessions,
-assignments and queued work are retained. Upgrades use the normal migration
-command; destructive down-migration is refused.
+Schema 20 adds `session_transfers` and `transfer_chunks`; schema 21 adds reviewed
+base metadata and the destination workspace binding. Existing sessions,
+assignments and queued work are retained. An uploaded payload from schema 20
+keeps its encrypted chunks. Call completion again to validate it and populate
+the new metadata before preparing a destination. Upgrades use the normal
+migration command; destructive down-migration is refused.
 
 ## Isolated destination staging
 
@@ -185,9 +190,49 @@ the partial destination unavailable for execution until staging succeeds.
 The returned `StageReceipt` identifies the review digest, base commit,
 destination branch and file count. Replaying a completed stage rechecks the
 files before returning the same receipt. A receipt is evidence of local file
-verification, not permission to switch execution. Connecting it to scoped
-runner claims, server-side source fencing, history and assignment commit
-remains unfinished.
+verification, not permission to switch execution. Server-side source fencing,
+history transfer and assignment commit remain unfinished.
+
+## Cloud runner integration
+
+`POST /{id}/workspaces` accepts the same `WorkspaceInput` as ordinary checkout
+preparation: the owner's provider account, Git connection, installation,
+repository, ref, purpose and expected session/project revisions. The selected
+provider account must match the transfer. GitHub must resolve the selected ref
+to the manifest's exact base commit. Commits that are only local are not yet
+transported by this flow.
+
+The source snapshot and account epoch are checked before and after the GitHub
+reads. Creating a destination does not replace the source's existing workspace.
+Each transfer may have one active destination. The returned workspace includes
+`transfer_id`; its normal claim, lease, read-token and deadline rules apply.
+
+Only the installation holding that destination's active preparation claim can
+read its transfer. It posts `{"claim_id":"CLAIM_UUID"}` to these routes:
+
+- `/v1/runner/workspaces/{workspace}/transfer` for validated metadata
+- `/v1/runner/workspaces/{workspace}/transfer/chunks/{ordinal}` for a chunk
+
+The worker verifies downloaded chunk hashes and the complete wire/review
+hashes, prepares a separate Git checkout, and applies the manifest through
+`Stager`. It saves a private manifest copy and staging journal beside the
+checkout for recovery. These files contain the reviewed code; access is limited
+to the owning OS user. Transient download failures retain the claim and retry
+within its deadline. A retry with a completed local download verifies that copy.
+
+The workspace's ready report must include `transfer_receipt` with the exact
+review digest, base, destination branch and file count. The server rejects a
+plain checkout report for a transfer workspace. Lost report responses replay
+the same result. Source revision, transcript, permissions, account or Git
+authority changes fence the job, and the reaper retires its Git read token.
+Cancelling the transfer also cancels its active destination and retires that
+token in the same transaction.
+
+A ready transfer workspace remains unavailable through ordinary Run on
+assignment. The final transfer commit must provide the additional source lock,
+history and ownership guarantees below. Local staged files are retained after
+a rejected or cancelled job for review; normal retired-checkout cleanup does
+not delete them. Account erasure remains a separate explicit lifecycle action.
 
 ## Remaining integration
 
@@ -195,11 +240,10 @@ The agreed transfer flow still requires:
 
 1. A source session lock and acknowledged terminal state, with unresolved
    provider outcomes and queued prompts held for explicit review
-2. Connect the uploaded payload and staging helper to scoped destination
-   runner claims, including transcript, child-session and attachment provenance
-3. Destination validation of the pinned base, file preimages and final hashes,
-   including the base repository's credential exclusions, with conflicts
-   returned for review and no overwrite of a diverged worktree
+2. Transfer transcript, child-session and attachment provenance, including
+   provider continuation and commits not available from the remote repository
+3. Native conflict review and the complete base-repository credential policy,
+   followed by cloud-to-local and cross-account destination acceptance
 4. A durable destination receipt followed by one atomic assignment-epoch
    change, with replay-safe recovery and the source retained on failure
 5. Native review, standalone-plan history migration, and local-to-cloud and
@@ -215,8 +259,8 @@ local-client ownership boundaries.
 cd server
 go test -race ./internal/transfer
 # With CAMP_TEST_DATABASE_URL pointing to a disposable PostgreSQL database:
-go test -race -run 'TestTransfer|TestMigrationPreservesExistingIdentityData' \
-  ./internal/camp ./internal/httpapi ./internal/database
+go test -race -run 'TestTransfer|TestWorkerStagesTransfer|TestWorkspaceHTTP|TestMigration' \
+  ./internal/camp ./internal/httpapi ./internal/database ./internal/runner
 go vet ./internal/transfer ./internal/camp ./internal/httpapi
 ```
 
@@ -230,3 +274,6 @@ Staging tests use real Git checkouts and cover file/mode/deletion application,
 replay, partial writes, abrupt process exit, source retention, changed files,
 staged/untracked/ignored files, false preimages, links, path aliases, directory
 replacement, journal binding and disabled repository commands.
+The runner integration test uses the Go HTTP API, disposable PostgreSQL and a
+real Git HTTP fixture. It drops chunk and completion responses, verifies one
+destination checkout and receipt replay, and confirms the source stays intact.
