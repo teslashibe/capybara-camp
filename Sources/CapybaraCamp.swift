@@ -1271,11 +1271,17 @@ struct RootView: View {
                     HStack(alignment: .top) { Image(systemName: "info.circle"); Text(store.banner).textSelection(.enabled); Spacer(); Button { store.banner = "" } label: { Image(systemName: "xmark") }.buttonStyle(.plain) }
                         .font(.system(size: 12)).padding(14).background(Color(hex: 0xF5E7D4))
                 }
-                if store.view == "Board" { BoardView(store: store) }
-                else if let selected = store.selected, selected.isSharedPlan { SharedPlanningWorkspace(store: store, planning: store.sharedPlanning, id: String(selected.id.dropFirst(selected.id.hasPrefix("camp-plan-draft:") ? 16 : 10))) }
-                else if let result = store.sharedPlanResult { SharedPlanningResultView(store: store, result: result) }
-                else if let id = store.selectedID, let plan = store.planning.ticket(id), plan.implementation == nil || store.reviewingPlan == id { PlanningWorkspace(store: store, planning: store.planning, id: id) }
-                else { ChatView(store: store) }
+                // Give every workspace the available content bounds. Intrinsic
+                // minimum-size probing must not expand nested planning panes.
+                GeometryReader { bounds in
+                    Group {
+                        if store.view == "Board" { BoardView(store: store) }
+                        else if let selected = store.selected, selected.isSharedPlan { SharedPlanningWorkspace(store: store, planning: store.sharedPlanning, id: String(selected.id.dropFirst(selected.id.hasPrefix("camp-plan-draft:") ? 16 : 10))) }
+                        else if let result = store.sharedPlanResult { SharedPlanningResultView(store: store, result: result) }
+                        else if let id = store.selectedID, let plan = store.planning.ticket(id), plan.implementation == nil || store.reviewingPlan == id { PlanningWorkspace(store: store, planning: store.planning, id: id) }
+                        else { ChatView(store: store) }
+                    }.frame(width: bounds.size.width, height: bounds.size.height)
+                }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }.disabled(store.notificationSheet).accessibilityHidden(store.notificationSheet)
         .foregroundStyle(campInk).background(campCream).tint(campGreen)

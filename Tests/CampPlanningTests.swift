@@ -28,7 +28,7 @@ actor SharedPlanFixture: CampPublishingTransport {
             creates += 1
             result = CloudPlanningResult(id: UUID().uuidString, title: input.title, projectId: input.projectId,
                 version: .init(version: 1, state: "running", brief: input.brief,
-                    planners: input.planners.enumerated().map { slot, p in .init(slot: slot, sessionId: p.sessionId, provider: slot == 0 ? "Codex" : "Claude", model: p.model, effort: p.effort, speed: p.speed) }, steps: [], sources: input.sources, mode: input.mode),
+                    planners: input.planners.enumerated().map { slot, p in .init(slot: slot, sessionId: p.sessionId, provider: slot == 0 ? "Codex" : "Claude", model: p.model, effort: p.effort, speed: p.speed, execution: p.execution) }, steps: [], sources: input.sources, mode: input.mode),
                 campId: scope.campId, creatorUserId: scope.userId, shared: input.shared, revision: 1, activeVersion: 1, updatedAt: Date())
         } else {
             let body = try JSONSerialization.jsonObject(with: op.body) as! [String: Any]
@@ -42,7 +42,7 @@ actor SharedPlanFixture: CampPublishingTransport {
                 current.version.version += 1; current.activeVersion = current.version.version
                 current.version.state = "running"; current.version.brief = input.brief
                 current.version.mode = input.mode
-                current.version.planners = input.planners.enumerated().map { slot, p in .init(slot: slot, sessionId: p.sessionId, provider: slot == 0 ? "Codex" : "Claude", model: p.model, effort: p.effort, speed: p.speed) }
+                current.version.planners = input.planners.enumerated().map { slot, p in .init(slot: slot, sessionId: p.sessionId, provider: slot == 0 ? "Codex" : "Claude", model: p.model, effort: p.effort, speed: p.speed, execution: p.execution) }
             default: throw CampCloudError.server(400, "invalid_input")
             }
             current.revision = (current.revision ?? 0) + 1; result = current
@@ -67,7 +67,7 @@ actor SharedPlanFixture: CampPublishingTransport {
         let scope = CloudScope(origin: "https://fixture.example", userId: UUID().uuidString, campId: UUID().uuidString)
         let actor = CloudActor(userId: scope.userId, deviceId: UUID().uuidString, email: "fixture@example.com", name: "Fixture")
         let sessions = ["Codex", "Claude"].map { provider in
-            CloudSession(id: UUID().uuidString, campId: scope.campId, projectId: UUID().uuidString, profileId: UUID().uuidString, provider: provider, profileLabel: provider, ownerUserId: actor.userId, ownerDeviceId: actor.deviceId, localSessionId: UUID().uuidString, title: provider, model: provider + "-fixture", state: "idle", stage: "Ready", shared: true, allowRequests: true, externalOwner: false, revision: 1, transcriptRevision: 1, permissionRevision: 1, updatedAt: Date())
+            CloudSession(id: UUID().uuidString, campId: scope.campId, projectId: UUID().uuidString, profileId: UUID().uuidString, provider: provider, profileLabel: provider, ownerUserId: actor.userId, ownerDeviceId: actor.deviceId, localSessionId: UUID().uuidString, title: provider, model: provider + "-fixture", state: "idle", stage: "Ready", shared: true, allowRequests: true, externalOwner: false, revision: 1, transcriptRevision: 1, permissionRevision: 1, updatedAt: Date(), executionLocation: "local", executionEpoch: 1)
         }
         let cache = try CampCache(directory: root)
         let api = SharedPlanFixture(scope: scope)
@@ -138,6 +138,31 @@ actor SharedPlanFixture: CampPublishingTransport {
         var claudeOnly = singleResult; claudeOnly.version.planners[0].provider = "Claude"
         check(claudeOnly.valid, "Single planning incorrectly requires Codex")
         singleManager.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+
+        let reviewAPI = SharedPlanFixture(scope: scope)
+        let reviewManager = CampPlanning(cache: try CampCache(directory: root.appendingPathComponent("locations")))
+        reviewManager.attach(scope: scope, actor: actor, transport: reviewAPI, sessions: sessions)
+        try await eventually("Location test did not open") { reviewManager.ready }
+        let reviewID = try await reviewManager.newDraft(input: input)
+        check(reviewManager.draft(reviewID)?.input.planners[0].execution?.epoch == 1)
+        var moved = sessions
+        moved[0].executionLocation = "cloud"; moved[0].executionEpoch = 2; moved[0].executionWorkspaceId = UUID().uuidString
+        reviewManager.attach(scope: scope, actor: actor, transport: reviewAPI, sessions: moved)
+        check(reviewManager.executionNeedsReview(reviewManager.draft(reviewID)!))
+        await reviewManager.start(reviewID, sources: [])
+        check(await reviewAPI.snapshot().1 == 0, "Starting silently followed a changed assignment")
+        check(reviewManager.draft(reviewID)?.input.planners[0].execution?.location == "local", "Background sync rewrote the reviewed location")
+        reviewManager.reviewExecution(reviewID)
+        check(!reviewManager.executionNeedsReview(reviewManager.draft(reviewID)!))
+        await reviewManager.start(reviewID, sources: [])
+        try await eventually("Reviewed location did not start") { await reviewAPI.snapshot().1 == 1 }
+        check(await reviewAPI.snapshot().0?.version.planners[0].execution?.workspaceId == moved[0].executionWorkspaceId)
+        var invalid = await reviewAPI.snapshot().0!
+        invalid.version.planners[0].execution?.epoch = 0
+        check(!invalid.valid, "A response accepted an invalid execution epoch")
+        invalid.version.planners[0].execution = nil
+        check(invalid.valid, "Historical plans with unrecorded locations must remain readable")
+        reviewManager.attach(scope: nil, actor: nil, transport: nil, sessions: [])
 
         manager.attach(scope: nil, actor: nil, transport: nil, sessions: [])
         try await cache.clear(scope)

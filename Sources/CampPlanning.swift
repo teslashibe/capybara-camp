@@ -35,15 +35,20 @@ struct CampPlanningState: Codable, Sendable {
     private var saveTask: Task<Void, Never>?
     private var dirty = false
     private var visibleSessions: Set<String> = []
+    @Published private var executionTargets: [String: CloudPlanningExecution] = [:]
     private var accessRevision: UInt64 = 0
     init(cache: CampCache?) { self.cache = cache }
     deinit { task?.cancel(); saveTask?.cancel() }
 
     func attach(scope: CloudScope?, actor: CloudActor?, transport: (any CampPublishingTransport)?, sessions: [CloudSession]) {
         guard let scope, let actor, let transport, let cache else {
-            context = nil; task?.cancel(); task = nil; saveTask?.cancel(); ready = false; state = CampPlanningState(); selectedID = nil; selectedVersion = 0; error = ""; publish(); return
+            context = nil; task?.cancel(); task = nil; saveTask?.cancel(); ready = false; state = CampPlanningState(); executionTargets = [:]; selectedID = nil; selectedVersion = 0; error = ""; publish(); return
         }
         let visible = Set(sessions.map(\.id))
+        let targets = sessions.reduce(into: [String: CloudPlanningExecution]()) { values, session in
+            if session.campId == scope.campId, let target = CloudPlanningExecution(session: session) { values[session.id] = target }
+        }
+        if targets != executionTargets { executionTargets = targets }
         if context?.scope == scope, context?.actor.deviceId == actor.deviceId {
             if visible != visibleSessions {
                 let lostAccess = !visibleSessions.isSubset(of: visible)
@@ -92,6 +97,10 @@ struct CampPlanningState: Codable, Sendable {
     func newDraft(input: CloudPlanningInput) async throws -> String {
         guard ready else { throw CampError.message("Connect to Camp before starting a shared plan") }
         guard state.drafts.count < 50 else { throw CampError.message("Finish or remove a draft before adding another plan") }
+        var input = input
+        for slot in input.planners.indices where input.planners[slot].execution == nil {
+            input.planners[slot].execution = executionTargets[input.planners[slot].sessionId]
+        }
         let draft = CloudPlanDraft(input: input)
         state.drafts.insert(draft, at: 0); publish()
         try await persist(); return draft.id
@@ -112,11 +121,19 @@ struct CampPlanningState: Codable, Sendable {
         let tuning = state.drafts[index].tuningHistory[old.sessionId + ":" + model] ?? ModelTuning()
         edit(id) { value in value.planners[slot].model = model; value.planners[slot].effort = tuning.effort; value.planners[slot].speed = tuning.speed }
     }
+    func executionNeedsReview(_ draft: CloudPlanDraft) -> Bool {
+        draft.input.planners.contains { !$0.sessionId.isEmpty && ($0.execution == nil || $0.execution != executionTargets[$0.sessionId]) }
+    }
+    func reviewExecution(_ id: String) {
+        edit(id) { input in
+            for slot in input.planners.indices { input.planners[slot].execution = self.executionTargets[input.planners[slot].sessionId] }
+        }
+    }
     func restartDraft(_ ticket: CloudPlanningResult) async throws {
         let activeState = state.tickets.first { $0.id == ticket.id }?.state ?? ticket.version.state
         guard ticket.creatorUserId == context?.actor.userId, let revision = ticket.revision, !pending(ticket.id), !["running", "needs_review"].contains(activeState) else { throw CampError.message("Stop or review the current plan before starting over") }
         var input = CloudPlanningInput(title: ticket.title, projectId: ticket.projectId, brief: ticket.version.brief, shared: ticket.shared ?? false,
-            planners: ticket.version.planners.sorted { $0.slot < $1.slot }.map { CloudPlannerInput(sessionId: $0.sessionId, model: $0.model, effort: $0.effort, speed: $0.speed) }, sources: ticket.version.sources)
+            planners: ticket.version.planners.sorted { $0.slot < $1.slot }.map { CloudPlannerInput(sessionId: $0.sessionId, model: $0.model, effort: $0.effort, speed: $0.speed, execution: executionTargets[$0.sessionId]) }, sources: ticket.version.sources)
         input.mergeSlot = ticket.version.mergeSlot
         input.mode = ticket.version.mode
         state.drafts.removeAll { $0.id == ticket.id }
@@ -128,6 +145,9 @@ struct CampPlanningState: Codable, Sendable {
         guard state.operations.count < 100 else { error = "The planning queue is full. Let pending actions sync first"; return }
         state.drafts[index].input.sources = sources
         let input = state.drafts[index].input
+        guard !executionNeedsReview(state.drafts[index]) else {
+            error = "A planner’s location changed or is unavailable. Review its current location before starting"; return
+        }
         guard !input.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !input.brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               input.brief.utf8.count <= 8192, input.planners.count == input.workflow.plannerCount, input.planners.allSatisfy({ visibleSessions.contains($0.sessionId) }), input.budgetPolicy == "calls" else {
             error = "Choose the shared planning sessions, write a brief and enable the turn limit"; return

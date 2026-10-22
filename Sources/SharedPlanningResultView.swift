@@ -90,16 +90,17 @@ struct SharedPlanningResultView: View {
             }
     }
     private var plannerPanes: some View {
-        HStack(alignment: .top, spacing: 14) {
-            ForEach(result.version.planners.filter { focusedSlot == nil || focusedSlot == $0.slot }, id: \.slot) { planner in
+        PlanningPaneRow(slots: result.version.planners.filter { focusedSlot == nil || focusedSlot == $0.slot }.map(\.slot)) { slot in
+            if let planner = result.version.planners.first(where: { $0.slot == slot }) {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack { ProviderMark(provider: planner.provider, size: 16); Text(planner.provider).font(.headline) }
+                    PlanningLocationLabel(execution: planner.execution)
                     ModelSettingsMenu(provider: planner.provider, title: "\(planner.provider) planner", sessionModel: planner.model,
                         modelLabel: planner.model, models: [], caps: ModelOption(id: planner.model, label: planner.model),
                         choice: ModelTuning(effort: planner.effort, speed: planner.speed), locked: true, expanded: true, selectModel: { _ in }, tune: { _, _ in })
                     Divider()
                     resultMessages(result.version.steps.filter { $0.slot == planner.slot && $0.phase != "merge" && (section != "Reviews" || $0.phase == "review") })
-                }.padding(14).frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity).background(.white).clipShape(RoundedRectangle(cornerRadius: 10))
+                }.padding(14).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(.white).clipShape(RoundedRectangle(cornerRadius: 10))
                     .id("\(result.id):\(result.version.version):\(planner.slot):\(section)")
             }
         }

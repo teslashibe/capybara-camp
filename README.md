@@ -117,6 +117,11 @@ repositories. Assigning a project does not move a working directory or grant
 Git access. [Planning](docs/planning.md) documents budgets, cancellation,
 history and the remaining shared implementation limits.
 
+Shared planning records each planner's Mac or Cloud assignment. A moved session
+requires review before Start. Once queued, a plan keeps those assignments; a
+changed or unavailable destination stops the next phase and preserves completed
+drafts. Start over creates a new revision with reviewed locations.
+
 ### Permissions and notifications
 
 Open **Permissions** from a card's menu or the shield in chat. Imported sessions
@@ -246,6 +251,9 @@ The fixture starts disposable PostgreSQL and a loopback API; it writes synthetic
 email codes to that directory. Development builds allow a loopback HTTP origin.
 `CAMP_DEV_EPHEMERAL_CREDENTIALS=1` uses in-memory Camp credentials in those builds.
 Normal builds require HTTPS and use the Keychain.
+An explicit `CAMP_TEST_DATABASE_URL` also works with the native fixture. Use a
+dedicated disposable PostgreSQL 17 database; the fixture creates an isolated
+schema and removes it on exit. It must never point at production.
 
 ### Troubleshooting
 

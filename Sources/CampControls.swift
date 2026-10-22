@@ -267,3 +267,19 @@ struct CampTranscriptViewport<Content: View>: View {
         }
     }
 }
+
+struct PlanningPaneRow<Content: View>: View {
+    let slots: [Int]
+    var spacing: CGFloat = 12
+    @ViewBuilder let content: (Int) -> Content
+    var body: some View {
+        GeometryReader { bounds in
+            let width = max(0, (bounds.size.width - spacing * CGFloat(max(0, slots.count - 1))) / CGFloat(max(1, slots.count)))
+            HStack(alignment: .top, spacing: spacing) {
+                ForEach(slots, id: \.self) { slot in
+                    content(slot).frame(width: width, height: bounds.size.height)
+                }
+            }
+        }
+    }
+}

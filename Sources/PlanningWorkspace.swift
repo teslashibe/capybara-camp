@@ -236,10 +236,8 @@ struct PlanningWorkspace: View {
         return result
     }
     private func panes(_ plan: LocalPlan, all: Bool = false) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            ForEach(plan.current.planners.indices.filter { all || focusedSlot == nil || focusedSlot == $0 }, id: \.self) { slot in
-                pane(plan, slot: slot).id("\(plan.id):\(plan.current.number):\(slot):\(section)")
-            }
+        PlanningPaneRow(slots: plan.current.planners.indices.filter { all || focusedSlot == nil || focusedSlot == $0 }) { slot in
+            pane(plan, slot: slot).id("\(plan.id):\(plan.current.number):\(slot):\(section)")
         }
     }
     private func detailReview<Content: View>(_ plan: LocalPlan, @ViewBuilder content: () -> Content) -> some View {

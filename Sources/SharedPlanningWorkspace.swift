@@ -1,5 +1,14 @@
 import SwiftUI
 
+struct PlanningLocationLabel: View {
+    let execution: CloudPlanningExecution?
+    var body: some View {
+        Label(execution?.label ?? "Location not recorded", systemImage: execution?.location == "cloud" ? "cloud" : execution == nil ? "questionmark.circle" : "desktopcomputer")
+            .font(.system(size: 11)).foregroundStyle(campMuted)
+            .help(execution == nil ? "Review the current location before starting a new revision" : "Execution location saved for this planning revision")
+    }
+}
+
 extension CampStore {
     func newSharedPlan(mode: PlanningMode = .single) {
         guard let scope = cloud.scope, let project = cloud.projects.first(where:{ !$0.isArchived && "cloud:"+$0.id==projectFilter }) ?? cloud.projects.first(where:{ !$0.isArchived }) else { banner = "Connect to a Camp and add a project first"; return }
@@ -8,7 +17,7 @@ extension CampStore {
         let planners = (mode == .single ? [preferred] : ["Codex", "Claude"]).map { provider -> CloudPlannerInput in
             let choices = cloud.sessions.filter { $0.provider == provider && ($0.ownerUserId == scope.userId || $0.allowRequests) }
             let source = choices.first { $0.ownerUserId == scope.userId } ?? choices.first
-            return CloudPlannerInput(sessionId: source?.id ?? "", model: source?.model ?? "", effort: "", speed: "standard")
+            return CloudPlannerInput(sessionId: source?.id ?? "", model: source?.model ?? "", effort: "", speed: "standard", execution: source.flatMap(CloudPlanningExecution.init(session:)))
         }
         Task {
             do {
@@ -25,7 +34,7 @@ extension CampStore {
         let planners = providers.map { provider -> CloudPlannerInput in
             if let saved = old.first(where: { item in available.contains { $0.id == item.sessionId && $0.provider == provider } }) { return saved }
             let source = available.first { $0.provider == provider }
-            return CloudPlannerInput(sessionId: source?.id ?? "", model: source?.model ?? "", effort: "", speed: "standard")
+            return CloudPlannerInput(sessionId: source?.id ?? "", model: source?.model ?? "", effort: "", speed: "standard", execution: source.flatMap(CloudPlanningExecution.init(session:)))
         }
         sharedPlanning.edit(id) { $0.mode = mode; $0.planners = planners; $0.mergeSlot = 0 }
     }
@@ -178,36 +187,42 @@ struct SharedPlanningWorkspace: View {
                     Picker("Planning mode", selection: Binding(get: { draft.input.workflow }, set: { store.setSharedPlanMode(id, mode: $0) })) {
                         ForEach(PlanningMode.allCases, id: \.self) { Text($0.title).tag($0) }
                     }.frame(maxWidth: 300).disabled(planning.pending(id))
-                    Text("Choose shared sessions below. Each provider runs on its session owner's Mac, using that owner's login.").font(.system(size: 11)).foregroundStyle(campMuted)
-                    HStack(alignment: .top, spacing: 12) {
-                        ForEach(draft.input.planners.indices.filter { focusedSlot == nil || focusedSlot == $0 }, id: \.self) { slot in
+                    Text("Choose sessions below. Each planner uses its session’s assigned location and login.").font(.system(size: 11)).foregroundStyle(campMuted)
+                    PlanningPaneRow(slots: draft.input.planners.indices.filter { focusedSlot == nil || focusedSlot == $0 }) { slot in
                             VStack(alignment: .leading, spacing: 10) {
                                 let provider = store.cloud.sessions.first { $0.id == draft.input.planners[slot].sessionId }?.provider ?? (slot == 0 ? "Codex" : "Claude")
                                 Label { Text(provider) } icon: { ProviderMark(provider: provider, size: 17) }.font(.headline)
                                 Picker("Session", selection: Binding(get: { draft.input.planners[slot].sessionId }, set: { value in
                                     if let source = store.cloud.sessions.first(where: { $0.id == value }) {
-                                        planning.edit(id) { $0.planners[slot] = CloudPlannerInput(sessionId: value, model: source.model, effort: "", speed: "standard") }
+                                        planning.edit(id) { $0.planners[slot] = CloudPlannerInput(sessionId: value, model: source.model, effort: "", speed: "standard", execution: CloudPlanningExecution(session: source)) }
                                     }
                                 })) {
                                     Text("Choose a shared session").tag("")
                                     ForEach(store.cloud.sessions.filter { (draft.input.workflow == .single || $0.provider == provider) && ($0.ownerUserId == store.cloud.scope?.userId || $0.allowRequests) }) { source in Text(source.provider + " · " + source.title).tag(source.id) }
                                 }.disabled(planning.pending(id))
+                                PlanningLocationLabel(execution: draft.input.planners[slot].execution)
                                 SharedPlanningModelMenu(store: store, planning: planning, id: id, slot: slot, expanded: true)
                                 Spacer()
                             }.padding(14).frame(maxWidth: .infinity, maxHeight: .infinity).background(.white.opacity(0.55)).clipShape(RoundedRectangle(cornerRadius: 10))
-                        }
                     }
                     if draft.input.workflow == .comparison { Picker("Combine with", selection: Binding(get: { draft.input.mergeSlot }, set: { value in planning.edit(id) { $0.mergeSlot = value } })) {
                         Text("Codex").tag(0); Text("Claude").tag(1)
                     }.frame(maxWidth: 250).disabled(planning.pending(id)) }
                     Toggle(draft.input.workflow.budgetLabel, isOn: Binding(get: { draft.input.budgetPolicy == "calls" }, set: { value in planning.edit(id) { $0.budgetPolicy = value ? "calls" : "strict_tokens" } })).toggleStyle(.checkbox).disabled(planning.pending(id))
+                    if planning.executionNeedsReview(draft) {
+                        HStack {
+                            Label("A planner’s location changed or is unavailable", systemImage: "exclamationmark.circle").font(.system(size: 11))
+                            Spacer()
+                            Button("Review current locations") { planning.reviewExecution(id) }
+                        }.foregroundStyle(campMuted).disabled(planning.pending(id))
+                    }
                     if !planning.error.isEmpty { Text(planning.error).font(.caption).foregroundStyle(.orange) }
                     HStack {
                         Text(planning.pending(id) ? "Waiting to sync" : "CLI token totals are reported when available; the turn limit is not a hard token or cost ceiling").font(.system(size: 10)).foregroundStyle(campMuted)
                         Spacer()
                         Button("Cancel") { Task { await planning.cancelDraft(id) } }
                         Button("Start") { store.startSharedPlan(id) }.buttonStyle(.borderedProminent).tint(campGreen)
-                            .disabled(planning.pending(id) || draft.input.budgetPolicy != "calls" || draft.input.brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .disabled(planning.pending(id) || planning.executionNeedsReview(draft) || draft.input.budgetPolicy != "calls" || draft.input.brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }.padding(22).disabled(planning.pending(id) && draft.cancelRequested)
             }.disabled(!planning.ready).onChange(of: draft.input.workflow) { _, _ in focusedSlot = nil }

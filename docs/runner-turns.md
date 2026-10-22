@@ -39,6 +39,9 @@ conversation order. Output pages, events, transcript chunks and per-turn work
 are bounded. The worker cancels and joins provider processes on cancellation,
 authority loss and deadline. Modified workspaces survive normal worker recovery;
 preparation does not delete a used working tree.
+Stopping during checkout verification preserves cancellation as the result;
+it does not report that the checkout is corrupt. The next run verifies the
+retained checkout before starting provider work.
 
 ## Multiple tickets on one account
 

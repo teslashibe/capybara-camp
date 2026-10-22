@@ -91,6 +91,14 @@ account. Stop older runner workloads before enabling the matching API and
 controller image: older workers assume one retained checkout and may clean up
 another unused ticket. Deploy the matching runner image before admitting work.
 
+Schema 19 adds immutable execution bindings to planning participants. Back up,
+finish or explicitly cancel active work, and stop older API/runner writers
+before migrating; deploy matching images before accepting requests. Old plan
+history is preserved with an unknown location. Already queued requests retain
+their existing assignments, but the next planning phase cannot infer an old
+destination and requires a new reviewed revision. Do not roll back to a writer
+that creates unbound planning participants.
+
 ## Storage and recovery
 
 The example uses one 20 GiB persistent volume. Size it for your retained shared

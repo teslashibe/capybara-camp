@@ -9,7 +9,7 @@ and acceptance are separate milestones.
 | Area | Implemented locally | Still required for V1 |
 | --- | --- | --- |
 | Local sessions | Automatic multi-profile import, board/chat, model/effort/speed controls, sub-agents, streaming, dictation, steering and queues | Finish live provider/recovery and performance validation after the Go migration; complete the final design comparison below |
-| Planning and projects | Single-model plan, provider comparison, saved versions, same-ticket local implementation, project assignment across repositories | Shared implementation and owner-routed approval completion; cross-device validation |
+| Planning and projects | Single-model plan, provider comparison, saved versions, pinned per-planner execution assignments, same-ticket local implementation, project assignment across repositories | Execution-default and destination selection flows, shared implementation and owner-routed approval completion; cross-device validation |
 | Shared Camps | Go/PostgreSQL auth, membership, sessions, events, requests, native cache/outbox and owner-Mac worker | Real independent users on two Macs, remaining permission/recovery cases, production deployment |
 | Onboarding | Automatic profile discovery before full import, optional Camp sign-in, owner-only cloud account setup, GitHub connections, projects, notifications, skip/resume | Default execution target; final onboarding validation after remaining services land |
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
@@ -79,6 +79,24 @@ ad-hoc build. ShellCheck and the staged secret scan passed.
 This is tooling evidence only. Actual Developer ID signing, Apple notarization,
 downloaded-app acceptance, Git push/tag/release and the website demo remain open.
 See the [release procedure](releasing.md).
+
+Schema 19 now freezes each planner's reviewed execution assignment. Changed
+assignments are rejected before Start or before the next phase; unavailable
+cloud execution preserves completed drafts and stops planning. Old revisions
+retain unknown locations and require a reviewed restart to queue another phase.
+The full Go race suite and vet passed against an isolated PostgreSQL 17.11
+instance. Native planning, state, execution and cloud checks passed. The review
+also fixed a runner shutdown race that reported a cancelled Git verification
+as damaged state; its deterministic cancellation test passes.
+
+Computer use found sizing loops in shared draft and result views. Workspaces
+now receive concrete content bounds, and local/shared planning reuse equal-size
+panes. The 1370×860 walkthrough passed changed-location review, five synthetic
+cloud turns, completion, restart into version 2, old-version history, combined
+plan navigation and local planner drill-down. A quiet CPU observation was 0.1%
+after completion; it is not a soak or leak test. Minimum-window and the complete
+final design checks remain open. The normal arm64 app and bundled helper build
+also passed signature verification. No live provider or cloud deployment was used.
 
 Local tests cover concurrency, limited database permissions, cleanup ordering
 and restart behavior. The runner image, database bootstrap and rendered

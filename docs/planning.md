@@ -5,8 +5,9 @@ The V1 development app offers **Plan** for one model and **Plan with comparison*
 The V1 development server has a durable planning queue for both modes. The Mac app
 also has a private local planning coordinator and paired-chat workspace. Local
 plans persist on the owning Mac and use isolated official CLI turns. The native
-workspace also creates and controls shared planning tickets. The owner-Mac
-worker executes their queued steps, while cloud runners remain unfinished.
+workspace also creates and controls shared planning tickets. Their queued steps
+use the session's assigned owner-Mac worker or cloud runner. The cloud path has
+local synthetic evidence; live cloud acceptance is still pending.
 Local plans can continue into an approved implementation on the same ticket.
 
 The local workspace includes a saved board card, independently selected
@@ -61,8 +62,7 @@ brief and bounds visible output to 8 KiB per step.
 
 ## Shared planning in the native app
 
-Use the Plan menu's shared Camp actions to create a saved draft. Choose one already-shared source session for Plan, or two for comparison, then select model/effort/speed settings and pinned message ranges. Comparison also selects the combining provider. Only the selected
-session owner's Mac runs its turns, using that owner's local profile. Plans
+Use the Plan menu's shared Camp actions to create a saved draft. Choose one accessible source session for Plan, or two for comparison, then select model/effort/speed settings and pinned message ranges. Comparison also selects the combining provider. Each planner shows its saved execution location. An owner-Mac assignment uses that owner's local profile; a cloud assignment uses its prepared workspace and account. Plans
 are private by default; publishing a shared plan requires accessible shared
 sources. Camp does not upload private source sessions implicitly.
 
@@ -77,6 +77,20 @@ Start over retains the ticket, prior versions, pinned context and settings.
 History and source links remain accessible subject to current permissions.
 Revoked sources are excluded from board reads and receipt replays as well as
 detail reads. Drafts and pending commands use the existing scoped local cache.
+
+A draft records each session's execution location, assignment epoch and cloud
+workspace ID. If a session moves while the draft is open, Start is disabled
+until the creator reviews the current locations. The queued command retains
+that exact selection through offline delivery and retries. The server rejects
+a command whose reviewed assignment is stale. Existing clients that omit this
+field bind to the current assignment when the server saves the version.
+
+Every subsequent phase checks the saved assignment again. A changed location,
+expired cloud account or unavailable checkout stops the plan and retains its
+completed drafts; it never falls back to a Mac or another account. The whole
+next phase is checked before its requests are created. Restart creates a new
+revision with newly reviewed destinations. Changing execution defaults remains
+separate work and must not edit these saved revisions.
 
 Shared results refresh when steps complete. Partial remote output and shared
 plan-to-implementation conversion remain unfinished; local plans already
@@ -125,6 +139,11 @@ respect the same plan visibility as reads.
 
 Planning tables were introduced in schema 5. The current required schema is
 defined by `SchemaVersion` in [the database package](../server/internal/database/database.go).
+Schema 19 stores each planner's execution binding. Older history remains
+readable and shows “Location not recorded”; the migration does not invent a
+past assignment from today's session. Already queued requests keep their own
+binding, but a legacy revision needs a restart before it can queue another
+phase. See [upgrade guidance](self-hosting.md) before migrating.
 Migration 7 retains existing versions as comparison plans with five turns; migration 8 preserves existing project assignments and adds each Camp’s Inbox. Deploy the migrated server and updated native client before creating single plans; older clients cannot display those plans. Older request receipts and session
 history are retained. Run migrations before the new server. The public deployment templates use the
 same image for the migration job and API.

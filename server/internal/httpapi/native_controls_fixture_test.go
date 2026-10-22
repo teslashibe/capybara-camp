@@ -38,7 +38,7 @@ func advanceNativeControls(ctx context.Context, git *camp.GitStore, grant camp.R
 		turn = &nativeControlTurn{workspace: *w, request: started, claim: claim, started: time.Now(), seen: map[string]bool{}}
 		turn.emit(ctx, git, grant, map[string]any{"type": "settings", "model": "fixture-model", "effort": "high", "speed": "standard"})
 		turn.emit(ctx, git, grant, map[string]any{"type": "delta", "text": "Synthetic cloud reply is streaming. You can steer, queue a follow-up, or stop this turn."})
-		if strings.Contains(strings.ToLower(r.Prompt), "approval") {
+		if r.Kind != "planning" && strings.Contains(strings.ToLower(r.Prompt), "approval") {
 			turn.emit(ctx, git, grant, map[string]any{"type": "approval", "id": uuid.NewString(), "kind": "command", "title": "Allow the synthetic action", "detail": "This fixture executes no command", "questions": []any{}, "canApprove": true, "acceptLabel": "Allow"})
 		}
 		return turn
@@ -78,7 +78,11 @@ func advanceNativeControls(ctx context.Context, git *camp.GitStore, grant camp.R
 	}
 	if strings.Contains(strings.ToLower(r.Prompt), "finish") && time.Since(turn.started) > 2*time.Second {
 		turn.emit(ctx, git, grant, map[string]any{"type": "done"})
-		_, _ = git.ActOnRunnerRequest(ctx, grant.Token, turn.workspace.ID, r.ID, uuid.NewString(), camp.RequestAction{Action: "finish", LeaseToken: turn.claim, Outcome: "completed", Evidence: "Synthetic UI driver completed"})
+		result := camp.RequestAction{Action: "finish", LeaseToken: turn.claim, Outcome: "completed", Evidence: "Synthetic UI driver completed"}
+		if r.Kind == "planning" {
+			result.Output = "Synthetic planning result with scope, implementation steps and an unresolved choice to review"
+		}
+		_, _ = git.ActOnRunnerRequest(ctx, grant.Token, turn.workspace.ID, r.ID, uuid.NewString(), result)
 		return nil
 	}
 	return turn

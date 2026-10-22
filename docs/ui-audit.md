@@ -73,6 +73,37 @@ synthetic profile/support directories. The final field-width adjustment passed
 compilation, signing verification and native wide/narrow screen checks. No
 release or production app replacement was performed.
 
+## Shared planning assignment review
+
+The October 21 shared-planning pass found two layout stalls: opening a draft
+stalled during intrinsic window sizing, and the results pane repeatedly
+measured its flexible children. CPU sampling located both in SwiftUI layout.
+The root workspace now supplies concrete bounds and one `PlanningPaneRow`
+gives local and shared planners equal, explicit dimensions.
+
+Computer use on the isolated signed review app at 1370×860 verified:
+
+- A saved draft reopens and labels both assigned cloud sources
+- An assignment change disables Start without changing the draft's selection
+- Review current locations adopts the new assignment without starting work
+- Five synthetic cloud planning turns complete and show both chats and the
+  combined plan, with saved locations beside each planner
+- Restart retains the ticket, creates version 2 and keeps version 1 accessible
+- Local comparison, provider drill-down and return to both chats still work
+
+The completed view settled to a 0.1% CPU observation. This does not establish
+memory-leak or sustained-performance acceptance. The reference's per-planner
+Run on selectors are still part of the unfinished execution-default and
+destination-selection flow; the current labels report the source's assignment.
+Minimum-window coverage remains open. A computer-use resize attempt did not
+change the window, so it provides no narrow-layout evidence.
+
+Captures: `build/ui-audit/planning-location-review.png`,
+`planning-locations-completed.png`, and `planning-locations-completed-v2.png`.
+The before-fix CPU samples are `build/planning-locations-ui-sample.txt` and
+`build/planning-locations-result-sample.txt`. These use only synthetic accounts,
+sessions and responses. No provider model or real Git repository was used.
+
 ## Full inventory still to pass
 
 - Board: each provider, single/comparison plans, implementation cards, all stages,

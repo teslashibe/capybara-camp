@@ -108,6 +108,9 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO sessions(id,camp_id,project_id,profile_id,owner_user_id,owner_device_id,local_session_id,title,state,stage,shared) VALUES($1,$2,$3,$4,$5,$6,'preserved-session','Preserved session','idle','Ready',false)`, session, camp, project, profile, id, device); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = pool.Exec(ctx, `INSERT INTO planning_participants(plan_id,version,slot,session_id,profile_id,owner_user_id,owner_device_id,permission_revision,provider,model,effort,speed) VALUES($1,1,0,$2,$3,$4,$5,1,'Codex','fixture','high','standard')`, plan, session, profile, id, device); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = pool.Exec(ctx, `INSERT INTO prompt_requests(id,camp_id,session_id,requester_user_id,owner_user_id,owner_device_id,permission_revision,prompt,model,effort,speed,state) VALUES($1,$2,$3,$4,$4,$5,1,'Preserved queued prompt','fixture-model','high','standard','queued')`, request, camp, session, id, device); err != nil {
 		t.Fatal(err)
 	}
@@ -131,6 +134,13 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	}
 	if err = Ready(ctx, pool); err != nil {
 		t.Fatal(err)
+	}
+	var unrecorded bool
+	if err = pool.QueryRow(ctx, `SELECT execution_location IS NULL AND execution_epoch IS NULL AND execution_workspace_id IS NULL FROM planning_participants WHERE plan_id=$1`, plan).Scan(&unrecorded); err != nil || !unrecorded {
+		t.Fatal("migration invented a historical execution location", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE planning_participants SET execution_epoch=1 WHERE plan_id=$1`, plan); err == nil {
+		t.Fatal("partial execution binding passed its constraint")
 	}
 	var resolution string
 	if err = pool.QueryRow(ctx, `SELECT resolution FROM request_controls WHERE id=$1`, controlID).Scan(&resolution); err != nil || resolution != "accepted" {

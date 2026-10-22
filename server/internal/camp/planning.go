@@ -25,11 +25,29 @@ func validPlanningUsage(u *PlanningUsage) bool {
 }
 
 type PlannerInput struct {
-	SessionID string `json:"session_id"`
-	Model     string `json:"model"`
-	Effort    string `json:"effort"`
-	Speed     string `json:"speed"`
+	SessionID string             `json:"session_id"`
+	Model     string             `json:"model"`
+	Effort    string             `json:"effort"`
+	Speed     string             `json:"speed"`
+	Execution *PlanningExecution `json:"execution,omitempty"`
 }
+
+// A planning revision binds to one reviewed session assignment per planner.
+// A missing value identifies history created before this binding was stored.
+type PlanningExecution struct {
+	Location    string `json:"location"`
+	Epoch       int64  `json:"epoch"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+}
+
+func (e PlanningExecution) valid() bool {
+	return e.Epoch > 0 && (e.Location == "local" && e.WorkspaceID == "" || e.Location == "cloud" && validID(e.WorkspaceID))
+}
+
+func planningExecution(session Session) PlanningExecution {
+	return PlanningExecution{Location: session.ExecutionLocation, Epoch: session.ExecutionEpoch, WorkspaceID: session.ExecutionWorkspaceID}
+}
+
 type PlanningInput struct {
 	Mode         string         `json:"mode,omitempty"`
 	Title        string         `json:"title"`
@@ -135,6 +153,14 @@ func (s *Store) preparePlanning(ctx context.Context, tx pgx.Tx, a auth.Actor, ca
 		if session.OwnerUserID != a.UserID && !session.AllowRequests {
 			return v, ErrDenied
 		}
+		execution := planningExecution(session)
+		if !execution.valid() || p.Execution != nil && !p.Execution.valid() {
+			return v, ErrInput
+		}
+		if p.Execution != nil && *p.Execution != execution {
+			return v, ErrRevision
+		}
+		p.Execution = &execution
 		if session.Provider == "Claude" && p.Speed == "ultrafast" {
 			return v, ErrInput
 		}
@@ -184,7 +210,10 @@ func insertPlanningVersion(ctx context.Context, tx pgx.Tx, id string, v Planning
 		return err
 	}
 	for _, p := range v.Planners {
-		_, err = tx.Exec(ctx, `INSERT INTO planning_participants(plan_id,version,slot,session_id,profile_id,owner_user_id,owner_device_id,permission_revision,provider,model,effort,speed) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, id, v.Version, p.Slot, p.SessionID, p.ProfileID, p.OwnerUserID, p.OwnerDeviceID, p.PermissionRevision, p.Provider, p.Model, p.Effort, p.Speed)
+		if p.Execution == nil || !p.Execution.valid() {
+			return ErrInput
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO planning_participants(plan_id,version,slot,session_id,profile_id,owner_user_id,owner_device_id,permission_revision,provider,model,effort,speed,execution_location,execution_epoch,execution_workspace_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NULLIF($15,'')::uuid)`, id, v.Version, p.Slot, p.SessionID, p.ProfileID, p.OwnerUserID, p.OwnerDeviceID, p.PermissionRevision, p.Provider, p.Model, p.Effort, p.Speed, p.Execution.Location, p.Execution.Epoch, p.Execution.WorkspaceID)
 		if err != nil {
 			return err
 		}
@@ -280,15 +309,21 @@ func (s *Store) loadPlanning(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 	if err = json.Unmarshal(sources, &v.Sources); err != nil {
 		return p, err
 	}
-	rows, err := tx.Query(ctx, `SELECT slot,session_id,profile_id,owner_user_id,owner_device_id,permission_revision,provider,model,effort,speed FROM planning_participants WHERE plan_id=$1 AND version=$2 ORDER BY slot`, id, version)
+	rows, err := tx.Query(ctx, `SELECT slot,session_id,profile_id,owner_user_id,owner_device_id,permission_revision,provider,model,effort,speed,execution_location,execution_epoch,COALESCE(execution_workspace_id::text,'') FROM planning_participants WHERE plan_id=$1 AND version=$2 ORDER BY slot`, id, version)
 	if err != nil {
 		return p, err
 	}
 	for rows.Next() {
 		var x Planner
-		if err = rows.Scan(&x.Slot, &x.SessionID, &x.ProfileID, &x.OwnerUserID, &x.OwnerDeviceID, &x.PermissionRevision, &x.Provider, &x.Model, &x.Effort, &x.Speed); err != nil {
+		var location *string
+		var epoch *int64
+		var workspace string
+		if err = rows.Scan(&x.Slot, &x.SessionID, &x.ProfileID, &x.OwnerUserID, &x.OwnerDeviceID, &x.PermissionRevision, &x.Provider, &x.Model, &x.Effort, &x.Speed, &location, &epoch, &workspace); err != nil {
 			rows.Close()
 			return p, err
+		}
+		if location != nil && epoch != nil {
+			x.Execution = &PlanningExecution{Location: *location, Epoch: *epoch, WorkspaceID: workspace}
 		}
 		v.Planners = append(v.Planners, x)
 	}
@@ -428,16 +463,22 @@ func (s *Store) listPlanningOnce(ctx context.Context, a auth.Actor, campID strin
 		return nil, err
 	}
 	if len(ids) > 0 {
-		rows, err = tx.Query(ctx, `SELECT x.plan_id,x.slot,x.session_id,x.profile_id,x.owner_user_id,x.owner_device_id,x.permission_revision,x.provider,x.model,x.effort,x.speed FROM planning_participants x JOIN planning_tickets p ON p.id=x.plan_id AND p.active_version=x.version WHERE x.plan_id=ANY($1::uuid[]) ORDER BY x.plan_id,x.slot`, ids)
+		rows, err = tx.Query(ctx, `SELECT x.plan_id,x.slot,x.session_id,x.profile_id,x.owner_user_id,x.owner_device_id,x.permission_revision,x.provider,x.model,x.effort,x.speed,x.execution_location,x.execution_epoch,COALESCE(x.execution_workspace_id::text,'') FROM planning_participants x JOIN planning_tickets p ON p.id=x.plan_id AND p.active_version=x.version WHERE x.plan_id=ANY($1::uuid[]) ORDER BY x.plan_id,x.slot`, ids)
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
 			var id string
 			var p Planner
-			if err = rows.Scan(&id, &p.Slot, &p.SessionID, &p.ProfileID, &p.OwnerUserID, &p.OwnerDeviceID, &p.PermissionRevision, &p.Provider, &p.Model, &p.Effort, &p.Speed); err != nil {
+			var location *string
+			var epoch *int64
+			var workspace string
+			if err = rows.Scan(&id, &p.Slot, &p.SessionID, &p.ProfileID, &p.OwnerUserID, &p.OwnerDeviceID, &p.PermissionRevision, &p.Provider, &p.Model, &p.Effort, &p.Speed, &location, &epoch, &workspace); err != nil {
 				rows.Close()
 				return nil, err
+			}
+			if location != nil && epoch != nil {
+				p.Execution = &PlanningExecution{Location: *location, Epoch: *epoch, WorkspaceID: workspace}
 			}
 			index := indexes[id]
 			out[index].Planners = append(out[index].Planners, p)
@@ -480,20 +521,31 @@ func planningPrompt(v PlanningVersion, ordinal int) string {
 	}
 }
 
+func (s *Store) planningSession(ctx context.Context, tx pgx.Tx, p PlanningTicket, planner Planner) (Session, error) {
+	actor := auth.Actor{UserID: p.CreatorUserID}
+	session, err := s.readSession(ctx, tx, actor, p.CampID, planner.SessionID)
+	if err != nil {
+		return session, err
+	}
+	if session.OwnerUserID != planner.OwnerUserID || session.OwnerDeviceID != planner.OwnerDeviceID || session.ProfileID != planner.ProfileID || session.PermissionRevision != planner.PermissionRevision {
+		return session, ErrDenied
+	}
+	if planner.Execution == nil || *planner.Execution != planningExecution(session) {
+		return session, ErrRevision
+	}
+	return session, nil
+}
 func (s *Store) enqueuePlanningStep(ctx context.Context, tx pgx.Tx, p PlanningTicket, ordinal int) error {
 	if ordinal < 0 || ordinal >= p.Version.CallLimit {
 		return ErrInput
 	}
 	slot, _ := planningStepRole(ordinal, p.Version.MergeSlot)
 	planner := p.Version.Planners[slot]
-	actor := auth.Actor{UserID: p.CreatorUserID}
-	session, err := s.readSession(ctx, tx, actor, p.CampID, planner.SessionID)
+	session, err := s.planningSession(ctx, tx, p, planner)
 	if err != nil {
 		return err
 	}
-	if session.OwnerUserID != planner.OwnerUserID || session.OwnerDeviceID != planner.OwnerDeviceID || session.ProfileID != planner.ProfileID || session.PermissionRevision != planner.PermissionRevision {
-		return ErrDenied
-	}
+	actor := auth.Actor{UserID: p.CreatorUserID}
 	prompt := planningPrompt(p.Version, ordinal)
 	if len(prompt) > 65536 {
 		return ErrInput
@@ -542,6 +594,18 @@ func (s *Store) advancePlanning(ctx context.Context, tx pgx.Tx, p PlanningTicket
 	if steps[4].State == "completed" {
 		_, err := tx.Exec(ctx, `UPDATE planning_versions SET state='ready' WHERE plan_id=$1 AND version=$2`, p.ID, p.Version.Version)
 		return err
+	}
+	// Review a whole phase before creating any of its requests. A changed or
+	// expired peer must not leave a phantom half-phase in the plan history.
+	for _, ordinal := range next {
+		slot, _ := planningStepRole(ordinal, p.Version.MergeSlot)
+		session, err := s.planningSession(ctx, tx, p, p.Version.Planners[slot])
+		if err != nil {
+			return err
+		}
+		if _, err = s.executionTarget(ctx, tx, session); err != nil {
+			return err
+		}
 	}
 	for _, ordinal := range next {
 		if err := s.enqueuePlanningStep(ctx, tx, p, ordinal); err != nil {
@@ -757,7 +821,7 @@ func (s *Store) planningRequestFinished(ctx context.Context, tx pgx.Tx, a auth.A
 				return err
 			}
 		} else if err = s.advancePlanning(ctx, tx, p); err != nil {
-			if !errors.Is(err, ErrDenied) && !errors.Is(err, ErrInput) && !errors.Is(err, ErrRevision) {
+			if !errors.Is(err, ErrDenied) && !errors.Is(err, ErrInput) && !errors.Is(err, ErrRevision) && !errors.Is(err, ErrTransition) {
 				return err
 			}
 			if _, err = tx.Exec(ctx, `UPDATE planning_versions SET state='failed' WHERE plan_id=$1 AND version=$2`, p.ID, p.Version.Version); err != nil {
