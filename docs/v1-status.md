@@ -55,6 +55,14 @@ click areas, keyboard navigation, scrolling and streaming behavior. Record
 differences, fix them, and repeat the affected computer-use flows before release.
 Passing unit tests alone does not satisfy this gate.
 
+The native app has not passed this review. The approved interactive design is
+the visual reference for layout, wording, icons and shared controls. Capture
+the native and reference views at matching window sizes, track each discrepancy
+by screen and state, and keep the gate open until the differences are fixed
+and the affected flows pass again. Include the plan-to-implementation transition,
+uniform board cards and model controls. The release evidence must distinguish
+design parity from functional test results.
+
 Known difference reported by the owner: an in-progress chat currently places
 sub-agents beneath Recent sessions. That layout is wrong. Match the approved
 design's separation of the main conversation and its sub-agents, and verify
