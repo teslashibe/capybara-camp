@@ -49,6 +49,39 @@ func makeDB(t *testing.T, path, ddl string) *sql.DB {
 func sourceFor(root, provider string) Source {
 	return Source{ID: provider + ":" + root, Provider: provider, Root: root, Label: filepath.Base(root)}
 }
+
+func TestDevelopmentDiscoveryRejectsSavedAndSymlinkEscapes(t *testing.T) {
+	a := fixture(t)
+	a.Config.FixtureRoot, _ = filepath.EvalSymlinks(filepath.Dir(a.Config.Home))
+	inside := filepath.Join(a.Config.Home, ".claude")
+	outside := filepath.Join(t.TempDir(), ".claude")
+	write(t, filepath.Join(inside, "projects", "demo", "fixture.jsonl"), record("fixture", "Synthetic"))
+	write(t, filepath.Join(outside, "projects", "private", "real.jsonl"), record("real", "Must not discover"))
+	saved, err := json.Marshal([]string{outside})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(a.Config.Support, "sources.json"), string(saved))
+	if err := os.Symlink(outside, filepath.Join(a.Config.Home, ".claude-link")); err != nil {
+		t.Fatal(err)
+	}
+	sources, _, err := a.sources()
+	canonicalInside, _ := filepath.EvalSymlinks(inside)
+	if err != nil || len(sources) != 1 || sources[0].Root != canonicalInside {
+		t.Fatalf("development discovery escaped fixtures: %+v, %v", sources, err)
+	}
+	if err := a.AddSource(context.Background(), outside); err == nil {
+		t.Fatal("saved an outside profile")
+	}
+	result, err := a.Run(context.Background(), "audit-config", strings.NewReader(""))
+	if err != nil || result.(map[string]string)["fixtureRoot"] != a.Config.FixtureRoot {
+		t.Fatal("missing fixture handshake", result, err)
+	}
+	a.Config.FixtureRoot = ""
+	if _, err := a.Run(context.Background(), "audit-config", strings.NewReader("")); err == nil {
+		t.Fatal("regular helper accepted an audit handshake")
+	}
+}
 func record(id, text string) string {
 	data, _ := json.Marshal(map[string]any{"type": "assistant", "uuid": id, "message": map[string]any{"content": text, "model": "fixture-model"}})
 	return string(data) + "\n"

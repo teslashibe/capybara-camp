@@ -15,6 +15,7 @@ type Local struct {
 	Home, UsersDir, Support string
 	ProfileRoots            []string
 	Environment             []string
+	FixtureRoot             string
 }
 
 func LoadLocal() (Local, error) {
@@ -26,6 +27,9 @@ func LoadLocal() (Local, error) {
 	if value := os.Getenv("CAPY_SUPPORT"); value != "" {
 		c.Support = value
 	}
+	if os.Getenv("CAMP_UI_AUDIT") == "1" && (developmentBuild != "1" || os.Getenv("CAMP_DEV_PROFILE_ROOT") == "") {
+		return Local{}, errors.New("The UI audit requires a development helper and an explicit fixture root")
+	}
 	if root := os.Getenv("CAMP_DEV_PROFILE_ROOT"); developmentBuild == "1" && root != "" {
 		info, err := os.Lstat(root)
 		if !filepath.IsAbs(root) || err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
@@ -35,6 +39,10 @@ func LoadLocal() (Local, error) {
 			return Local{}, errors.New("The development profile root must belong to this user")
 		}
 		c.Home, c.UsersDir = filepath.Join(root, "home"), filepath.Join(root, "users")
+		c.FixtureRoot, err = filepath.EvalSymlinks(root)
+		if err != nil {
+			return Local{}, errors.New("Could not resolve the development profile root")
+		}
 		return c, nil
 	}
 	for _, name := range []string{"CODEX_HOME", "CLAUDE_CONFIG_DIR"} {

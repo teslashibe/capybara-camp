@@ -232,7 +232,7 @@ func (a *App) sources() ([]Source, []string, error) {
 	seen := map[string]bool{}
 	for _, raw := range roots {
 		root, err := canonical(raw, a.Config.Home)
-		if err != nil || seen[root] {
+		if err != nil || seen[root] || !a.withinFixture(root) {
 			continue
 		}
 		provider := detectProvider(root)

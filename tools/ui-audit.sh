@@ -4,7 +4,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 # Rebuild the same UI module used by native tests; the harness changes only
-# the conversation transport. Profile/support folders are supplied at launch.
+# the conversation transport. Each build gets a fresh synthetic support folder.
 ./test.sh LocalConversationTests ExecutionApprovalTests
 APP="$ROOT/build/Capybara Camp Interaction Audit.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -32,6 +32,19 @@ cat > "$PLIST" <<'PLIST'
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 </dict></plist>
 PLIST
+PROFILES="${CAMP_DEV_PROFILE_ROOT:-$ROOT/build/ui-audit/profiles}"
+if [ ! -f "$PROFILES/.capybara-ui-fixtures" ]; then
+  echo "CAMP_DEV_PROFILE_ROOT must name an existing synthetic fixture folder" >&2; exit 2
+fi
+mkdir -p "$ROOT/build/ui-audit"
+STATE="$(mktemp -d "$ROOT/build/ui-audit/state-isolated.XXXXXX")"
+touch "$STATE/.capybara-ui-fixtures"
+plutil -insert LSEnvironment -json '{}' "$PLIST"
+plutil -insert LSEnvironment.CAMP_UI_AUDIT -string 1 "$PLIST"
+plutil -insert LSEnvironment.CAMP_DEV_PROFILE_ROOT -string "$PROFILES" "$PLIST"
+plutil -insert LSEnvironment.CAPY_SUPPORT -string "$STATE" "$PLIST"
+CAMP_UI_AUDIT=1 CAMP_DEV_PROFILE_ROOT="$PROFILES" CAPY_SUPPORT="$STATE" \
+  "$APP/Contents/MacOS/camp-local" audit-config
 IDENTITY="${CAMP_SIGN_IDENTITY:--}"
 for binary in libCampTestSupport.dylib camp-test-provider camp-local CapybaraAudit; do
   codesign --force --sign "$IDENTITY" --timestamp=none "$APP/Contents/MacOS/$binary"

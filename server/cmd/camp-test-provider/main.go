@@ -154,7 +154,13 @@ func run(scenario string, args []string) error {
 			speed = "fast"
 		}
 		_ = emit(message{"type": "settings", "model": model, "effort": "high", "speed": speed})
+		if text(r["mode"]) == "implementation" && r["newSession"] == true {
+			_ = emit(message{"type": "session", "sessionID": object(r["session"])["sessionID"]})
+		}
 		_ = emit(message{"type": "started"})
+		if text(r["mode"]) == "planning" {
+			return auditPlan(i, provider, text(r["prompt"]))
+		}
 		prompt := strings.ToLower(text(r["prompt"]))
 		if strings.Contains(prompt, "complete") {
 			_ = emit(message{"type": "text", "text": "Synthetic queued response completed"})
@@ -405,6 +411,50 @@ func run(scenario string, args []string) error {
 		_ = emit(message{"type": "text", "text": "Done"})
 	default:
 		return errors.New("Unknown native test scenario")
+	}
+	return emit(message{"type": "done"})
+}
+
+// Keep planning independent of the chat fixture's prompt-triggered approvals.
+// Planning instructions themselves contain words such as "permission".
+func auditPlan(i input, provider, prompt string) error {
+	phase := "Independent plan"
+	paragraphs := []string{
+		"Keep Main chat and its subagents together, above the ten most recent sessions.",
+		"Reuse the existing model controls and preserve the wording on every card.",
+		"Check keyboard navigation, narrow windows and the latest streamed message before implementation.",
+	}
+	if strings.Contains(prompt, "Review the other proposal once") {
+		phase = "Review of the other plan"
+		paragraphs = []string{
+			"Both plans preserve the existing interface and keep child conversations separate.",
+			"Use the shared transcript viewport and test switching sessions during streaming.",
+			"Open decision: keep older context behind @ search or add a separate history browser. The first option keeps this release smaller.",
+		}
+	} else if strings.Contains(prompt, "Produce one combined plan") {
+		phase = "Combined plan"
+		paragraphs = []string{
+			"1. Keep Main chat, Subagents and Recent sessions in that order, with the same provider icons.",
+			"2. Reuse the model, effort and speed controls and the width-constrained transcript viewport.",
+			"3. Verify streaming, keyboard navigation, session switching and cancellation at the minimum window size.",
+			"Decision to review: older sessions remain available through @ search. A separate history browser can be considered later.",
+		}
+	}
+	content := provider + " · " + phase + "\n\n"
+	if err := emit(message{"type": "text", "text": content}); err != nil {
+		return err
+	}
+	for _, paragraph := range paragraphs {
+		if i.wait(650 * time.Millisecond) {
+			return nil
+		}
+		content += paragraph + "\n\n"
+		if err := emit(message{"type": "text", "text": content}); err != nil {
+			return err
+		}
+	}
+	if err := emit(message{"type": "usage", "inputTokens": 123, "outputTokens": 45}); err != nil {
+		return err
 	}
 	return emit(message{"type": "done"})
 }

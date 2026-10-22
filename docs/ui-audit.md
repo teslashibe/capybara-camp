@@ -14,9 +14,16 @@ a fixture. It never signs in to a provider or uploads files to a server.
 The component adds file selection, captured-file inspection, excluded paths,
 pinned base, preparation, source verification and final permission review to
 the approved Move to cloud layout. Automated tests cover those state transitions
-and the bundled helper. The computer-use walkthrough is still pending: the
-latest attempt could not start because macOS was locked. This harness does not
-replace the full app's signed-in transfer or two-Mac acceptance.
+and the bundled helper. The October 22 computer-use walkthrough passed file
+selection, excluded `.env` inspection, README content preview, history-mode
+selection, preparation, source verification, explicit permission review and
+the final Runs in Cloud state. Back and re-entry passed, as did cancelling a
+prepared destination with Transfer cancelled · The source was kept. Captures
+are `build/ui-audit/native-transfer-completed-oct22.png` and
+`native-transfer-cancelled-oct22.png`. This used a synthetic
+server response; no files were uploaded and no cloud CLI ran. Changed-source
+and child-history walkthroughs remain, along with the full
+app's signed-in transfer and two-Mac acceptance.
 
 ## Cloud child history
 
@@ -27,8 +34,8 @@ messages control. Automated native tests cover stable child selection on a
 refresh, late responses after changing parents or opening a plan, and removal
 after a parent is revoked.
 
-The rendered audit remains open while the Mac is locked. Verify the following
-with two independent users once the full app can be opened:
+The rendered shared-child audit remains open. Verify the following with two
+independent users:
 
 - Publish a parent with multiple children, including a transcript longer than
   one page, and open each child from the shared sidebar
@@ -50,6 +57,25 @@ capture the reference and native view at matching window sizes, compare visual
 details, click through its interactions, fix discrepancies, rebuild and repeat.
 Check empty, loading, active, waiting, error and completed states. Record what
 was actually verified; do not infer full parity from one screen or unit tests.
+
+An October 22 audit launch exposed a test isolation error: replacing the
+development helper with the ordinary helper enabled normal profile discovery.
+That run was stopped and its cache is excluded from demo evidence. UI audit
+mode now refuses an ordinary helper or a missing fixture root. The native
+harness checks the bundled helper before starting the store, development
+discovery excludes saved paths and symlinks outside the fixture root, and the
+build script creates a fresh support folder for each run. No recording from
+the affected cache may be published.
+
+The rebuilt helper passed the startup handshake and returned only the two
+synthetic profiles. An ordinary helper refused UI audit mode. The full local
+Go race suites and the two native conversation/approval suites passed. The
+native walkthrough then verified twelve fixture sessions through automatic
+refreshes, separate parent/child chats, ten Recent sessions, provider settings,
+a pinned older-session context, retained planning revisions and a completed
+five-turn comparison. Planning fixtures now emit cumulative text snapshots and
+handle planning separately from the chat approval triggers. These checks do
+not exercise real model inference or shared-Camp publication.
 
 Compare glyph geometry and color, font size/weight, spacing, borders, backgrounds,
 button/menu treatment, card dimensions, copy, focus, keyboard actions, pointer
@@ -223,11 +249,12 @@ the conversation and execution-approval suites. Close an older copy of the
 interaction app before rebuilding it. `build.sh` never includes this harness or
 the test provider in the released app.
 
-Launch `build/Capybara Camp Interaction Audit.app` with `open -n --env`, supplying
-`CAMP_UI_AUDIT=1`, an absolute `CAMP_DEV_PROFILE_ROOT`, and an absolute
-`CAPY_SUPPORT`. Both directories must contain a `.capybara-ui-fixtures` marker;
-the profile root also needs the Go helper's private-directory permissions. Use
-only synthetic profiles and state. The recorded run used artificial read-only
+Build with an absolute `CAMP_DEV_PROFILE_ROOT` containing synthetic profiles
+and a `.capybara-ui-fixtures` marker. The script creates a fresh private support
+folder and saves its launch settings in the audit bundle. Open
+`build/Capybara Camp Interaction Audit.app` through computer use. The native
+harness checks both markers and the helper's fixture handshake before loading
+the store. Use only synthetic profiles and state. The recorded run used artificial read-only
 permission grants in its separate support directory to exercise approval UI.
 
 The test provider holds a response open so the UI can be inspected. A prompt

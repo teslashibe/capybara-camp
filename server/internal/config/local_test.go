@@ -7,6 +7,7 @@ import (
 )
 
 func TestDevelopmentProfilesCannotChangeProductionDiscovery(t *testing.T) {
+	t.Setenv("CAMP_UI_AUDIT", "")
 	previous := developmentBuild
 	t.Cleanup(func() { developmentBuild = previous })
 	developmentBuild = ""
@@ -31,5 +32,21 @@ func TestDevelopmentProfilesCannotChangeProductionDiscovery(t *testing.T) {
 	}
 	if _, err := LoadLocal(); err == nil {
 		t.Fatal("shared fixture root accepted")
+	}
+}
+
+func TestUIAuditCannotFallBackToProductionDiscovery(t *testing.T) {
+	previous := developmentBuild
+	t.Cleanup(func() { developmentBuild = previous })
+	t.Setenv("CAMP_UI_AUDIT", "1")
+	t.Setenv("CAMP_DEV_PROFILE_ROOT", t.TempDir())
+	developmentBuild = ""
+	if _, err := LoadLocal(); err == nil {
+		t.Fatal("audit accepted a production helper")
+	}
+	developmentBuild = "1"
+	t.Setenv("CAMP_DEV_PROFILE_ROOT", "")
+	if _, err := LoadLocal(); err == nil {
+		t.Fatal("audit without fixture root fell back to real profiles")
 	}
 }

@@ -18,7 +18,7 @@ and acceptance are separate milestones.
 | Memory and skills | Merged Cortex exact-selection and transactional guard API; embedded store, private/project observation API, saved job metadata, derived-memory source checks, replay and migration protection; isolated CLI inference and Cortex model adapter | Job dispatch, native provider/model selection and memory inspection, skill editing/version rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: validate the native transfer and plan-import reviews, finish full-history migration, then memory/skills
+Next: finish the native plan-import review and remaining transfer cases, finish full-history migration, then memory/skills
 and shared execution. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
@@ -126,8 +126,22 @@ vet pass at schema 29, with additional targeted history/board checks after the
 last guard change. Tests cover private context, immutable source type,
 execution rejection and safe migration rollback. Linux command builds pass;
 both synthetic audit apps are rebuilt and signature-verified. The staged
-secret scan is clean. Native visual acceptance remains blocked by the locked
-Mac; no cloud deployment or release was made.
+secret scan is clean. The Mac is unlocked and native review has resumed. No
+cloud deployment or release was made.
+
+The synthetic transfer window passed a computer-use walkthrough on October 22:
+file selection and preview, excluded environment file, imported-context choice,
+preparation, source verification, permission review and the final Runs in Cloud
+state. This proves the component flow against its fixture, not a live cloud
+transfer. Back/re-entry and cancelling a prepared destination also passed.
+Source changes, child history, signed-in full-app and
+two-Mac checks remain. The main audit build also exposed a helper isolation
+regression; that run was stopped before recording and its cache is excluded
+from demo evidence. The rebuilt app passes the helper handshake, rejects a
+regular helper in audit mode and retains only the twelve synthetic sessions
+through refreshes. The local Go race suites, native conversation/approval
+checks and strict bundle signature verification pass. Parent/child navigation,
+older-session context and the five-turn comparison passed native click-through.
 
 Native import preparation now validates all saved versions, local quotes,
 planner bindings and copied implementation transcripts before creating the

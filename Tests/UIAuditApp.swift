@@ -18,6 +18,21 @@ import SwiftUI
               FileManager.default.fileExists(atPath: support + "/.capybara-ui-fixtures") else {
             fatalError("Launch the UI audit with explicit synthetic profile and support folders")
         }
+        // Check the bundled helper before CampStore can load or scan anything.
+        // A regular helper must never silently discover the user's profiles.
+        let helper = Process(), output = Pipe()
+        helper.executableURL = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/camp-local")
+        helper.arguments = ["audit-config"]
+        helper.standardOutput = output
+        do { try helper.run() } catch { fatalError("Could not validate the isolated audit helper") }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        helper.waitUntilExit()
+        let configuration = try? JSONDecoder().decode([String: String].self, from: data)
+        guard helper.terminationStatus == 0,
+              configuration?["fixtureRoot"] == URL(fileURLWithPath: profiles).resolvingSymlinksInPath().path,
+              configuration?["support"] == support else {
+            fatalError("The bundled audit helper is not using the selected fixtures")
+        }
         _store = StateObject(wrappedValue: CampStore(stateDirectory: URL(fileURLWithPath: support), conversationProcess: {
             let process = Process()
             process.executableURL = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/camp-test-provider")

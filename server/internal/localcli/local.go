@@ -78,6 +78,12 @@ type request struct {
 }
 
 func (a *App) Run(ctx context.Context, action string, input io.Reader) (any, error) {
+	if action == "audit-config" {
+		if a.Config.FixtureRoot == "" {
+			return nil, errors.New("The UI audit requires an isolated development helper")
+		}
+		return map[string]string{"fixtureRoot": a.Config.FixtureRoot, "support": a.Config.Support}, nil
+	}
 	if action == "memory-inference" {
 		data, err := io.ReadAll(io.LimitReader(input, 2<<20+1))
 		if err != nil || len(data) > 2<<20 {
@@ -191,6 +197,18 @@ func canonical(path, home string) (string, error) {
 	return filepath.Clean(abs), nil
 }
 
+func (a *App) withinFixture(path string) bool {
+	if a.Config.FixtureRoot == "" {
+		return true
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	relative, err := filepath.Rel(a.Config.FixtureRoot, resolved)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
+}
+
 func isDir(path string) bool { stat, err := os.Stat(path); return err == nil && stat.IsDir() }
 func isFile(path string) bool {
 	stat, err := os.Stat(path)
@@ -248,6 +266,9 @@ func (a *App) AddSource(ctx context.Context, path string) error {
 	root, err := canonical(path, a.Config.Home)
 	if err != nil {
 		return err
+	}
+	if !a.withinFixture(root) {
+		return errors.New("Development profiles must stay inside the fixture root")
 	}
 	if detectProvider(root) == "" {
 		return errors.New("Choose a Codex home with sessions or a Claude folder with projects")
