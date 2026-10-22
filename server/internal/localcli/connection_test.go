@@ -73,7 +73,10 @@ func TestNativeCloseEscalatesForIgnoringProcessesAndDescendants(t *testing.T) {
 		if time.Since(started) > 3*time.Second {
 			t.Fatal("Close did not bound SIGTERM grace time")
 		}
-		pid, _ := strconv.Atoi(string(data))
+		pid, parseErr := strconv.Atoi(string(data))
+		if parseErr != nil || pid <= 1 {
+			t.Fatal("Child published an invalid PID", mode)
+		}
 		deadline = time.Now().Add(time.Second)
 		for syscall.Kill(pid, 0) == nil && time.Now().Before(deadline) {
 			time.Sleep(10 * time.Millisecond)

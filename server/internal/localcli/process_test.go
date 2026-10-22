@@ -52,7 +52,14 @@ func TestMain(m *testing.M) {
 		if mode == "ignore-stop" {
 			signal.Ignore(syscall.SIGTERM)
 		}
-		_ = os.WriteFile(os.Getenv("CAMP_LOCAL_TEST_PID"), []byte(strconv.Itoa(os.Getpid())), 0600)
+		if path := os.Getenv("CAMP_LOCAL_TEST_PID"); path != "" {
+			// File existence is the parent's readiness signal. Publish the PID
+			// atomically so it never observes a newly created, empty file.
+			temporary := path + "." + strconv.Itoa(os.Getpid())
+			if os.WriteFile(temporary, []byte(strconv.Itoa(os.Getpid())), 0600) != nil || os.Rename(temporary, path) != nil {
+				os.Exit(2)
+			}
+		}
 		for {
 			time.Sleep(time.Second)
 		}

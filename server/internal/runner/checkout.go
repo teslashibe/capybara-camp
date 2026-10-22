@@ -370,16 +370,23 @@ func safeTreePath(value string) bool {
 	return true
 }
 
+// Keep the buffer named: an embedded Buffer promotes ReadFrom and lets
+// io.Copy bypass Write's output limit.
 type gitOutput struct {
-	bytes.Buffer
-	limit int
+	buffer   bytes.Buffer
+	limit    int
+	overflow bool
 }
+
+func (b *gitOutput) Bytes() []byte { return b.buffer.Bytes() }
+func (b *gitOutput) Len() int      { return b.buffer.Len() }
 
 func (b *gitOutput) Write(p []byte) (int, error) {
 	if b.Len()+len(p) > b.limit {
+		b.overflow = true
 		return 0, errCheckoutSize
 	}
-	return b.Buffer.Write(p)
+	return b.buffer.Write(p)
 }
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
 
@@ -432,7 +439,7 @@ func (c *checkout) git(ctx context.Context, w camp.Workspace, credentialFile str
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	if errors.Is(err, errCheckoutSize) {
+	if stdout.overflow || stderr.overflow || errors.Is(err, errCheckoutSize) {
 		return nil, errCheckoutSize
 	}
 	if err != nil {

@@ -34,6 +34,31 @@ func fixtureCommand(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+func TestGitOutputLimitCannotBeBypassedByCopy(t *testing.T) {
+	out := &gitOutput{limit: 8}
+	_, err := io.Copy(out, io.LimitReader(strings.NewReader(strings.Repeat("x", 64)), 64))
+	if !errors.Is(err, errCheckoutSize) || !out.overflow || out.Len() > 8 {
+		t.Fatal("copy bypassed Git output limit", out.Len(), err)
+	}
+}
+
+func TestGitCommandBoundsActualBlobOutput(t *testing.T) {
+	c, w, _ := checkoutFixture(t, "", strings.Repeat("a", 40))
+	dir := c.workdir(w)
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	fixtureCommand(t, dir, "init")
+	if err := os.WriteFile(filepath.Join(dir, "large.txt"), bytes.Repeat([]byte("x"), 9<<20), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fixtureCommand(t, dir, "add", ".")
+	fixtureCommand(t, dir, "commit", "-m", "Large fixture blob")
+	if _, err := c.git(t.Context(), w, "", "show", "HEAD:large.txt"); !errors.Is(err, errCheckoutSize) {
+		t.Fatal("large Git output was not rejected", err)
+	}
+}
+
 // A real smart-HTTP Git transport exercises shallow fetch and checkout. No
 // external account or repository is contacted by these tests.
 func gitFixtureServer(t *testing.T, seed func(string), before func(http.ResponseWriter, *http.Request) bool) (string, string, *atomic.Int32) {

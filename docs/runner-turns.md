@@ -43,6 +43,11 @@ Stopping during checkout verification preserves cancellation as the result;
 it does not report that the checkout is corrupt. The next run verifies the
 retained checkout before starting provider work.
 
+Git subprocess capture is limited to 8 MiB of standard output and 64 KiB of
+standard error. The limits apply to the pipe-copy path as well as direct
+writes; exceeding one fails checkout before its output is accepted. Raw Git
+errors remain private. A regression test checks an actual oversized Git blob.
+
 ## Multiple tickets on one account
 
 Each ticket retains its own checkout, branch and provider conversation ID. One
