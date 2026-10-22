@@ -84,6 +84,8 @@ struct CloudSourceRef: Codable, Equatable, Sendable {
     var messageIds: [String]? = nil
 }
 struct CloudRequest: Codable, Identifiable, Equatable, Sendable {
+    var contentRestricted: Bool? = nil
+    var promptLabel: String { contentRestricted == true ? "Context access changed" : prompt }
     var id: String; var campId: String; var sessionId: String; var requesterUserId: String; var ownerUserId: String; var ownerDeviceId: String
     var permissionRevision: Int64; var revision: Int64; var prompt: String; var model: String; var effort: String; var speed: String; var state: String
     var leaseToken: String?; var leaseUntil: Date?; var createdAt: Date; var evidence: String?; var reason: String?; var sources: [CloudSourceRef]
@@ -96,7 +98,19 @@ struct CloudRequest: Codable, Identifiable, Equatable, Sendable {
     var quotedSources: [ImportedPlanningSource]? = nil
     var quotedContextDigest: String? = nil
     var isPlanning: Bool { kind == "planning" }
+    func merging(_ previous: CloudRequest?) -> CloudRequest {
+        guard let previous, previous.id == id, previous.campId == campId else { return contentRestricted == true ? restrictingContent() : self }
+        let latest = previous.revision > revision ? previous : self
+        return contentRestricted == true || previous.contentRestricted == true ? latest.restrictingContent() : latest
+    }
+    func restrictingContent() -> CloudRequest {
+        var value = self
+        value.contentRestricted = true; value.prompt = ""; value.sources = []
+        value.quotedSources = nil; value.quotedContextDigest = nil; value.evidence = nil
+        return value
+    }
     var supportedWork: Bool {
+        guard contentRestricted != true else { return false }
         let quoted = quotedSources ?? []
         let validQuotes = validPlanningQuotes(quoted, sharedCount: sources.count) &&
             (quoted.isEmpty ? quotedContextDigest == nil || quotedContextDigest == "" : quotedContextDigest?.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil)

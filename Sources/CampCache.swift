@@ -219,7 +219,10 @@ actor CampCache {
         """, [.text(scope.key), .text(session.id), .integer(session.revision), .integer(session.transcriptRevision), .blob(try CampWire.encoder().encode(session)), .text(scope.key), .text(session.id), .integer(session.revision)])
     }
     private func save(_ request: CloudRequest, scope: CloudScope) throws {
-        var request = request; request.leaseToken = nil
+        var request = request
+        let previous = try rows("SELECT body FROM requests WHERE scope=? AND id=?", [.text(scope.key), .text(request.id)]) { try CampWire.decoder().decode(CloudRequest.self, from: blob($0, 0)) }.first
+        request = request.merging(previous)
+        request.leaseToken = nil
         try execute("INSERT INTO requests(scope,id,revision,body) VALUES(?,?,?,?) ON CONFLICT(scope,id) DO UPDATE SET revision=excluded.revision,body=excluded.body WHERE excluded.revision>=requests.revision",
                     [.text(scope.key), .text(request.id), .integer(request.revision), .blob(try CampWire.encoder().encode(request))])
     }

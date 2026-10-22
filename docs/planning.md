@@ -93,6 +93,12 @@ the implementation session, then recheck its bindings before provider submission
 The native worker must verify the approved CLI context against its actual project
 and profile. Ordinary chat requests do not grant implementation permission.
 
+Implementation must start a separate persistent provider conversation while
+keeping the same logical planning ticket. The selected source identifies the
+account and project; implementation must not append to that source's unrelated
+chat or overwrite its cloud runtime identity. Worker claims must explicitly
+advertise support for this execution mode before receiving implementation work.
+
 ## Shared planning in the native app
 
 Use the Plan menu's shared Camp actions to create a saved draft. Choose one accessible source session for Plan, or two for comparison, then select model/effort/speed settings and pinned message ranges. Comparison also selects the combining provider. Each planner shows its saved execution location. An owner-Mac assignment uses that owner's local profile; a cloud assignment uses its prepared workspace and account. Plans

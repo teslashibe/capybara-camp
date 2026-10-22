@@ -47,6 +47,27 @@ and Linux backend command builds pass. These approvals do not enqueue work.
 Dispatch, native review, persistent implementation-session creation and full
 provider acceptance remain open.
 
+The shared implementation review found an existing request-content leak after
+tagged-source revocation. Regression tests reproduced it through detail reads,
+lists and saved receipts. The fix retains lifecycle metadata with an explicit
+content-restricted flag, removes saved prompt/source/evidence content, denies
+stream reads and create-receipt reuse, and rechecks every planning participant's
+source before worker admission. Cancellation and final acknowledgements remain
+usable after revocation. Restoring a share does not revive its old grant.
+The Mac client labels restricted content, hides approval and stops local work
+when a heartbeat reports lost access. Shared implementation dispatch and its
+native approval workflow remain unfinished.
+
+The full Go race suite and vet pass with PostgreSQL
+(`build/request-privacy-final-suite.log`), as do Linux backend builds. The shared
+native module compiles; cloud/cache and worker tests pass
+(`build/request-privacy-native-verified.log`). Cache and live-index merges retain
+redaction even when older content arrives later. The worker test also verifies
+streaming before completion and process cancellation after a restricted
+heartbeat. Its fixture now has a separate held planning stream, replacing a
+stale assertion against the chat-only UI-audit marker. These are synthetic
+transport checks; live-provider and full native visual acceptance remain open.
+
 The two-account HTTP journey now passes against disposable PostgreSQL with the
 real authentication and API handlers. Separate clients sign in through captured
 OTP email, persist independent device credentials, join a Camp, publish shared

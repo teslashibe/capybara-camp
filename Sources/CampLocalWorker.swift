@@ -125,7 +125,7 @@ import SwiftUI
                     let current = try await action("heartbeat", attempt: attempt, context: c)
                     heartbeatAt = Date().addingTimeInterval(heartbeatInterval)
                     watchLease(current.leaseUntil, attempt: attempt, context: c)
-                    if current.state == "cancel_requested" { active?.stop() }
+                    if current.state == "cancel_requested" || current.contentRestricted == true { active?.stop() }
                 }
                 return
             }
@@ -196,6 +196,11 @@ import SwiftUI
                 try await cache?.removeWorkerAttempt(attempt.id, scope: c.scope, expectedEpoch: c.epoch!); return
             }
             attempt.state = "uncertain"; try await save(attempt, c); issues.append(attempt); return
+        }
+        if current.contentRestricted == true {
+            _ = try await action("cancel", attempt: attempt, context: c)
+            try await cache?.removeWorkerAttempt(attempt.id, scope: c.scope, expectedEpoch: c.epoch!)
+            status = "Context access changed"; return
         }
         let remote = try await get(CloudSession.self, "/v1/camps/\(c.scope.campId)/sessions/\(attempt.request.sessionId)", c)
         guard !remote.isHistoryOnly, remote.ownerUserId == c.actor.userId, remote.ownerDeviceId == c.actor.deviceId,

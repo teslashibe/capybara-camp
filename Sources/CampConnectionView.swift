@@ -169,11 +169,11 @@ struct CloudRequestQueueView: View {
                 ForEach(items) { request in
                     HStack(alignment: .top) {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(request.prompt).lineLimit(2)
+                            Text(request.promptLabel).lineLimit(2)
                             Text(stateName(request.state, cloud: request.executionLocation == "cloud")).foregroundStyle(campMuted)
                         }
                         Spacer()
-                        if request.state == "pending_approval" && request.ownerUserId == cloud.credential?.actor.userId {
+                        if request.contentRestricted != true && request.state == "pending_approval" && request.ownerUserId == cloud.credential?.actor.userId {
                             Button("Approve") { Task { await cloud.queueAction(request: request, action: "approve") } }
                         }
                         if request.state != "outcome_unknown" {
@@ -223,7 +223,7 @@ struct CampWorkerStatusView: View {
         .sheet(item: $reviewing) { attempt in
             VStack(alignment: .leading, spacing: 18) {
                 Text("Review the interrupted request").font(.headline)
-                Text(attempt.request.prompt).lineLimit(5).font(.system(size: 12))
+                Text(attempt.request.promptLabel).lineLimit(5).font(.system(size: 12))
                 Text("Check the original session transcript before recording the outcome. Confirming a result will not send the prompt again.")
                     .font(.system(size: 12)).foregroundStyle(campMuted)
                 HStack {

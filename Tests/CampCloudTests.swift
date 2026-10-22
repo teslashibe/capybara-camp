@@ -64,6 +64,26 @@ import SQLite3
     }
     @MainActor static func main() async throws {
         try streamProjectionChecks()
+        let privacyScope = CloudScope(origin: "https://camp.example", userId: UUID().uuidString, campId: UUID().uuidString)
+        var restricted = request(privacyScope, session: session(privacyScope))
+        check(restricted.supportedWork && restricted.promptLabel == restricted.prompt, "older request retains its content contract")
+        let unrestricted = restricted
+        restricted.contentRestricted = true; restricted.prompt = ""; restricted.sources = []
+        let decoded = try CampWire.decoder().decode(CloudRequest.self, from: CampWire.encoder().encode(restricted))
+        check(decoded.contentRestricted == true && !decoded.supportedWork && decoded.promptLabel == "Context access changed", "redacted request stays visible but cannot execute")
+        check(unrestricted.merging(restricted).contentRestricted == true && unrestricted.merging(restricted).prompt.isEmpty, "live index cannot restore a restricted request")
+        let privacyRoot = FileManager.default.temporaryDirectory.appendingPathComponent("camp-request-privacy-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: privacyRoot) }
+        let privacyCache = try CampCache(directory: privacyRoot)
+        try await privacyCache.ingest(scope: privacyScope, request: unrestricted)
+        try await privacyCache.ingest(scope: privacyScope, request: restricted)
+        try await privacyCache.ingest(scope: privacyScope, request: unrestricted)
+        check(try await privacyCache.requests(privacyScope).first?.prompt == "", "late same-revision response cannot restore revoked content")
+        var completed = unrestricted; completed.revision += 1; completed.state = "completed"
+        try await privacyCache.ingest(scope: privacyScope, request: completed)
+        try await privacyCache.ingest(scope: privacyScope, request: restricted)
+        let retained = try await privacyCache.requests(privacyScope).first!
+        check(retained.contentRestricted == true && retained.prompt.isEmpty && retained.state == "completed", "redaction persists while later lifecycle state advances")
         try await controlOutboxChecks()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("camp-cloud-tests-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

@@ -141,6 +141,20 @@ func run(scenario string, args []string) error {
 		return err
 	}
 	switch scenario {
+	case "planning-stream":
+		if err := require(text(r["mode"]) == "planning"); err != nil {
+			return err
+		}
+		if err := emit(message{"type": "started"}); err != nil {
+			return err
+		}
+		if err := emit(message{"type": "text", "text": "Live planning stream before completion"}); err != nil {
+			return err
+		}
+		if i.wait(30 * time.Second) {
+			return nil
+		}
+		return errors.New("Planning stream fixture was not stopped")
 	case "ui-audit":
 		// Interactive synthetic transport for exercising the real native UI.
 		// This executable never invokes either provider or executes a command.

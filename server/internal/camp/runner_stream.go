@@ -429,6 +429,9 @@ func (s *Store) RequestStream(ctx context.Context, a auth.Actor, campID, id stri
 	if _, err = s.readSession(ctx, tx, a, campID, r.SessionID); err != nil {
 		return out, err
 	}
+	if err = requestContentAccess(ctx, tx, a, r); err != nil {
+		return out, err
+	}
 	if r.Kind == "planning" {
 		p, err := s.loadPlanning(ctx, tx, a, campID, r.PlanID, r.PlanVersion)
 		if err != nil {

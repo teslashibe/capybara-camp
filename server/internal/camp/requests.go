@@ -29,6 +29,7 @@ type RequestInput struct {
 	Sources []SourceRef `json:"sources"`
 }
 type Request struct {
+	ContentRestricted    bool                        `json:"content_restricted,omitempty"`
 	Kind                 string                      `json:"kind"`
 	PlanID               string                      `json:"plan_id,omitempty"`
 	PlanVersion          int64                       `json:"plan_version,omitempty"`
@@ -76,10 +77,11 @@ type RequestAction struct {
 const requestColumns = `r.id,r.camp_id,r.session_id,r.requester_user_id,r.owner_user_id,r.owner_device_id,r.permission_revision,r.revision,r.prompt,r.model,r.effort,r.speed,r.state,
  COALESCE(r.lease_token::text,''),r.lease_until,r.created_at,r.outcome_evidence,r.reason,r.kind,COALESCE(r.plan_id::text,''),COALESCE(r.plan_version,0),COALESCE(r.plan_step,-1),r.execution_location,r.execution_epoch,COALESCE(r.execution_workspace_id::text,''),r.execution_permissions,r.execution_mode,COALESCE(r.runner_grant_id::text,''),r.context_revision,r.stream_seq`
 
-func scanRequest(row rowScanner) (Request, error) {
+func scanRequest(row rowScanner, extra ...any) (Request, error) {
 	r := Request{Sources: []SourceRef{}}
 	var permissions []byte
-	err := row.Scan(&r.ID, &r.CampID, &r.SessionID, &r.RequesterUserID, &r.OwnerUserID, &r.OwnerDeviceID, &r.PermissionRevision, &r.Revision, &r.Prompt, &r.Model, &r.Effort, &r.Speed, &r.State, &r.LeaseToken, &r.LeaseUntil, &r.CreatedAt, &r.Evidence, &r.Reason, &r.Kind, &r.PlanID, &r.PlanVersion, &r.PlanStep, &r.ExecutionLocation, &r.ExecutionEpoch, &r.ExecutionWorkspaceID, &permissions, &r.Mode, &r.RunnerGrantID, &r.ContextRevision, &r.StreamSeq)
+	columns := []any{&r.ID, &r.CampID, &r.SessionID, &r.RequesterUserID, &r.OwnerUserID, &r.OwnerDeviceID, &r.PermissionRevision, &r.Revision, &r.Prompt, &r.Model, &r.Effort, &r.Speed, &r.State, &r.LeaseToken, &r.LeaseUntil, &r.CreatedAt, &r.Evidence, &r.Reason, &r.Kind, &r.PlanID, &r.PlanVersion, &r.PlanStep, &r.ExecutionLocation, &r.ExecutionEpoch, &r.ExecutionWorkspaceID, &permissions, &r.Mode, &r.RunnerGrantID, &r.ContextRevision, &r.StreamSeq}
+	err := row.Scan(append(columns, extra...)...)
 	if err == nil {
 		err = json.Unmarshal(permissions, &r.Permissions)
 	}
@@ -175,6 +177,18 @@ func (s *Store) requestAccess(ctx context.Context, tx pgx.Tx, r Request) (Sessio
 			return session, ErrDenied
 		}
 	}
+	if r.Kind == "planning" {
+		for _, actor := range []auth.Actor{requester, owner} {
+			plan, err := s.loadPlanning(ctx, tx, actor, r.CampID, r.PlanID, r.PlanVersion)
+			if err != nil {
+				return session, err
+			}
+			if err = s.checkPlanningSources(ctx, tx, actor, plan); err != nil {
+				return session, err
+			}
+		}
+	}
+
 	return session, nil
 }
 
@@ -206,8 +220,14 @@ func (s *Store) CreateRequest(ctx context.Context, a auth.Actor, campID, session
 		return r, err
 	} else if hit {
 		current, err := loadRequest(ctx, tx, campID, r.ID)
+		if err != nil {
+			return Request{}, err
+		}
+		if err = requestContentAccess(ctx, tx, a, current); err != nil {
+			return Request{}, err
+		}
 		current.LeaseToken = ""
-		return current, err
+		return current, nil
 	}
 	r, err = s.enqueueRequest(ctx, tx, a, campID, session, input, nil)
 	if err != nil {
@@ -311,6 +331,12 @@ func (s *Store) Request(ctx context.Context, a auth.Actor, campID, id string) (R
 	if _, err = s.readSession(ctx, tx, a, campID, r.SessionID); err != nil {
 		return Request{}, err
 	}
+	if err = requestContentAccess(ctx, tx, a, r); err != nil {
+		if !errors.Is(err, ErrDenied) {
+			return Request{}, err
+		}
+		r = redactRequestContent(r)
+	}
 	r.LeaseToken = ""
 	return r, tx.Commit(ctx)
 }
@@ -319,7 +345,7 @@ func (s *Store) ListRequests(ctx context.Context, a auth.Actor, campID string) (
 	if !validID(campID) {
 		return nil, ErrDenied
 	}
-	rows, err := s.pool.Query(ctx, `SELECT `+requestColumns+` FROM prompt_requests r JOIN sessions s ON s.id=r.session_id
+	rows, err := s.pool.Query(ctx, `SELECT `+requestColumns+`, (`+readableRequestContentSQL+`) FROM prompt_requests r JOIN sessions s ON s.id=r.session_id
 	 JOIN memberships m ON m.camp_id=r.camp_id AND m.user_id=$1 WHERE r.camp_id=$2 AND (r.requester_user_id=$1 OR r.owner_user_id=$1)
 	 AND (s.shared OR s.owner_user_id=$1) ORDER BY r.created_at DESC,r.id DESC LIMIT 100`, a.UserID, campID)
 	if err != nil {
@@ -328,11 +354,15 @@ func (s *Store) ListRequests(ctx context.Context, a auth.Actor, campID string) (
 	defer rows.Close()
 	out := []Request{}
 	for rows.Next() {
-		r, err := scanRequest(rows)
+		var visible bool
+		r, err := scanRequest(rows, &visible)
 		if err != nil {
 			return nil, err
 		}
 		r.LeaseToken = ""
+		if !visible {
+			r = redactRequestContent(r)
+		}
 		out = append(out, r)
 	}
 	if err = rows.Err(); err != nil {
@@ -536,7 +566,7 @@ func (s *Store) ActOnRequest(ctx context.Context, a auth.Actor, campID, id, key 
 }
 
 // Device and installation workers share the same transitions after their own authorization checks.
-func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campID, id, key string, input RequestAction, r Request, worker bool, receiptScope string) (Request, error) {
+func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campID, id, key string, input RequestAction, r Request, worker bool, receiptScope string) (result Request, resultErr error) {
 	var err error
 	if r.RequesterUserID != a.UserID && r.OwnerUserID != a.UserID {
 		return Request{}, ErrDenied
@@ -544,6 +574,14 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 	if _, err = s.readSession(ctx, tx, a, campID, r.SessionID); err != nil {
 		return Request{}, err
 	}
+	contentErr := requestContentAccess(ctx, tx, a, r)
+	if contentErr != nil && !errors.Is(contentErr, ErrDenied) {
+		return Request{}, contentErr
+	}
+	if contentErr != nil {
+		defer func() { result = redactRequestContent(result) }()
+	}
+
 	if input.Action == "start" && r.QuotedContextDigest != "" && input.QuotedContextDigest != r.QuotedContextDigest {
 		return r, ErrInput
 	}
@@ -562,6 +600,9 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 			return r, ErrTransition
 		}
 		if input.Action == "start" {
+			if contentErr != nil {
+				return Request{}, contentErr
+			}
 			if err = s.planningCanStart(ctx, tx, r); err != nil {
 				return r, err
 			}
@@ -576,6 +617,9 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 		return r, ErrDenied
 	}
 	if oneOf(input.Action, "approve", "start") {
+		if contentErr != nil {
+			return Request{}, contentErr
+		}
 		session, err := s.requestAccess(ctx, tx, r)
 		if err != nil {
 			return r, err

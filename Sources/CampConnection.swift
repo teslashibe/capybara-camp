@@ -263,7 +263,7 @@ import SwiftUI
         guard generation == token else { throw CancellationError() }
         try await cache.ingest(scope: scope, cursor: event.cursor, session: changedSession, request: changedRequest, removed: removed, expectedEpoch: epoch, childrenChanged:event.kind=="children.updated" ? event.payload.sessionId : nil)
         if let value = changedSession, accepts(value) { sessionIndex[value.id] = value }
-        if let value = changedRequest, value.revision >= (requestIndex[value.id]?.revision ?? 0) { requestIndex[value.id] = value; requestChanged?(value) }
+        if let value = changedRequest { recordRequest(value) }
         if let (id, revision) = removed, (sessionIndex[id]?.revision ?? 0) <= revision {
             if live.sessionID == id { live.stop() }
             sessionIndex[id] = nil
@@ -308,13 +308,18 @@ import SwiftUI
               let valueEpoch = value.executionEpoch, currentEpoch >= valueEpoch else { throw CampCloudError.invalidResponse }
         publishVisible()
     }
+    private func recordRequest(_ value: CloudRequest, notify: Bool = true) {
+        let merged = value.merging(requestIndex[value.id])
+        requestIndex[value.id] = merged
+        if notify { requestChanged?(merged) }
+    }
     func acceptWorkerRequest(_ value: CloudRequest) async {
         guard let scope, value.campId == scope.campId, let cache else { return }
         let token = generation
         do {
             try await cache.ingest(scope: scope, request: value, expectedEpoch: cacheEpoch)
             guard token == generation else { return }
-            if value.revision >= (requestIndex[value.id]?.revision ?? 0) { requestIndex[value.id] = value }
+            recordRequest(value, notify: false)
             schedulePublish(generation: token)
         } catch { self.error = error.localizedDescription }
     }
@@ -623,7 +628,7 @@ import SwiftUI
                         let data = try await client.data(item.method, path: item.path, body: item.body, key: item.id, token: credential.token)
                         if let request = try? CampWire.decoder().decode(CloudRequest.self, from: data) {
                             try await cache.ingest(scope: scope, request: request, expectedEpoch: epoch)
-                            if self?.generation == token { self?.requestIndex[request.id] = request; self?.requestChanged?(request) }
+                            if self?.generation == token { self?.recordRequest(request) }
                         }
                         if let session = try? CampWire.decoder().decode(CloudSession.self, from: data) {
                             try await cache.ingest(scope: scope, session: session, expectedEpoch: epoch)

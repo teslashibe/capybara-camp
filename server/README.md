@@ -160,6 +160,15 @@ access, and a shared destination cannot silently receive private context.
 Sharing or project-permission changes cancel queued work and request cancellation
 of active work. Titles and new transcript messages do not invalidate approval.
 
+Request lists and detail reads recheck pinned source permissions. When access
+changes, authorized participants can still see lifecycle state, with
+`content_restricted: true`; the response omits the prompt, source references,
+quoted context and evidence text. Saved create receipts cannot return revoked
+content, and streaming reads are denied. Cancellation, heartbeat and final
+acknowledgements remain available with the same redaction. Restoring a share
+does not revive the old permission revision. Planning admission also rechecks
+access to every planner's source for both participants.
+
 Requests move through `pending_approval`, `queued`, `claimed` and `started`.
 `cancel_requested` asks the owner to interrupt the CLI. `completed`, `failed` and
 `cancelled` are terminal. Each mutation has a monotonic revision; clients discard

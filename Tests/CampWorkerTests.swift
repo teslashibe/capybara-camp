@@ -22,6 +22,7 @@ actor WorkerFixture: CampPublishingTransport {
         loseClaim = claim; loseStart = start; loseFinish = finish; holdClaim = hold; holdStartReply = startReply
     }
     func state(_ state: String) { request.state = state }
+    func restrictContent() { request.contentRestricted = true; request.prompt = ""; request.sources = [] }
     func pausePlanning(_ paused: Bool) { planningPaused = paused }
     func deadline(_ seconds: TimeInterval) { request.leaseUntil = Date().addingTimeInterval(seconds) }
     func snapshot() -> (CloudRequest, [String: [String]], Bool) { (request, calls, held) }
@@ -151,21 +152,21 @@ actor WorkerFixture: CampPublishingTransport {
 
         let streamCache = try CampCache(directory: root.appendingPathComponent("planning-stream"))
         let streamAPI = WorkerFixture(request: planRequest, session: remote)
-        let streamWorker = CampLocalWorker(readFences: { [] }, cache: streamCache, automatic: false)
+        let streamWorker = CampLocalWorker(readFences: { [] }, cache: streamCache, automatic: false, heartbeatInterval: 0)
         streamWorker.nativeSession = { _ in local }; streamWorker.available = { _ in true }
-        var streamedRun: LocalConversation?
         streamWorker.execute = { native, work, prompt, _, contexts, completed in
             let run = LocalConversation(session: native, history: [], prompt: prompt)
             run.completed = completed
-            do { try run.start(prompt: prompt, model: work.model, tuning: .init(), contexts: contexts, mode: .planning, makeProcess: { fixtureProcess("ui-audit") }) }
+            do { try run.start(prompt: prompt, model: work.model, tuning: .init(), contexts: contexts, mode: .planning, makeProcess: { fixtureProcess("planning-stream") }) }
             catch { return nil }
-            streamedRun = run; return run
+            return run
         }
         streamWorker.attach(scope: scope, actor: actor, transport: streamAPI, sessions: [remote])
         await streamWorker.poll()
-        try await eventually("Live provider text was not published before completion") { await streamAPI.liveText().contains("Latest synthetic streaming marker") }
+        try await eventually("Live provider text was not published before completion") { await streamAPI.liveText().contains("Live planning stream before completion") }
         check(await streamAPI.snapshot().0.state == "started", "Streaming required a completed planning turn")
-        streamedRun?.stop()
+        await streamAPI.restrictContent()
+        await streamWorker.poll()
         try await eventually("Stopped streaming worker did not finish") { try await streamCache.attempts(scope).isEmpty }
         streamWorker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
 
