@@ -12,10 +12,10 @@ struct PlanningLocationLabel: View {
 extension CampStore {
     func newSharedPlan(mode: PlanningMode = .single) {
         guard let scope = cloud.scope, let project = cloud.projects.first(where:{ !$0.isArchived && "cloud:"+$0.id==projectFilter }) ?? cloud.projects.first(where:{ !$0.isArchived }) else { banner = "Connect to a Camp and add a project first"; return }
-        let available = cloud.sessions.filter { $0.ownerUserId == scope.userId || $0.allowRequests }
+        let available = cloud.sessions.filter { !$0.isHistoryOnly && ($0.ownerUserId == scope.userId || $0.allowRequests) }
         let preferred = available.first { $0.ownerUserId == scope.userId }?.provider ?? available.first?.provider ?? "Codex"
         let planners = (mode == .single ? [preferred] : ["Codex", "Claude"]).map { provider -> CloudPlannerInput in
-            let choices = cloud.sessions.filter { $0.provider == provider && ($0.ownerUserId == scope.userId || $0.allowRequests) }
+            let choices = cloud.sessions.filter { !$0.isHistoryOnly && $0.provider == provider && ($0.ownerUserId == scope.userId || $0.allowRequests) }
             let source = choices.first { $0.ownerUserId == scope.userId } ?? choices.first
             return CloudPlannerInput(sessionId: source?.id ?? "", model: source?.model ?? "", effort: "", speed: "standard", execution: source.flatMap(CloudPlanningExecution.init(session:)))
         }
@@ -28,7 +28,7 @@ extension CampStore {
     }
     func setSharedPlanMode(_ id: String, mode: PlanningMode) {
         guard let draft = sharedPlanning.draft(id) else { return }
-        let available = cloud.sessions.filter { $0.ownerUserId == cloud.scope?.userId || $0.allowRequests }
+        let available = cloud.sessions.filter { !$0.isHistoryOnly && ($0.ownerUserId == cloud.scope?.userId || $0.allowRequests) }
         let old = draft.input.planners
         let providers = mode == .single ? [available.first { $0.id == old.first?.sessionId }?.provider ?? available.first?.provider ?? "Codex"] : ["Codex", "Claude"]
         let planners = providers.map { provider -> CloudPlannerInput in
@@ -217,7 +217,7 @@ struct SharedPlanningWorkspace: View {
                                     }
                                 })) {
                                     Text("Choose a shared session").tag("")
-                                    ForEach(store.cloud.sessions.filter { (draft.input.workflow == .single || $0.provider == provider) && ($0.ownerUserId == store.cloud.scope?.userId || $0.allowRequests) }) { source in Text(source.provider + " · " + source.title).tag(source.id) }
+                                    ForEach(store.cloud.sessions.filter { !$0.isHistoryOnly && (draft.input.workflow == .single || $0.provider == provider) && ($0.ownerUserId == store.cloud.scope?.userId || $0.allowRequests) }) { source in Text(source.provider + " · " + source.title).tag(source.id) }
                                 }.disabled(planning.pending(id))
                                 SharedPlanningModelMenu(store: store, planning: planning, id: id, slot: slot, expanded: true)
                                 PlanningRunOnMenu(provider: provider, execution: draft.input.planners[slot].execution,

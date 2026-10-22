@@ -34,6 +34,9 @@ type ExecutionInput struct {
 // The session's execution epoch is independent from its display revision.
 // Moving work does not change the approved repository/history snapshot.
 func (s *Store) executionTarget(ctx context.Context, tx pgx.Tx, session Session) (ExecutionTarget, error) {
+	if session.HistoryOnly {
+		return ExecutionTarget{}, ErrTransition
+	}
 	out := ExecutionTarget{Location: session.ExecutionLocation, Epoch: session.ExecutionEpoch, WorkspaceID: session.ExecutionWorkspaceID, Mode: "chat", Permissions: localcli.PermissionSettings{}, Available: true}
 	if out.Location == "local" {
 		return out, nil
@@ -130,6 +133,9 @@ func (s *Store) Execution(ctx context.Context, a auth.Actor, campID, id string) 
 	}
 	if session.OwnerUserID != a.UserID {
 		return ExecutionTarget{}, ErrDenied
+	}
+	if session.HistoryOnly {
+		return ExecutionTarget{}, ErrTransition
 	}
 	out, err := s.executionTarget(ctx, tx, session)
 	if err == nil || errors.Is(err, ErrTransition) {
@@ -232,7 +238,7 @@ func (s *Store) AssignExecution(ctx context.Context, a auth.Actor, campID, id, k
 	if err = requireUnheldSession(ctx, tx, id); err != nil {
 		return out, err
 	}
-	if session.ExternalOwner || !(oneOf(session.State, "idle", "done") || session.ExecutionLocation == "cloud" && session.State == "waiting") {
+	if session.HistoryOnly || session.ExternalOwner || !(oneOf(session.State, "idle", "done") || session.ExecutionLocation == "cloud" && session.State == "waiting") {
 		return out, ErrTransition
 	}
 	var busy bool

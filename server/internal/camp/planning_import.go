@@ -190,7 +190,7 @@ func (s *Store) ImportPlanning(ctx context.Context, a auth.Actor, campID, key st
 		for i := range bindings {
 			bindings[i].Model, bindings[i].Effort, bindings[i].Speed = "", "", ""
 		}
-		current, e := s.preparePlanning(ctx, tx, a, campID, PlanningInput{Mode: v.Mode, Title: in.Title, ProjectID: in.ProjectID, Brief: brief, Planners: bindings, Sources: v.Sources, BudgetPolicy: v.BudgetPolicy, MergeSlot: v.MergeSlot})
+		current, e := s.preparePlanningSources(ctx, tx, a, campID, PlanningInput{Mode: v.Mode, Title: in.Title, ProjectID: in.ProjectID, Brief: brief, Planners: bindings, Sources: v.Sources, BudgetPolicy: v.BudgetPolicy, MergeSlot: v.MergeSlot}, true)
 		if e != nil {
 			return saved, e
 		}

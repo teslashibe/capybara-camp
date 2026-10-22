@@ -263,6 +263,16 @@ actor WorkerFixture: CampPublishingTransport {
         await leaseWorker.poll()
         try await eventually("Expired lease did not stop the real subprocess") { await leaseAPI.snapshot().0.state == "cancelled" }
         check(Bridge.activeProcesses.isEmpty)
-        print("PASS: worker claim replay, durable start, heartbeat, finish recovery, unknown-outcome review and revoked-response fencing")
+        let historyCache = try CampCache(directory: root.appendingPathComponent("history-only"))
+        var history = remote; history.historyOnly = true
+        let historyAPI = WorkerFixture(request: request(), session: history)
+        let historyWorker = CampLocalWorker(readFences: { [] }, cache: historyCache, automatic: false)
+        historyWorker.nativeSession = { _ in local }; historyWorker.available = { _ in true }
+        historyWorker.execute = { _, _, _, _, _, _ in preconditionFailure("Archived history started provider work") }
+        historyWorker.attach(scope: scope, actor: actor, transport: historyAPI, sessions: [history])
+        await historyWorker.poll()
+        check(await historyAPI.snapshot().1["claim"] == nil, "Archived history was included in an execution claim")
+        historyWorker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+        print("PASS: worker claim replay, durable start, heartbeat, finish recovery, unknown-outcome review, revoked-response fencing and history-only exclusion")
     }
 }

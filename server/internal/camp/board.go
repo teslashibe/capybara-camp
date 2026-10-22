@@ -22,6 +22,9 @@ func (s *Store) MoveSession(ctx context.Context, a auth.Actor, campID, id, key, 
 	if err != nil {
 		return current, err
 	}
+	if current.HistoryOnly {
+		return current, ErrTransition
+	}
 	var result Session
 	input := struct {
 		Stage    string

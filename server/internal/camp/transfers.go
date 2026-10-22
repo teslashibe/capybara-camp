@@ -88,6 +88,9 @@ func (s *Store) transferOwner(ctx context.Context, tx pgx.Tx, a auth.Actor, camp
 	if value.OwnerUserID != a.UserID {
 		return Session{}, ErrDenied
 	}
+	if value.HistoryOnly {
+		return Session{}, ErrTransition
+	}
 	if _, err := tx.Exec(ctx, `SELECT id FROM users WHERE id=$1 FOR UPDATE`, a.UserID); err != nil {
 		return Session{}, err
 	}

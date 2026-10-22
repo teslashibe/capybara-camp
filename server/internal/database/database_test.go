@@ -239,8 +239,26 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO planning_imported_implementations(id,camp_id,plan_id,plan_version,ordinal,source_id,session_id,transcript_revision,message_count,provider,state,details,attempt_count) VALUES($1,$2,$3,1,1,$4,$5,0,0,'Codex','approved','{}',0)`, uuid.NewString(), camp, plan, strings.Repeat("f", 64), session); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = pool.Exec(ctx, `UPDATE sessions SET history_only=true,state='idle',allow_requests=false,external_owner=false WHERE id=$1`, session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.Down(ctx); err == nil {
+		t.Fatal("Downgrade discarded read-only history protections")
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal("Rejected history downgrade changed schema readiness", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE sessions SET history_only=false WHERE id=$1`, session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 28); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = provider.Down(ctx); err == nil {
 		t.Fatal("Downgrade discarded imported implementation history")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
 	}
 	if err = Ready(ctx, pool); err != nil {
 		t.Fatal("Rejected downgrade changed schema readiness", err)

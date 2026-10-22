@@ -610,7 +610,7 @@ final class TranscriptWatch {
         let active = Set(cloud.requests.filter { !$0.isPlanning && ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId))
         if activeRequestSessions != active { activeRequestSessions = active; filterRevision += 1; objectWillChange.send() }
         let names = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.name) })
-        let imported = values.map { value in
+        let imported = values.filter { !$0.isHistoryOnly }.map { value in
             CampSession(id: "camp:" + value.id, sessionID: value.localSessionId, provider: value.provider, sourceID: "camp-profile:" + value.profileId, sourceLabel: value.profileLabel, root: "", title: value.title, cwd: names[value.projectId] ?? "Shared project", updated: value.updatedAt.timeIntervalSince1970, path: "", accountID: value.ownerUserId, archived: value.stage == "Done", model: value.model)
         }
         for (id, value) in cloudSessions where previous[id]?.stage != value.stage || value.revision > (previous[id]?.revision ?? 0) { stages[id] = Stage(rawValue: value.stage) ?? .ready }

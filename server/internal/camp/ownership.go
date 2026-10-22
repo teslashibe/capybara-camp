@@ -35,6 +35,9 @@ func (s *Store) AdoptSession(ctx context.Context, a auth.Actor, campID, id, key 
 	if current.OwnerUserID != a.UserID {
 		return Session{}, ErrDenied
 	}
+	if current.HistoryOnly {
+		return Session{}, ErrTransition
+	}
 	var result Session
 	if hit, err := s.beginCommand(ctx, tx, a, key, "session.adopt:"+id, input, &result); err != nil {
 		return result, err

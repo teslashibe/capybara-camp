@@ -167,6 +167,19 @@ import Foundation
                 precondition(rejected.draft == "Preserve this rejected prompt", "A rejection before acceptance must not discard the prompt")
             }
         }
-        print("PASS: native state, transcript notifications, queues and rejected prompt recovery")
+        let visible = CloudSession(id: UUID().uuidString, campId: UUID().uuidString, projectId: UUID().uuidString, profileId: UUID().uuidString,
+            provider: "Codex", profileLabel: "Fixture", ownerUserId: UUID().uuidString, ownerDeviceId: UUID().uuidString,
+            localSessionId: UUID().uuidString, title: "Live session", model: "fixture", state: "idle", stage: "Ready", shared: false,
+            allowRequests: false, externalOwner: false, revision: 1, transcriptRevision: 0, permissionRevision: 1, updatedAt: Date(),
+            executionLocation: "local", executionEpoch: 1)
+        var history = visible; history.id = UUID().uuidString; history.title = "Saved implementation"; history.historyOnly = true
+        let historyCopy = try CampWire.decoder().decode(CloudSession.self, from: CampWire.encoder().encode(history))
+        precondition(historyCopy.isHistoryOnly && CloudPlanningExecution(session: historyCopy) == nil)
+        precondition(CloudPlanningExecution(session: visible)?.location == "local")
+        store.applyCloud([visible, historyCopy], projects: [])
+        precondition(store.sessions.contains { $0.id == "camp:" + visible.id })
+        precondition(!store.sessions.contains { $0.id == "camp:" + history.id }, "Archived source became an ordinary board or recent-session card")
+        precondition(store.cloudSessions["camp:" + history.id]?.isHistoryOnly == true, "Archived history lost its access/provenance record")
+        print("PASS: native state, transcript notifications, queues, rejected prompt recovery and archived history visibility")
     }
 }

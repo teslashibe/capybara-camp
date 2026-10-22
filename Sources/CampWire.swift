@@ -66,6 +66,8 @@ struct CloudSession: Codable, Identifiable, Equatable, Sendable {
     var executionLocation: String? = nil
     var executionEpoch: Int64? = nil
     var executionWorkspaceId: String? = nil
+    var historyOnly: Bool? = nil
+    var isHistoryOnly: Bool { historyOnly == true }
     func canReplace(_ old: CloudSession) -> Bool {
         revision > old.revision || (revision == old.revision && transcriptRevision >= old.transcriptRevision && (activityRevision ?? 0) >= (old.activityRevision ?? 0))
     }
@@ -138,6 +140,7 @@ struct CloudPlanningExecution: Codable, Equatable, Sendable {
 }
 extension CloudPlanningExecution {
     init?(session: CloudSession) {
+        guard !session.isHistoryOnly else { return nil }
         guard let location = session.executionLocation, let epoch = session.executionEpoch else { return nil }
         self.init(location: location, epoch: epoch, workspaceId: session.executionWorkspaceId)
         guard valid else { return nil }

@@ -38,6 +38,7 @@ type SessionInput struct {
 	Shared           bool   `json:"shared"`
 	AllowRequests    bool   `json:"allow_requests"`
 	ExternalOwner    bool   `json:"external_owner"`
+	HistoryOnly      bool   `json:"history_only,omitempty"`
 	ExpectedRevision int64  `json:"expected_revision"`
 }
 type Session struct {
@@ -65,6 +66,7 @@ type Session struct {
 	ExecutionEpoch       int64     `json:"execution_epoch"`
 	ExecutionWorkspaceID string    `json:"execution_workspace_id,omitempty"`
 	ActivityRevision     int64     `json:"activity_revision"`
+	HistoryOnly          bool      `json:"history_only,omitempty"`
 }
 type MessageInput struct {
 	ID      string `json:"id"`
@@ -126,13 +128,13 @@ func (s *Store) RegisterProfile(ctx context.Context, a auth.Actor, requestID str
 }
 
 const sessionColumns = `s.id,s.camp_id,s.project_id,s.profile_id,p.provider,p.label,s.owner_user_id,s.owner_device_id,s.local_session_id,
- s.title,s.model,s.state,s.stage,s.shared,s.allow_requests,s.external_owner,s.revision,s.transcript_revision,s.permission_revision,s.updated_at,s.execution_location,s.execution_epoch,COALESCE(s.execution_workspace_id::text,''),s.activity_revision`
+ s.title,s.model,s.state,s.stage,s.shared,s.allow_requests,s.external_owner,s.revision,s.transcript_revision,s.permission_revision,s.updated_at,s.execution_location,s.execution_epoch,COALESCE(s.execution_workspace_id::text,''),s.activity_revision,s.history_only`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanSession(row rowScanner, extra ...any) (Session, error) {
 	var s Session
-	columns := []any{&s.ID, &s.CampID, &s.ProjectID, &s.ProfileID, &s.Provider, &s.ProfileLabel, &s.OwnerUserID, &s.OwnerDeviceID, &s.LocalSessionID, &s.Title, &s.Model, &s.State, &s.Stage, &s.Shared, &s.AllowRequests, &s.ExternalOwner, &s.Revision, &s.TranscriptRevision, &s.PermissionRevision, &s.UpdatedAt, &s.ExecutionLocation, &s.ExecutionEpoch, &s.ExecutionWorkspaceID, &s.ActivityRevision}
+	columns := []any{&s.ID, &s.CampID, &s.ProjectID, &s.ProfileID, &s.Provider, &s.ProfileLabel, &s.OwnerUserID, &s.OwnerDeviceID, &s.LocalSessionID, &s.Title, &s.Model, &s.State, &s.Stage, &s.Shared, &s.AllowRequests, &s.ExternalOwner, &s.Revision, &s.TranscriptRevision, &s.PermissionRevision, &s.UpdatedAt, &s.ExecutionLocation, &s.ExecutionEpoch, &s.ExecutionWorkspaceID, &s.ActivityRevision, &s.HistoryOnly}
 	err := row.Scan(append(columns, extra...)...)
 	return s, err
 }
@@ -162,6 +164,9 @@ func (s *Store) PublishSession(ctx context.Context, a auth.Actor, campID, reques
 		return Session{}, ErrInput
 	}
 	if !oneOf(input.State, "idle", "running", "waiting", "done", "unknown") || !oneOf(input.Stage, "Ready", "In progress", "Needs you", "Done") {
+		return Session{}, ErrInput
+	}
+	if input.HistoryOnly && (input.AllowRequests || input.ExternalOwner || !oneOf(input.State, "idle", "done", "unknown") || input.Stage == "In progress") {
 		return Session{}, ErrInput
 	}
 	tx, err := s.pool.Begin(ctx)
@@ -195,14 +200,17 @@ func (s *Store) PublishSession(ctx context.Context, a auth.Actor, campID, reques
 		if input.ExpectedRevision != 0 {
 			return result, ErrRevision
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO sessions(id,camp_id,project_id,profile_id,owner_user_id,owner_device_id,local_session_id,title,model,state,stage,shared,allow_requests,external_owner)
-		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT DO NOTHING`, input.ID, campID, input.ProjectID, input.ProfileID, a.UserID, a.DeviceID, input.LocalSessionID, input.Title, input.Model, input.State, input.Stage, input.Shared, input.AllowRequests, input.ExternalOwner)
+		_, err = tx.Exec(ctx, `INSERT INTO sessions(id,camp_id,project_id,profile_id,owner_user_id,owner_device_id,local_session_id,title,model,state,stage,shared,allow_requests,external_owner,history_only)
+		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT DO NOTHING`, input.ID, campID, input.ProjectID, input.ProfileID, a.UserID, a.DeviceID, input.LocalSessionID, input.Title, input.Model, input.State, input.Stage, input.Shared, input.AllowRequests, input.ExternalOwner, input.HistoryOnly)
 		if err != nil {
 			return result, err
 		}
 	} else {
 		if previous.OwnerUserID != a.UserID || previous.OwnerDeviceID != a.DeviceID || previous.ProfileID != input.ProfileID || previous.LocalSessionID != input.LocalSessionID {
 			return result, ErrDenied
+		}
+		if previous.HistoryOnly != input.HistoryOnly {
+			return result, ErrTransition
 		}
 		if input.ExpectedRevision != previous.Revision {
 			return result, ErrRevision

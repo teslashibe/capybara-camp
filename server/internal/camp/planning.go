@@ -123,6 +123,10 @@ type planningStepLink struct {
 // Both clients and workers use immutable planner assignments. A changed login,
 // session owner or permission revision requires a newly approved plan version.
 func (s *Store) preparePlanning(ctx context.Context, tx pgx.Tx, a auth.Actor, campID string, input PlanningInput) (PlanningVersion, error) {
+	return s.preparePlanningSources(ctx, tx, a, campID, input, false)
+}
+
+func (s *Store) preparePlanningSources(ctx context.Context, tx pgx.Tx, a auth.Actor, campID string, input PlanningInput, historical bool) (PlanningVersion, error) {
 	input.Brief = strings.TrimSpace(input.Brief)
 	if input.Mode == "" {
 		input.Mode = "comparison"
@@ -153,6 +157,9 @@ func (s *Store) preparePlanning(ctx context.Context, tx pgx.Tx, a auth.Actor, ca
 		session, err := s.readSession(ctx, tx, a, campID, p.SessionID)
 		if err != nil {
 			return v, err
+		}
+		if session.HistoryOnly && !historical {
+			return v, ErrTransition
 		}
 		if session.OwnerUserID != a.UserID && !session.AllowRequests {
 			return v, ErrDenied

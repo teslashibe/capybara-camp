@@ -58,7 +58,7 @@ struct PlanningDestinationView: View {
     private var shared: Bool { planning.draft(request.draftID)?.input.shared ?? false }
     private var localSources: [CloudSession] {
         cloud.sessions.filter { source in
-            source.campId == request.scope.campId && source.projectId == request.projectID &&
+            !source.isHistoryOnly && source.campId == request.scope.campId && source.projectId == request.projectID &&
             source.provider == request.provider && source.ownerUserId == request.scope.userId &&
             source.ownerDeviceId == cloud.credential?.actor.deviceId && (!shared || source.shared) &&
             CloudPlanningExecution(session: source)?.location == "local"

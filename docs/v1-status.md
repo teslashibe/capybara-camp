@@ -25,6 +25,20 @@ the Hetzner box with us. Cloud sign-in and
 the two-Mac acceptance run follow that deployment. Hardware has not been bought
 or provisioned for this goal.
 
+Schema 29 adds read-only source records for the native history publisher.
+The server rejects execution, ownership changes, workspaces and transfers for
+these records, while allowing authorized transcript and context reads. The
+native app retains their access records but excludes them from ordinary cards,
+recent sessions and executor selectors. Existing sessions keep their behavior.
+The source-copy publisher and review screen are still the next integration step.
+Native state, worker, import and planning suites pass. Full Go race tests and
+vet pass at schema 29, with additional targeted history/board checks after the
+last guard change. Tests cover private context, immutable source type,
+execution rejection and safe migration rollback. Linux command builds pass;
+both synthetic audit apps are rebuilt and signature-verified. The staged
+secret scan is clean. Native visual acceptance remains blocked by the locked
+Mac; no cloud deployment or release was made.
+
 Native import preparation now validates all saved versions, local quotes,
 planner bindings and copied implementation transcripts before creating the
 request. A scoped upload journal persists approval and the exact retry key.

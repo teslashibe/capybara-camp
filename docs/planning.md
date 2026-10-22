@@ -228,6 +228,32 @@ These components are tested independently of the UI. Automatic publication of
 the required source snapshots and the native review screen remain unfinished;
 the current app does not yet expose a complete local-plan import action.
 
+### Read-only history sources
+
+A copied planning participant or implementation transcript uses a session with
+`history_only: true`. Set this when creating the source through the existing
+session publication API. It is immutable: a normal session cannot be changed
+into a history source, and a history source cannot become an executor. Upload
+transcript pages through the normal versioned transcript API and pin the copied
+revision in the planning import. Profile and source IDs identify the copy;
+provider credentials are not part of the publication payload.
+
+History sources support authorized transcript reads, attached context and
+explicit sharing. They cannot accept prompts, become planning executors,
+change execution ownership or location, create cloud workspaces or start
+session transfers. `allow_requests` and `external_owner` must be false, and
+their state cannot claim running or waiting work. The server enforces these
+rules even if an older client offers an execution action.
+
+The native app retains history-source access records for plan and transcript
+readers, while excluding them from ordinary board cards, recent sessions and
+executor selectors. The saved implementations remain inside their parent plan.
+
+Schema 29 adds the marker and database constraints. Existing sessions default
+to normal behavior. Downgrading requires there to be no history-only records;
+the migration refuses to remove their execution protection. This storage and
+read contract is ready for the native publisher, which is still being connected.
+
 The native reader retains import metadata in its scoped cache and shows the
 original saved state, step errors and unconfirmed outcomes. Quoted sources open
 in the existing snapshot inspector after a fresh authorized plan read. Changing

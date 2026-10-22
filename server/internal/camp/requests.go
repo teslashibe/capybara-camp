@@ -139,7 +139,7 @@ func (s *Store) requestAccess(ctx context.Context, tx pgx.Tx, r Request) (Sessio
 	if err = tx.QueryRow(ctx, `SELECT role FROM memberships WHERE camp_id=$1 AND user_id=$2`, r.CampID, r.RequesterUserID).Scan(&role); err != nil {
 		return session, accessError(err)
 	}
-	if role == "viewer" || (session.OwnerUserID != r.RequesterUserID && !session.AllowRequests) || session.PermissionRevision != r.PermissionRevision {
+	if session.HistoryOnly || role == "viewer" || (session.OwnerUserID != r.RequesterUserID && !session.AllowRequests) || session.PermissionRevision != r.PermissionRevision {
 		return session, ErrDenied
 	}
 	if session.OwnerUserID != r.OwnerUserID || session.OwnerDeviceID != r.OwnerDeviceID {

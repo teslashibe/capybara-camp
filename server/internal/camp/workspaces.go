@@ -86,6 +86,9 @@ func (g *GitStore) workspaceAuthority(ctx context.Context, tx pgx.Tx, a auth.Act
 	if out.session.OwnerUserID != a.UserID {
 		return out, ErrDenied
 	}
+	if out.session.HistoryOnly {
+		return out, ErrTransition
+	}
 	out.project, err = readProject(ctx, tx, campID, out.session.ProjectID)
 	if err != nil {
 		return out, err

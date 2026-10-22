@@ -148,6 +148,9 @@ and checks source access again before accepting the result. Profile paths and
 local execution directories are excluded. Automatic source publication and the
 native review screen still need to be connected before this becomes an
 end-to-end app flow.
+Copied history sources use an immutable read-only marker. The server refuses
+execution against them, and the native board keeps them under their parent
+plan instead of adding another ordinary session card.
 
 ### Default execution settings
 

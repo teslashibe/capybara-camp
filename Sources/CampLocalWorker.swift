@@ -142,7 +142,7 @@ import SwiftUI
                 checkedSessions.removeAll(); eligibilitySignal = queueSignal
             }
             let eligible = sessions.filter { remote in
-                remote.ownerUserId == c.actor.userId && remote.ownerDeviceId == c.actor.deviceId && !remote.externalOwner &&
+                !remote.isHistoryOnly && remote.ownerUserId == c.actor.userId && remote.ownerDeviceId == c.actor.deviceId && !remote.externalOwner &&
                 nativeSession?(remote).map { available?($0) == true } == true
             }.map(\.id).sorted()
             guard !eligible.isEmpty else { status = "Waiting for an available local session"; return }
@@ -195,7 +195,7 @@ import SwiftUI
             attempt.state = "uncertain"; try await save(attempt, c); issues.append(attempt); return
         }
         let remote = try await get(CloudSession.self, "/v1/camps/\(c.scope.campId)/sessions/\(attempt.request.sessionId)", c)
-        guard remote.ownerUserId == c.actor.userId, remote.ownerDeviceId == c.actor.deviceId,
+        guard !remote.isHistoryOnly, remote.ownerUserId == c.actor.userId, remote.ownerDeviceId == c.actor.deviceId,
               remote.permissionRevision == attempt.request.permissionRevision, !remote.externalOwner,
               let local = nativeSession?(remote), local.sessionID == remote.localSessionId, local.provider == remote.provider,
               available?(local) == true else {
