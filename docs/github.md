@@ -10,12 +10,12 @@ Isolated checkouts, execution grants, pushes and pull-request publication are
 still being implemented. This connection flow does not enable those actions
 or authorize a teammate to use someone else's Git identity.
 
-The workspace integration will use GitHub's [scoped user-token endpoint](https://docs.github.com/en/rest/apps/apps#create-a-scoped-access-token)
-to narrow each execution grant to its approved repository and permissions.
-The broad user authorization stays in the API. This preserves user attribution
-without giving a worker access to every repository or substituting an
-installation identity. Scoped execution grants are not implemented by this
-connection slice.
+The Go provider adapter can now resolve a ref to an exact commit and request a
+read-only token through GitHub's [scoped user-token endpoint](https://docs.github.com/en/rest/apps/apps#create-a-scoped-access-token).
+It checks the returned user, permissions and single-repository access, and
+revokes a rejected candidate. The broad user authorization stays in the API.
+Connecting that adapter to persisted workspace jobs and the runner is still
+pending; no workspace or execution-grant endpoint is exposed yet.
 
 ## Self-hosted registration
 

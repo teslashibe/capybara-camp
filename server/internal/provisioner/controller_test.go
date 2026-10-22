@@ -242,7 +242,7 @@ func TestControllerCreatesOnceAndCleansInOrder(t *testing.T) {
 		}
 	}
 	f.mu.Lock()
-	if len(f.objects) != 4 {
+	if len(f.objects) != 5 {
 		t.Fatal("duplicate resources", len(f.objects))
 	}
 	f.mu.Unlock()
@@ -331,6 +331,35 @@ func TestControllerDoesNotPublishStaleReadyStatus(t *testing.T) {
 	}
 }
 
+func TestRoutineGrantCleanupRetainsInstallationWorkspace(t *testing.T) {
+	_, _, a, c, f := fixture(t)
+	ctx := t.Context()
+	if err := c.Pass(ctx); err != nil {
+		t.Fatal(err)
+	}
+	name := workspaceName(a.InstallationID, a.Epoch)
+	f.mu.Lock()
+	id := f.objects["persistentvolumeclaims/"+name].Metadata.UID
+	f.mu.Unlock()
+	for i := 0; i < 4; i++ {
+		err := c.clean(ctx, a.InstallationID, resourceName(uuid.NewString()), name, func(context.Context) (bool, error) { return true, nil })
+		if err != nil && !errors.Is(err, ErrPending) {
+			t.Fatal(err)
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if id == "" || f.objects["persistentvolumeclaims/"+name].Metadata.UID != id {
+		t.Fatal("grant rotation removed workspace storage")
+	}
+	if len(f.objects) != 2 {
+		t.Fatal("old grant resources survived cleanup")
+	}
+	if workspaceName(a.InstallationID, a.Epoch+1) == name {
+		t.Fatal("account reactivation reused old workspace storage")
+	}
+}
+
 func TestCleanupCannotDeleteNewAccountEpoch(t *testing.T) {
 	s, owner, a, c, f := fixture(t)
 	ctx := context.Background()
@@ -363,7 +392,7 @@ func TestCleanupCannotDeleteNewAccountEpoch(t *testing.T) {
 	f.objects["pods/"+pod.Metadata.Name] = pod
 	before := len(f.operations)
 	f.mu.Unlock()
-	err = c.clean(ctx, old.InstallationID, "", func(ctx context.Context) (bool, error) { return s.ControllerCleanupCurrent(ctx, old) })
+	err = c.clean(ctx, old.InstallationID, "", "", func(ctx context.Context) (bool, error) { return s.ControllerCleanupCurrent(ctx, old) })
 	if !errors.Is(err, camp.ErrTransition) {
 		t.Fatal("stale cleanup did not stop", err)
 	}
@@ -400,7 +429,7 @@ func TestCleanupStopsWhenGrantWasReplaced(t *testing.T) {
 	f.objects["pods/"+pod.Metadata.Name] = pod
 	before := len(f.operations)
 	f.mu.Unlock()
-	err = c.clean(ctx, a.InstallationID, resourceName(old.ID), func(ctx context.Context) (bool, error) { return s.ControllerGrantCurrent(ctx, old) })
+	err = c.clean(ctx, a.InstallationID, resourceName(old.ID), workspaceName(a.InstallationID, a.Epoch), func(ctx context.Context) (bool, error) { return s.ControllerGrantCurrent(ctx, old) })
 	if !errors.Is(err, camp.ErrTransition) {
 		t.Fatal("replaced grant kept deleting", err)
 	}

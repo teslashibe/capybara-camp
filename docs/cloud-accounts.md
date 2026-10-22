@@ -212,9 +212,10 @@ connection cancels an active login after a bounded interval.
 
 The journal is encrypted with a key derived from the random installation grant
 and bound to the service origin. Grant rotation requires the provisioning
-controller to stop the old workload and remove its journal before replacing the
-grant. Changing a grant in place cannot decrypt the previous journal and fails
-closed. The controller creates a fresh private volume when replacing a managed grant.
+controller to stop the old workload and remove its journal before starting a
+replacement worker. Changing a grant in place cannot decrypt the previous
+journal and fails closed. A replacement gets a fresh journal volume; the
+installation's separate workspace volume survives ordinary grant rotation.
 
 Run one worker per isolated installation container. The container supervisor must
 terminate all processes before a replacement worker starts; a filesystem lock

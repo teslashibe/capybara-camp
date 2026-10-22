@@ -71,8 +71,10 @@ Workers run as UID/GID 10001 with a read-only root filesystem, dropped
 capabilities, no privilege escalation, and bounded CPU, memory and temporary
 storage. Tini reaps child processes. A small init container copies only the
 installation grant into a private memory-backed directory. The worker's state
-directory is on its own PVC. No host paths, host PID namespace or shared writable
-provider home are mounted.
+directory is on its own PVC. A second, owner-private PVC holds workspaces and
+survives routine grant rotation within the installation epoch. Disconnect and
+reactivation clean up that volume with the old epoch. No host paths, host PID
+namespace or shared writable provider home are mounted.
 
 The controller creates the isolation NetworkPolicy before provisioning workers.
 It denies inbound traffic, allows cluster DNS, and allows outbound IPv4 HTTPS
@@ -88,9 +90,11 @@ it consistent with `CAMP_RUNNER_CAPACITY` and the server's available memory.
 Use an encrypted storage backend with a `Delete` reclaim policy and validate
 its cleanup behavior. Observing a deleted PVC does not prove physical media
 erasure, and backup retention remains an operator policy.
-Grant rotation retains the encrypted provider state in PostgreSQL, but clears
-the old worker volume. Provider OAuth renewal and credential restoration for
-cloud inference remain part of the execution integration.
+Each installation uses two 1 GiB volumes: the replaceable auth journal and the
+workspace volume. Grant rotation retains the encrypted provider state in
+PostgreSQL and the workspace volume, but clears the old auth journal volume.
+Provider OAuth renewal and credential restoration for cloud inference remain
+part of the execution integration.
 
 ## Build and deploy
 
@@ -125,7 +129,7 @@ The local PostgreSQL and Kubernetes API fixtures cover grant concurrency,
 capacity, erasure ordering, stale epochs, restart recovery and unsafe resource
 changes. The optional database role bootstrap passes with and without a
 controller, and the rendered manifests pass Kubernetes schema validation.
-The generated Pod, PVC, Secret and isolation policy also pass schema validation
+The generated Pod, both PVCs, Secret and isolation policy also pass schema validation
 through `TestRunnerManifestSchema` when `CAMP_KUBE_SCHEMA_TEST` points to
 `kubeconform`.
 Image checks confirm private grant-file permissions, non-root execution and

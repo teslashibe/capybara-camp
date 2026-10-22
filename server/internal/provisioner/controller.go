@@ -96,7 +96,7 @@ func (c *Controller) Pass(ctx context.Context) error {
 
 func (c *Controller) reconcile(ctx context.Context, a camp.ProviderAccount) error {
 	if a.State == "disconnecting" || a.State == "disconnected" {
-		if err := c.clean(ctx, a.InstallationID, "", func(ctx context.Context) (bool, error) { return c.store.ControllerCleanupCurrent(ctx, a) }); err != nil {
+		if err := c.clean(ctx, a.InstallationID, "", "", func(ctx context.Context) (bool, error) { return c.store.ControllerCleanupCurrent(ctx, a) }); err != nil {
 			return err
 		}
 		return c.store.ControllerErased(ctx, a)
@@ -106,14 +106,14 @@ func (c *Controller) reconcile(ctx context.Context, a camp.ProviderAccount) erro
 		return err
 	}
 	name := resourceName(g.ID)
-	if err = c.clean(ctx, a.InstallationID, name, func(ctx context.Context) (bool, error) { return c.store.ControllerGrantCurrent(ctx, g) }); err != nil {
+	if err = c.clean(ctx, a.InstallationID, name, workspaceName(a.InstallationID, a.Epoch), func(ctx context.Context) (bool, error) { return c.store.ControllerGrantCurrent(ctx, g) }); err != nil {
 		return err
 	}
 	secret, pvc, pod := resources(c.config, g)
 	for _, item := range []struct {
 		resource string
 		object   object
-	}{{"secrets", secret}, {"persistentvolumeclaims", pvc}, {"pods", pod}} {
+	}{{"secrets", secret}, {"persistentvolumeclaims", pvc}, {"persistentvolumeclaims", workspaceVolume(c.config, g)}, {"pods", pod}} {
 		current, err := c.store.ControllerGrantCurrent(ctx, g)
 		if err != nil {
 			return err
@@ -168,7 +168,7 @@ func (c *Controller) reconcile(ctx context.Context, a camp.ProviderAccount) erro
 	return nil
 }
 
-func (c *Controller) clean(ctx context.Context, installation, keep string, current func(context.Context) (bool, error)) error {
+func (c *Controller) clean(ctx context.Context, installation, keep, keepWorkspace string, current func(context.Context) (bool, error)) error {
 	for _, resource := range []string{"pods", "persistentvolumeclaims", "secrets"} {
 		objects, err := c.kube.list(ctx, resource, installation)
 		if err != nil {
@@ -179,7 +179,7 @@ func (c *Controller) clean(ctx context.Context, installation, keep string, curre
 			if !owned(obj, installation) {
 				return ErrConflict
 			}
-			if obj.Metadata.Name == keep {
+			if obj.Metadata.Name == keep || obj.Metadata.Name == keepWorkspace {
 				continue
 			}
 			pending = true
