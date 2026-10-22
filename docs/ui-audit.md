@@ -429,3 +429,31 @@ Captures are `build/ui-audit/cloud-steering.png` and
 This is one-Mac synthetic UI evidence. Complete cloud runtime settings across
 unopened cards, live provider controls, two-Mac operation, the full design audit
 and the release performance/soak gates remain open.
+
+## Transfer review and native bridge check — October 21
+
+Computer use inspected the reference's Run on and Move to cloud sheets. The
+review keeps the selected ticket, plans, subagents and conversation together,
+shows the pinned Git revision and reviewed changes, lists excluded credentials,
+and distinguishes imported context from an unavailable native-resume option.
+The reference capture is `build/ui-audit/reference-move-review-current.png`.
+
+The current native Run on view does not yet implement that complete transfer
+review. Its existing Local/Cloud selector, heading, spacing and connection
+entry point were rechecked in a fresh isolated, signed development build.
+Left/right keys switch the selector. Main-chat navigation still places saved
+subagents above ten recent sessions, opens a separate child transcript and
+returns to the parent at its latest messages. Captures are
+`build/ui-audit/native-run-on-current.png` and `native-chat-current.png`.
+
+A production integration gap was found alongside this review: the native bridge
+allowlist rejected the Go recovery actions. Both actions are now accepted.
+`BridgeIntegrationTests` builds a disposable app bundle and calls the actual
+coordinator's default callbacks through its bundled Go executable, with a
+synthetic support directory. It verifies marker discovery, resolution and
+rejection of an unknown command. Store-level and mocked transport tests alone
+did not cover this boundary.
+
+This is a focused local review, not completion of the final whole-app audit or
+of the missing native transfer workflow. No live provider or user files were
+moved during this check.

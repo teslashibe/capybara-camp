@@ -14,7 +14,7 @@ swiftc -parse-as-library -emit-library -emit-module -enable-testing -D CAMP_TEST
   -o build/test-support/libCampTestSupport.dylib
 WORK="$(mktemp -d "$ROOT/build/.camp-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-SUITES=(CampStateTests CampCloudTests CampSharingTests LocalConversationTests CampWorkerTests CampHandoffTests SessionMentionsTests LocalPlanningTests ExecutionApprovalTests ImplementationFlowTests CampNotificationTests CampPlanningTests CodexActivityTests CampProjectsTests PermissionSettingsTests CampOnboardingTests CampProviderAccountTests CampGitConnectionTests CampExecutionTests ExecutionDefaultsTests)
+SUITES=(CampStateTests CampCloudTests CampSharingTests LocalConversationTests CampWorkerTests CampHandoffTests BridgeIntegrationTests SessionMentionsTests LocalPlanningTests ExecutionApprovalTests ImplementationFlowTests CampNotificationTests CampPlanningTests CodexActivityTests CampProjectsTests PermissionSettingsTests CampOnboardingTests CampProviderAccountTests CampGitConnectionTests CampExecutionTests ExecutionDefaultsTests)
 if [ "$#" -gt 0 ]; then
   for requested in "$@"; do
     found=false
@@ -31,5 +31,19 @@ for suite in "${SUITES[@]}"; do
     -lCampTestSupport -framework SwiftUI -framework AppKit -framework Security -lsqlite3 \
     -Xlinker -rpath -Xlinker @executable_path/test-support \
     "$WORK/$suite.swift" -o "build/$suite"
-  "build/$suite"
+  if [ "$suite" = BridgeIntegrationTests ]; then
+    BUNDLE="$WORK/BridgeHarness.app"
+    mkdir -p "$BUNDLE/Contents/MacOS" "$WORK/bridge-support"
+    chmod 700 "$WORK/bridge-support"
+    cp "build/$suite" "$BUNDLE/Contents/MacOS/$suite"
+    cp build/camp-local "$BUNDLE/Contents/MacOS/camp-local"
+    ln -s "$ROOT/build/test-support" "$BUNDLE/Contents/MacOS/test-support"
+    plutil -create xml1 "$BUNDLE/Contents/Info.plist"
+    plutil -insert CFBundleExecutable -string "$suite" "$BUNDLE/Contents/Info.plist"
+    plutil -insert CFBundleIdentifier -string com.capybaracamp.bridge-tests "$BUNDLE/Contents/Info.plist"
+    plutil -insert CFBundlePackageType -string APPL "$BUNDLE/Contents/Info.plist"
+    CAPY_SUPPORT="$WORK/bridge-support" "$BUNDLE/Contents/MacOS/$suite"
+  else
+    "build/$suite"
+  fi
 done

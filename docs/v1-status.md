@@ -135,6 +135,13 @@ native tests cover cache erasure, foreign records, changed assignments and
 This is local and synthetic evidence; native transfer review and live two-Mac
 acceptance are still required.
 
+A bundle-level check found that the Mac bridge still rejected the new recovery
+commands before launching the Go helper. The dispatch list now includes them,
+and a native integration test packages a disposable app with the real helper
+and verifies the production recovery callbacks end to end. The isolated native
+app also passed a fresh Run on, main-chat and subagent navigation walkthrough.
+The complete transfer review UI remains unfinished.
+
 The native account form and synthetic provider walkthrough now pass locally.
 The Go controller provisions per-installation workers, renews managed grants,
 and removes old Pods before deleting their storage and Secrets. It fences stale

@@ -277,7 +277,10 @@ findings through the process in [SECURITY.md](SECURITY.md).
 ```
 
 `test.sh` runs local Go protocol tests and the native state suites with synthetic
-provider processes. `tools/test-server.sh` requires Docker and starts disposable
+provider processes. Its bridge integration suite packages a disposable Mac app
+with the real Go helper and exercises recovery through the production command
+dispatcher. Its support directory is isolated from the user's sessions.
+`tools/test-server.sh` requires Docker and starts disposable
 PostgreSQL for Go race tests and vet; it removes the container on exit. An explicit
 `CAMP_TEST_DATABASE_URL` uses isolated schemas in that test database instead.
 Never point it at production. `tools/test-processguard.sh` exercises the required
