@@ -168,6 +168,43 @@ func TestCheckoutPinsCommitAndPrivateIndependentDirectories(t *testing.T) {
 	}
 }
 
+func TestCheckoutVerificationCancellationIsNotCorruption(t *testing.T) {
+	remote, sha, _ := gitFixtureServer(t, nil, nil)
+	c, w, token := checkoutFixture(t, remote, sha)
+	if err := c.prepare(t.Context(), w, token); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := c.verify(ctx, w); !errors.Is(err, context.Canceled) {
+		t.Fatal("stopped verification reported corrupt state", err)
+	}
+	started := filepath.Join(t.TempDir(), "started")
+	hook := filepath.Join(t.TempDir(), "wait-for-cancellation")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nprintf started > "+shellQuote(started)+"\nexec /bin/sleep 30\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	c.gitConfig = append(c.gitConfig, "-c", "core.fsmonitor="+hook)
+	ctx, cancel = context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- c.verify(ctx, w) }()
+	eventually(t, func() bool { _, err := os.Stat(started); return err == nil })
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal("Git cancellation became an unsafe-state error", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled Git did not join")
+	}
+	c.gitConfig = c.gitConfig[:len(c.gitConfig)-2]
+	if err := c.verify(t.Context(), w); err != nil {
+		t.Fatal("cancelled verification damaged the retained checkout", err)
+	}
+}
+
 func TestCheckoutRejectsEscapingLinksAndSubmodules(t *testing.T) {
 	for _, kind := range []string{"relative escape", "absolute escape", "symlink chain escape", "symlink cycle", "submodule"} {
 		t.Run(kind, func(t *testing.T) {

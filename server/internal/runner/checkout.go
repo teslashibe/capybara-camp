@@ -210,6 +210,9 @@ func (c *checkout) prepare(ctx context.Context, w camp.Workspace, token camp.Run
 }
 
 func (c *checkout) verify(ctx context.Context, w camp.Workspace) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !validWorkspace(w) {
 		return ErrState
 	}
@@ -228,18 +231,30 @@ func (c *checkout) verify(ctx context.Context, w camp.Workspace) error {
 		return ErrState
 	}
 	head, err := c.git(ctx, w, "", "rev-parse", "--verify", "HEAD")
+	if err != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err != nil || !objectID.MatchString(strings.TrimSpace(string(head))) || !used && strings.TrimSpace(string(head)) != w.BaseCommit {
 		return ErrState
 	}
 	branch, err := c.git(ctx, w, "", "symbolic-ref", "--short", "HEAD")
+	if err != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err != nil || strings.TrimSpace(string(branch)) != w.Branch {
 		return ErrState
 	}
 	if used {
 		_, err = c.git(ctx, w, "", "merge-base", "--is-ancestor", w.BaseCommit, "HEAD")
+		if err != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return err
 	}
 	status, err := c.git(ctx, w, "", "status", "--porcelain=v1", "--untracked-files=all")
+	if err != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err != nil || len(status) != 0 {
 		return ErrState
 	}
