@@ -185,7 +185,8 @@ the installed CLI enforces its available policies. A change applies to the next
 turn, and a queued prompt with outdated permissions needs review. Approval
 requests appear in chat and move the card to **Needs you**.
 
-The notification bell opens saved completions and unread items. Foreground
+The notification bell opens saved completions and unread items. Use Tab to
+reach inbox entries and Space or Return to open a result. Foreground
 completions show a toast. Desktop notifications are opt-in; title previews and
 sounds are separately optional. See [permissions](docs/session-permissions.md)
 and [notifications](docs/notifications.md) for the exact behavior.

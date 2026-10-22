@@ -152,6 +152,10 @@ struct CampSegmentedControl<Value: Hashable>: View {
                 }.buttonStyle(.plain).focusable().focused($focused, equals: option.value)
                     .accessibilityLabel(option.title)
                     .accessibilityValue(selection == option.value ? "Selected" : "")
+                    .onKeyPress(keys: [.space, .return]) { _ in
+                        guard isEnabled else { return .ignored }
+                        selection = option.value; return .handled
+                    }
             }
         }.padding(1).background(Color(hex: 0xE4E3DE)).clipShape(RoundedRectangle(cornerRadius: 8))
             .accessibilityElement(children: .contain)

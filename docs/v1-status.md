@@ -152,6 +152,13 @@ retained plan/implementation history. Four focused native suites and fixture
 protocol race tests pass. These checks use a synthetic execution context and
 permission catalogue; live CLI permission validation remains a release gate.
 
+The notification drawer now supports Tab and Space/Return for its custom
+actions and rows, with stable identifiers for duplicate-looking completions.
+Native keyboard checks passed filtering, opening chat and saved-plan results,
+mark-all-read, settings and Escape back to the bell. The notification suite and
+strict bundle verification pass. Linux and Intel Mac helper builds also pass.
+Desktop-banner presentation and the full final UI review remain open.
+
 Native import preparation now validates all saved versions, local quotes,
 planner bindings and copied implementation transcripts before creating the
 request. A scoped upload journal persists approval and the exact retry key.

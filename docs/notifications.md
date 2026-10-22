@@ -5,6 +5,11 @@ views, read controls and result links. Local turns, completed five-step plans,
 observed terminal completions and shared request updates feed the same inbox.
 Planning steps and subagent events do not each produce an alert.
 
+Tab reaches the filters, inbox actions and entries. Space or Return activates
+the focused filter, action or entry. Escape closes notification settings,
+then the inbox, and restores focus to the bell. Each entry has a stable
+accessibility identifier, including completions with identical titles and times.
+
 The foreground app shows a dismissible toast. Closely spaced completions share
 one summary toast; hover and keyboard focus pause dismissal. The header bell
 retains the unread count after the toast closes. Desktop delivery is off until

@@ -504,14 +504,20 @@ struct CampNotificationsView: View {
                 Button { store.notificationSheet = false } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }
                     .buttonStyle(.plain).help("Close notifications").accessibilityLabel("Close notifications")
                     .keyboardShortcut(.cancelAction).focusable().focused($closeFocused)
+                    .onKeyPress(keys: [.space, .return]) { _ in store.notificationSheet = false; return .handled }
             }
             HStack(spacing: 6) {
                 CampSegmentedControl(options: [(true, "All"), (false, notices.unread > 0 ? "Unread · \(notices.unread)" : "Unread")], selection: $showRead).frame(width: 142)
                 Spacer()
                 Button { Task { await notices.markAllRead() } } label: { Image(systemName: "checkmark").frame(width: 28, height: 28) }
-                    .buttonStyle(.plain).help("Mark all as read").accessibilityLabel("Mark all as read").disabled(notices.unread == 0)
+                    .buttonStyle(.plain).focusable().help("Mark all as read").accessibilityLabel("Mark all as read").disabled(notices.unread == 0)
+                    .onKeyPress(keys: [.space, .return]) { _ in
+                        guard notices.unread > 0 else { return .ignored }
+                        Task { await notices.markAllRead() }; return .handled
+                    }
                 Button { settings = true } label: { Image(systemName: "gearshape").frame(width: 28, height: 28) }
-                    .buttonStyle(.plain).help("Notification settings").accessibilityLabel("Notification settings")
+                    .buttonStyle(.plain).focusable().help("Notification settings").accessibilityLabel("Notification settings")
+                    .onKeyPress(keys: [.space, .return]) { _ in settings = true; return .handled }
             }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -565,7 +571,9 @@ struct CampNotificationsView: View {
                 .background(notice.read ? Color.clear : Color(hex: 0xEDF0E7), in: RoundedRectangle(cornerRadius: 7))
                 .overlay(alignment: .bottom) { Rectangle().fill(campInk.opacity(0.08)).frame(height: 1) }
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityValue(notice.read ? "Read" : "Unread")
+        }.buttonStyle(.plain).focusable().accessibilityValue(notice.read ? "Read" : "Unread")
+            .accessibilityIdentifier("camp-notification-\(notice.id)")
+            .onKeyPress(keys: [.space, .return]) { _ in notices.pendingOpen = notice.id; return .handled }
             .contextMenu { Button("Mark read") { Task { await notices.markRead(notice.id) } }.disabled(notice.read) }
     }
     private func detail(_ notice: CampNotice, provider: String?) -> String {
