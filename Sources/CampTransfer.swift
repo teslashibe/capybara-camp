@@ -16,6 +16,7 @@ struct TransferCapture: Codable, Sendable {
     struct Exclusion: Codable, Identifiable, Sendable { var path: String; var reason: String; var id: String { path } }
     var payload: Data?; var payloadSha256: String; var reviewSha256: String
     var baseCommit: String; var branch: String; var files: [File]; var excluded: [Exclusion]
+    var history:LocalHistoryBinding? = nil
     var valid: Bool {
         [payloadSha256,reviewSha256].allSatisfy { $0.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil } &&
         baseCommit.range(of:"^[a-f0-9]{40}$",options:.regularExpression) != nil && files.count+excluded.count <= 256
@@ -126,19 +127,20 @@ struct TransferReviewJob: Codable, Sendable {
             changes=value;inspectionID=local.id;error=""
         } catch {fail(error,c)}
     }
-    func capture(_ local:CampSession,session:CloudSession,input:CloudWorkspaceInput,paths:[String]) async {
+    func capture(_ local:CampSession,session:CloudSession,input:CloudWorkspaceInput,paths:[String],history:LocalHistoryBinding?=nil) async {
         guard !working,let c=connection else{return};working=true
         defer{if connection?.generation==c.generation{working=false}}
         do {
             try await load(c);try await authority(c)
+            guard let history,history.valid,history.transcriptRevision==session.transcriptRevision else{throw CampError.message("Finish syncing this session before reviewing its move")}
             guard job==nil || ["complete","cancelled"].contains(job!.phase),session.ownerUserId==c.credential.actor.userId,session.campId==c.scope.campId,
                   session.ownerDeviceId==c.credential.actor.deviceId,session.provider==local.provider,session.localSessionId==local.sessionID,
                   session.executionLocation != "cloud",paths.count<=256 else {throw CampCloudError.invalidResponse}
-            let body=try CampWire.body(["session":JSONSerialization.jsonObject(with:JSONEncoder().encode(local)),"paths":paths])
+            let body=try CampWire.body(["session":JSONSerialization.jsonObject(with:JSONEncoder().encode(local)),"paths":paths,"history":JSONSerialization.jsonObject(with:CampWire.encoder().encode(history))])
             let raw=try await callLocal("transfer-capture",body);try await authority(c)
             var capture=try await Task.detached {
-                let value=try JSONDecoder().decode(TransferCapture.self,from:raw)
-                guard value.valid,let bytes=value.payload,(2...(46<<20)).contains(bytes.count),PublishMessage.hash(bytes)==value.payloadSha256 else{throw CampCloudError.invalidResponse}
+                let value=try CampWire.decoder().decode(TransferCapture.self,from:raw)
+                guard value.valid,value.history==history,let bytes=value.payload,(2...(46<<20)).contains(bytes.count),PublishMessage.hash(bytes)==value.payloadSha256 else{throw CampCloudError.invalidResponse}
                 return value
             }.value
             guard let payload=capture.payload else{throw CampCloudError.invalidResponse}

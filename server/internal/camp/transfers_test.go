@@ -33,6 +33,7 @@ func transferFixture(t *testing.T) (*Store, *pgxpool.Pool, []auth.Actor, Camp, S
 func transferPayload(t *testing.T, session Session, data []byte) (TransferInput, []byte) {
 	t.Helper()
 	m := transfer.Manifest{Version: 1, BaseCommit: strings.Repeat("a", 40), Branch: "main", Files: []transfer.File{{Path: "src/main.txt", SHA256: transferDigest(data), Data: data}}, Excluded: []transfer.Exclusion{}}
+	m.History = &transfer.HistoryBinding{Version: 1, ParentID: strings.Repeat("c", 64), MainRevision: strings.Repeat("d", 64), Children: []transfer.HistoryChild{}, TranscriptRevision: session.TranscriptRevision}
 	raw, err := json.Marshal(m)
 	if err != nil {
 		t.Fatal(err)
@@ -55,6 +56,42 @@ func uploadTransfer(t *testing.T, s *Store, a auth.Actor, c Camp, session Sessio
 		}
 	}
 	return value
+}
+
+func TestLocalTransferRequiresMatchingHistoryBinding(t *testing.T) {
+	for _, mode := range []string{"missing", "wrong_revision"} {
+		t.Run(mode, func(t *testing.T) {
+			s, _, actors, c, session := transferFixture(t)
+			in, raw := transferPayload(t, session, []byte("source"))
+			manifest, err := transfer.Decode(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "missing" {
+				manifest.History = nil
+			} else {
+				manifest.History.TranscriptRevision++
+			}
+			raw, err = json.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in.PayloadBytes = len(raw)
+			in.PayloadSHA256 = transferDigest(raw)
+			in.ReviewSHA256, err = manifest.Digest()
+			if err != nil {
+				t.Fatal(err)
+			}
+			value, err := s.CreateTransfer(t.Context(), actors[0], c.ID, session.ID, uuid.NewString(), in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			value = uploadTransfer(t, s, actors[0], c, session, value, raw)
+			if _, err = s.CompleteTransfer(t.Context(), actors[0], c.ID, session.ID, value.ID); !errors.Is(err, ErrInput) {
+				t.Fatal("Unbound local history became ready", err)
+			}
+		})
+	}
 }
 
 func TestTransferResumesEncryptedChunksWithoutMovingSession(t *testing.T) {

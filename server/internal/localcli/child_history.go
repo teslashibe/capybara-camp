@@ -150,7 +150,7 @@ func (a *App) ChildHistory(ctx context.Context, parent Session) (ChildHistoryCat
 	result := ChildHistoryCatalog{ParentID: childHistoryKey(parent, ""), Sources: []ChildHistorySource{}}
 	seen := map[string]bool{}
 	for _, child := range children {
-		source, _, err := childHistorySource(ctx, parent, child)
+		source, _, err := a.indexedChildSource(ctx, parent, child)
 		if err != nil || seen[source.ID] {
 			return ChildHistoryCatalog{}, errChildHistory
 		}
@@ -164,6 +164,19 @@ func (a *App) ChildHistory(ctx context.Context, parent Session) (ChildHistoryCat
 	}
 	result.Revision = hash(append([]byte(result.ParentID+"\n"), raw...))
 	return result, nil
+}
+
+func (a *App) indexedChildSource(ctx context.Context, parent Session, child Child) (ChildHistorySource, Session, error) {
+	source, session, err := childHistorySource(ctx, parent, child)
+	if err != nil {
+		return source, session, err
+	}
+	page, err := a.ExportPage(ctx, session, -1, 1)
+	if err != nil {
+		return source, session, err
+	}
+	source.Revision = page.ContentRevision
+	return source, session, nil
 }
 
 func (a *App) ExportChildHistory(ctx context.Context, parent Session, sourceID, revision string, after int64, limit int) (ChildHistoryPage, error) {
@@ -182,7 +195,7 @@ func (a *App) ExportChildHistory(ctx context.Context, parent Session, sourceID, 
 		if childHistoryKey(parent, child.ID) != sourceID {
 			continue
 		}
-		source, session, err := childHistorySource(ctx, parent, child)
+		source, session, err := a.indexedChildSource(ctx, parent, child)
 		if err != nil || source.Revision != revision {
 			return ChildHistoryPage{}, errChildHistory
 		}
@@ -190,8 +203,7 @@ func (a *App) ExportChildHistory(ctx context.Context, parent Session, sourceID, 
 		if err != nil {
 			return ChildHistoryPage{}, err
 		}
-		current, err := fingerprint(session)
-		if err != nil || current != revision || page.Fingerprint != revision {
+		if page.ContentRevision != revision {
 			return ChildHistoryPage{}, errChildHistory
 		}
 		return ChildHistoryPage{ParentID: childHistoryKey(parent, ""), Source: source, Page: page}, nil

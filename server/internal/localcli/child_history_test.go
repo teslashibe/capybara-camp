@@ -63,7 +63,7 @@ func TestChildHistoryExportsPinnedPagesWithProvenance(t *testing.T) {
 			seen := map[string]bool{}
 			for pages := 0; pages < 10; pages++ {
 				page, err := a.ExportChildHistory(t.Context(), parent, source.ID, source.Revision, after, 70)
-				if err != nil || page.ParentID != catalog.ParentID || page.Source != source || page.Page.Fingerprint != source.Revision {
+				if err != nil || page.ParentID != catalog.ParentID || page.Source != source || page.Page.ContentRevision != source.Revision {
 					t.Fatal("Snapshot changed", page, err)
 				}
 				for _, m := range page.Page.Messages {

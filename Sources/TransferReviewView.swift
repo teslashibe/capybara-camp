@@ -9,6 +9,7 @@ struct TransferReviewView: View {
     let permissions: Binding<PermissionSettings>
     let catalog: PermissionCatalog
     var accountLabel: String = ""
+    var history:LocalHistoryBinding? = nil
     var back: ()->Void
     @State private var selected: Set<String> = []
     @State private var approved = false
@@ -24,6 +25,7 @@ struct TransferReviewView: View {
             } else if let job {
                 Text("\(local.provider) · \(accountLabel.isEmpty ? "Selected cloud account" : accountLabel)").font(.caption).foregroundStyle(campMuted)
                 HStack { Label("Selected session history",systemImage:"checkmark");Spacer();Text("Revision \(job.session.transcriptRevision)") }.font(.caption)
+                if let history=job.capture.history {Text("Main chat and \(history.children.count) subagents").font(.caption).foregroundStyle(campMuted)}
                 if let workspace=job.workspace {
                     Text("\(workspace.repositoryName) · @\(workspace.githubLogin)").font(.caption)
                 }
@@ -67,10 +69,11 @@ struct TransferReviewView: View {
                     Spacer()
                     Button("Review selected changes") {
                         guard let input else{return}
-                        Task {await transfer.capture(local,session:session,input:input,paths:selected.sorted())}
-                    }.buttonStyle(.borderedProminent).disabled(input==nil || transfer.working || busy || selected.count>256)
+                        Task {await transfer.capture(local,session:session,input:input,paths:selected.sorted(),history:history)}
+                    }.buttonStyle(.borderedProminent).disabled(input==nil || transfer.working || busy || selected.count>256 || history?.valid != true)
                 }
                 if selected.count>256 {Text("Select no more than 256 files").font(.caption).foregroundStyle(.orange)}
+                if history?.valid != true {Text("Finish syncing this history before reviewing the move").font(.caption).foregroundStyle(campMuted)}
             } else if transfer.working { ProgressView("Reading project changes") }
             if !transfer.error.isEmpty {
                 Text(transfer.error).font(.caption).foregroundStyle(.orange)

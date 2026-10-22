@@ -135,6 +135,16 @@ func TestLocalHandoffRequiresOriginalDeviceAndBlocksNewWork(t *testing.T) {
 	}
 }
 
+func TestLegacyLocalHandoffCannotClaimWithoutHistoryBinding(t *testing.T) {
+	f, h := handoffFixture(t, true)
+	if _, err := f.git.store.pool.Exec(t.Context(), `UPDATE session_transfers SET history_sha256=NULL WHERE id=$1`, f.upload.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.git.store.ClaimHandoff(t.Context(), f.owner, "", h.ID, uuid.NewString()); !errors.Is(err, ErrTransition) {
+		t.Fatal("Unbound legacy handoff claimed", err)
+	}
+}
+
 func TestCloudHandoffRequiresSourceInstallation(t *testing.T) {
 	f, h := handoffFixture(t, false)
 	s, ctx := f.git.store, context.Background()

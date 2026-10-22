@@ -50,12 +50,20 @@ func holdFixture(t *testing.T) (*App, transferHoldInput) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(manifest)
 	root := filepath.Join(a.Config.Home, "profile")
 	if err = os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	return a, transferHoldInput{Session: Session{Provider: "Codex", Root: root, CWD: dir, SessionID: "native"}, Payload: raw, ExpiresAt: time.Now().Add(time.Minute).Unix()}
+	path := filepath.Join(root, "session.jsonl")
+	write(t, path, "")
+	session := Session{Provider: "Codex", Root: root, CWD: dir, SessionID: "native", Path: path}
+	history, err := a.currentHistoryBinding(t.Context(), session, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.History = &history
+	raw, _ := json.Marshal(manifest)
+	return a, transferHoldInput{Session: session, Payload: raw, ExpiresAt: time.Now().Add(time.Minute).Unix()}
 }
 
 func startSourceHold(t *testing.T, a *App, in transferHoldInput) (*io.PipeWriter, transferEvents, <-chan error) {

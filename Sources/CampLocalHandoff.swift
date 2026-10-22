@@ -212,6 +212,8 @@ struct CloudHandoffRecovery: Codable, Sendable {
             payload.append(chunk.data)
         }
         guard PublishMessage.hash(payload) == t.payloadSha256 else { throw CampCloudError.invalidResponse }
+        struct ReviewedPayload:Decodable {var history:LocalHistoryBinding?}
+        guard let history=try CampWire.decoder().decode(ReviewedPayload.self,from:payload).history,history.valid,history.transcriptRevision==t.sourceTranscriptRevision else{throw CampError.message("Review this move again with the current session history")}
         try check(c)
         var saved = j; saved.local = try JSONEncoder().encode(local); saved.handoff = h
         try await save(saved,c)

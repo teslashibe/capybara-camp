@@ -53,6 +53,7 @@ func TestWorkerStagesTransferThroughAPIAndRecoversLostReplies(t *testing.T) {
 	}
 	content := []byte("transferred version\n")
 	manifest := transfer.Manifest{Version: 1, BaseCommit: sha, Branch: "source-branch", Files: []transfer.File{{Path: "README.md", BeforeSHA256: payloadHash([]byte("pinned version\n")), SHA256: payloadHash(content), Data: content}}}
+	manifest.History = &transfer.HistoryBinding{Version: 1, ParentID: strings.Repeat("c", 64), MainRevision: strings.Repeat("d", 64), Children: []transfer.HistoryChild{}, TranscriptRevision: session.TranscriptRevision}
 	raw, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatal(err)

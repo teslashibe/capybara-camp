@@ -13,8 +13,9 @@ import Foundation
         let local=CampSession(id:"local",sessionID:UUID().uuidString,provider:"Codex",sourceID:"fixture",sourceLabel:"Fixture",root:root.path,title:"Fixture",cwd:root.path,updated:1,path:"",accountID:"",archived:false)
         let session=CloudSession(id:UUID().uuidString,campId:scope.campId,projectId:UUID().uuidString,profileId:UUID().uuidString,provider:"Codex",profileLabel:"Fixture",ownerUserId:scope.userId,ownerDeviceId:credential.actor.deviceId,localSessionId:local.sessionID,title:"Fixture",model:"fixture",state:"idle",stage:"Ready",shared:false,allowRequests:false,externalOwner:false,revision:1,transcriptRevision:1,permissionRevision:1,updatedAt:Date(),executionLocation:"local",executionEpoch:1)
         let input=CloudWorkspaceInput(providerAccountId:UUID().uuidString,gitConnectionId:UUID().uuidString,githubInstallationId:7,repositoryId:5,installationPage:1,repositoryPage:1,ref:"main",purpose:"planning",expectedSessionRevision:1,expectedProjectRevision:1)
-        let payload=Data("{\"version\":1,\"base_commit\":\"\(String(repeating:"a",count:40))\",\"files\":[],\"excluded\":[]}".utf8)
-        let capture=TransferCapture(payload:payload,payloadSha256:PublishMessage.hash(payload),reviewSha256:String(repeating:"b",count:64),baseCommit:String(repeating:"a",count:40),branch:"main",files:[],excluded:[])
+        let history=LocalHistoryBinding(parentId:String(repeating:"c",count:64),mainRevision:String(repeating:"d",count:64),children:[],transcriptRevision:session.transcriptRevision)
+        let payload=try CampWire.body(["version":1,"base_commit":String(repeating:"a",count:40),"files":[],"excluded":[],"history":JSONSerialization.jsonObject(with:CampWire.encoder().encode(history))])
+        let capture=TransferCapture(payload:payload,payloadSha256:PublishMessage.hash(payload),reviewSha256:String(repeating:"b",count:64),baseCommit:String(repeating:"a",count:40),branch:"main",files:[],excluded:[],history:history)
         func setup(_ folder:String,_ fixture:TransferFixture)->CampTransfer {
             let cache=try! CampCache(directory:root.appendingPathComponent(folder))
             let model=CampTransfer(cache:cache,interval:0.01)
@@ -23,7 +24,7 @@ import Foundation
             return model
         }
         let fixture=TransferFixture(session),model=setup("complete",fixture)
-        await model.capture(local,session:session,input:input,paths:[])
+        await model.capture(local,session:session,input:input,paths:[],history:history)
         precondition(model.job?.phase=="review" && model.job?.capture.payload==nil,"Capture was not saved separately")
         await model.prepare();await until("Destination not ready"){model.job?.phase=="ready"}
         await model.hold();await until("Source did not acknowledge"){model.job?.phase=="confirm"}
@@ -33,7 +34,7 @@ import Foundation
         model.attach(scope:nil,credential:nil,transport:nil)
         let reject=TransferFixture(session);await reject.configure(reject:true)
         let blocked=setup("blocked",reject)
-        await blocked.capture(local,session:session,input:input,paths:[]);await blocked.prepare()
+        await blocked.capture(local,session:session,input:input,paths:[],history:history);await blocked.prepare()
         await until("Rejected transfer did not pause"){blocked.job?.phase=="blocked"}
         let original=await reject.counts();try await Task.sleep(for:.milliseconds(100));let later=await reject.counts();precondition(later==original)
         blocked.retry();await until("Explicit retry did not recover"){blocked.job?.phase=="ready"}
@@ -41,7 +42,7 @@ import Foundation
         blocked.attach(scope:nil,credential:nil,transport:nil)
         let lost=TransferFixture(session);await lost.configure(lose:true)
         let interrupted=setup("restart",lost)
-        await interrupted.capture(local,session:session,input:input,paths:[]);await interrupted.prepare()
+        await interrupted.capture(local,session:session,input:input,paths:[],history:history);await interrupted.prepare()
         await until("Lost create did not surface"){!interrupted.error.isEmpty}
         interrupted.attach(scope:nil,credential:nil,transport:nil)
         let recovered=setup("restart",lost)
@@ -58,15 +59,22 @@ import Foundation
         precondition(removed==nil,"Cancelled payload remained cached")
         await cancelled.resetReview()
         precondition(cancelled.job==nil,"A terminal review could not be reopened")
-        await cancelled.capture(local,session:session,input:input,paths:[])
+        await cancelled.capture(local,session:session,input:input,paths:[],history:history)
         precondition(cancelled.job?.phase=="review","A cancelled move blocked a fresh review")
         await cancelled.resetReview()
         cancelled.attach(scope:nil,credential:nil,transport:nil)
         let invalid=setup("wrong-source",TransferFixture(session))
         var wrongSource=session;wrongSource.ownerDeviceId=UUID().uuidString
-        await invalid.capture(local,session:wrongSource,input:input,paths:[])
+        await invalid.capture(local,session:wrongSource,input:input,paths:[],history:history)
         precondition(invalid.job==nil && !invalid.error.isEmpty,"Another Mac captured the source")
         invalid.attach(scope:nil,credential:nil,transport:nil)
+        let unbound=setup("unbound",TransferFixture(session))
+        await unbound.capture(local,session:session,input:input,paths:[])
+        precondition(unbound.job==nil && !unbound.error.isEmpty,"Capture accepted a missing published history binding")
+        var staleHistory=history;staleHistory.transcriptRevision += 1
+        await unbound.capture(local,session:session,input:input,paths:[],history:staleHistory)
+        precondition(unbound.job==nil && !unbound.error.isEmpty,"Capture accepted another cloud history revision")
+        unbound.attach(scope:nil,credential:nil,transport:nil)
         print("PASS: native transfer capture, claimed source, commit, rejection, lost-response restart, durable cancellation and source ownership")
     }
 }

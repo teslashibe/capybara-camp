@@ -263,6 +263,7 @@ func TestWorkspaceHTTPRequiresOwnerAndReplaysReceipt(t *testing.T) {
 	digest := func(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
 	data := []byte("reviewed source contents")
 	manifest := transfer.Manifest{Version: 1, BaseCommit: strings.Repeat("a", 40), Files: []transfer.File{{Path: "file.txt", Data: data, SHA256: digest(data)}}}
+	manifest.History = &transfer.HistoryBinding{Version: 1, ParentID: strings.Repeat("c", 64), MainRevision: strings.Repeat("d", 64), Children: []transfer.HistoryChild{}, TranscriptRevision: current.TranscriptRevision}
 	payload, _ := json.Marshal(manifest)
 	review, err := manifest.Digest()
 	if err != nil {

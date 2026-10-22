@@ -43,6 +43,7 @@ type Transfer struct {
 	SourceRevision           int64     `json:"source_revision"`
 	SourceTranscriptRevision int64     `json:"source_transcript_revision"`
 	SourcePermissionRevision int64     `json:"source_permission_revision"`
+	HistorySHA256            string    `json:"history_sha256,omitempty"`
 	TargetLocation           string    `json:"target_location"`
 	TargetAccountID          string    `json:"target_account_id,omitempty"`
 	TargetAccountEpoch       int64     `json:"target_account_epoch,omitempty"`
@@ -124,7 +125,7 @@ func readTransfer(ctx context.Context, tx pgx.Tx, a auth.Actor, campID, sessionI
 	if !validID(id) {
 		return t, ErrDenied
 	}
-	err := tx.QueryRow(ctx, `SELECT id,camp_id,session_id,owner_user_id,source_location,COALESCE(source_workspace_id::text,''),source_epoch,source_revision,source_transcript_revision,source_permission_revision,target_location,COALESCE(target_account_id::text,''),COALESCE(target_account_epoch,0),COALESCE(target_device_id::text,''),payload_sha256,review_sha256,payload_bytes,uploaded_bytes,state,revision,expires_at,COALESCE(base_commit,''),COALESCE(source_branch,''),COALESCE(file_count,0) FROM session_transfers WHERE id=$1 AND camp_id=$2 AND session_id=$3 AND owner_user_id=$4 FOR UPDATE`, id, campID, sessionID, a.UserID).Scan(&t.ID, &t.CampID, &t.SessionID, &t.OwnerUserID, &t.SourceLocation, &t.SourceWorkspaceID, &t.SourceEpoch, &t.SourceRevision, &t.SourceTranscriptRevision, &t.SourcePermissionRevision, &t.TargetLocation, &t.TargetAccountID, &t.TargetAccountEpoch, &t.TargetDeviceID, &t.PayloadSHA256, &t.ReviewSHA256, &t.PayloadBytes, &t.UploadedBytes, &t.State, &t.Revision, &t.ExpiresAt, &t.BaseCommit, &t.SourceBranch, &t.FileCount)
+	err := tx.QueryRow(ctx, `SELECT id,camp_id,session_id,owner_user_id,source_location,COALESCE(source_workspace_id::text,''),source_epoch,source_revision,source_transcript_revision,source_permission_revision,target_location,COALESCE(target_account_id::text,''),COALESCE(target_account_epoch,0),COALESCE(target_device_id::text,''),payload_sha256,review_sha256,payload_bytes,uploaded_bytes,state,revision,expires_at,COALESCE(base_commit,''),COALESCE(source_branch,''),COALESCE(file_count,0),COALESCE(history_sha256,'') FROM session_transfers WHERE id=$1 AND camp_id=$2 AND session_id=$3 AND owner_user_id=$4 FOR UPDATE`, id, campID, sessionID, a.UserID).Scan(&t.ID, &t.CampID, &t.SessionID, &t.OwnerUserID, &t.SourceLocation, &t.SourceWorkspaceID, &t.SourceEpoch, &t.SourceRevision, &t.SourceTranscriptRevision, &t.SourcePermissionRevision, &t.TargetLocation, &t.TargetAccountID, &t.TargetAccountEpoch, &t.TargetDeviceID, &t.PayloadSHA256, &t.ReviewSHA256, &t.PayloadBytes, &t.UploadedBytes, &t.State, &t.Revision, &t.ExpiresAt, &t.BaseCommit, &t.SourceBranch, &t.FileCount, &t.HistorySHA256)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, ErrDenied
 	}
@@ -382,7 +383,7 @@ func (s *Store) CompleteTransfer(ctx context.Context, a auth.Actor, campID, sess
 	if err != nil {
 		return t, err
 	}
-	if t.State == "ready" && t.BaseCommit != "" {
+	if t.State == "ready" && t.BaseCommit != "" && (t.SourceLocation != "local" || t.HistorySHA256 != "") {
 		return t, tx.Commit(ctx)
 	}
 	if !oneOf(t.State, "uploading", "ready") || t.UploadedBytes != t.PayloadBytes {
@@ -433,11 +434,21 @@ func (s *Store) CompleteTransfer(ctx context.Context, a auth.Actor, campID, sess
 	if err != nil {
 		return t, ErrInput
 	}
+	if (t.SourceLocation == "local" && manifest.History == nil) || (manifest.History != nil && manifest.History.TranscriptRevision != t.SourceTranscriptRevision) {
+		return t, ErrInput
+	}
 	review, err := manifest.Digest()
 	if err != nil || review != t.ReviewSHA256 {
 		return t, ErrInput
 	}
-	if _, err = tx.Exec(ctx, `UPDATE session_transfers SET state='ready',base_commit=$2,source_branch=$3,file_count=$4,revision=revision+1,updated_at=now() WHERE id=$1`, id, manifest.BaseCommit, manifest.Branch, len(manifest.Files)); err != nil {
+	history := ""
+	if manifest.History != nil {
+		history, err = manifest.History.Digest()
+		if err != nil {
+			return t, ErrInput
+		}
+	}
+	if _, err = tx.Exec(ctx, `UPDATE session_transfers SET state='ready',base_commit=$2,source_branch=$3,file_count=$4,history_sha256=NULLIF($5,''),revision=revision+1,updated_at=now() WHERE id=$1`, id, manifest.BaseCommit, manifest.Branch, len(manifest.Files), history); err != nil {
 		return t, err
 	}
 	t, err = readTransfer(ctx, tx, a, campID, sessionID, id)

@@ -511,3 +511,17 @@ Computer use still reports that the Mac is locked. These checks do not verify
 the final visual layout; compare the online, offline, reconnect, removed-child
 and citation states against the reference once the Mac is available. The
 native transfer review also still needs its full click-through.
+
+## History-bound transfer review — October 22
+
+The review now reports the included subagent count and requires a synchronized
+history binding before capture. Native and packaged-helper tests cover missing
+or stale bindings, changed children and final source verification. The main and
+transfer audit apps were rebuilt with the existing Apple Development identity;
+their strict code-signature checks pass. The transfer harness uses the real Go
+capture helper and synthetic files, with a mock cloud coordinator.
+
+Computer use still reports a locked Mac. The added review line, disabled/ready
+states, changed-history error and full transfer click-through have not received
+visual acceptance. These development signatures do not satisfy the public
+Developer ID/notarization release gate.

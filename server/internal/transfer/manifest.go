@@ -52,11 +52,12 @@ type Exclusion struct {
 }
 
 type Manifest struct {
-	Version    int         `json:"version"`
-	BaseCommit string      `json:"base_commit"`
-	Branch     string      `json:"branch,omitempty"`
-	Files      []File      `json:"files"`
-	Excluded   []Exclusion `json:"excluded"`
+	Version    int             `json:"version"`
+	BaseCommit string          `json:"base_commit"`
+	Branch     string          `json:"branch,omitempty"`
+	Files      []File          `json:"files"`
+	Excluded   []Exclusion     `json:"excluded"`
+	History    *HistoryBinding `json:"history,omitempty"`
 }
 
 func hash(data []byte) string {
@@ -94,6 +95,11 @@ func excludedPath(value string) bool {
 }
 
 func (m Manifest) Validate() error {
+	if m.History != nil {
+		if err := m.History.Validate(); err != nil {
+			return err
+		}
+	}
 	if m.Version != 1 || !commitPattern.MatchString(m.BaseCommit) || len(m.Branch) > 512 || strings.ContainsFunc(m.Branch, unicode.IsControl) || len(m.Files)+len(m.Excluded) > MaxFiles {
 		return ErrInput
 	}
@@ -166,6 +172,12 @@ func (m Manifest) Digest() (string, error) {
 	copy := m
 	copy.Files = append([]File{}, m.Files...)
 	copy.Excluded = append([]Exclusion{}, m.Excluded...)
+	if m.History != nil {
+		h := *m.History
+		h.Children = append([]HistoryChild{}, h.Children...)
+		sort.Slice(h.Children, func(i, j int) bool { return h.Children[i].SourceID < h.Children[j].SourceID })
+		copy.History = &h
+	}
 	for i := range copy.Files {
 		copy.Files[i].Data = nil
 	}

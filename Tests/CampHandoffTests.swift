@@ -1,5 +1,10 @@
 import Foundation
 
+func handoffHistoryPayload()->Data {
+    let value=LocalHistoryBinding(parentId:String(repeating:"c",count:64),mainRevision:String(repeating:"d",count:64),children:[],transcriptRevision:1)
+    return try! CampWire.body(["history":JSONSerialization.jsonObject(with:CampWire.encoder().encode(value))])
+}
+
 @MainActor final class SourceGuardFixture: LocalSourceGuard {
     var active = true
     var verifies = 0
@@ -23,7 +28,7 @@ import Foundation
 actor HandoffFixture: CampPublishingTransport {
     var handoff: CloudHandoff
     var source: CloudTransferSource
-    var payload = Data("{}".utf8)
+    var payload = handoffHistoryPayload()
     var loseClaim = false
     var loseAck = false
     var loseFinish = false
@@ -116,8 +121,8 @@ actor HandoffFixture: CampPublishingTransport {
         let local = CampSession(id:"fixture",sessionID:UUID().uuidString,provider:"Codex",sourceID:"fixture",sourceLabel:"Fixture",root:root.path,title:"Fixture",cwd:root.path,updated:1,path:"",accountID:"",archived:false)
         let session = CloudSession(id:UUID().uuidString,campId:scope.campId,projectId:UUID().uuidString,profileId:UUID().uuidString,provider:local.provider,profileLabel:"Fixture",ownerUserId:actor.userId,ownerDeviceId:actor.deviceId,localSessionId:local.sessionID,title:"Fixture",model:"fixture",state:"idle",stage:"Ready",shared:false,allowRequests:false,externalOwner:false,revision:1,transcriptRevision:1,permissionRevision:1,updatedAt:Date(),executionLocation:"local",executionEpoch:1)
         let h = CloudHandoff(id:UUID().uuidString,transferId:UUID().uuidString,campId:scope.campId,sessionId:session.id,ownerUserId:actor.userId,sourceDeviceId:actor.deviceId,sourceLocation:"local",sourceEpoch:1,workspaceId:UUID().uuidString,workspaceRevision:1,state:"pending",revision:1,expiresAt:Date().addingTimeInterval(60))
-        let payloadHash = PublishMessage.hash(Data("{}".utf8)), reviewHash = String(repeating:"a",count:64)
-        let source = CloudTransferSource(handoff:h,transfer:.init(id:h.transferId,campId:scope.campId,sessionId:session.id,ownerUserId:actor.userId,sourceLocation:"local",sourceEpoch:1,sourceRevision:1,sourceTranscriptRevision:1,sourcePermissionRevision:1,payloadSha256:payloadHash,reviewSha256:reviewHash,payloadBytes:2,uploadedBytes:2,chunkBytes:256 << 10,state:"ready"),session:session)
+        let payload=handoffHistoryPayload(),payloadHash = PublishMessage.hash(payload), reviewHash = String(repeating:"a",count:64)
+        let source = CloudTransferSource(handoff:h,transfer:.init(id:h.transferId,campId:scope.campId,sessionId:session.id,ownerUserId:actor.userId,sourceLocation:"local",sourceEpoch:1,sourceRevision:1,sourceTranscriptRevision:1,sourcePermissionRevision:1,payloadSha256:payloadHash,reviewSha256:reviewHash,payloadBytes:payload.count,uploadedBytes:payload.count,chunkBytes:256 << 10,state:"ready"),session:session)
         let receipt = SourceVerification(payloadSHA256:payloadHash,reviewSHA256:reviewHash)
         let cache = try CampCache(directory:root.appendingPathComponent("cache"))
         let api = HandoffFixture(handoff:h,source:source)
@@ -314,8 +319,20 @@ actor HandoffFixture: CampPublishingTransport {
         try before.write(to:file); _ = try git(["add","file.txt"]); _ = try git(["commit","-qm","Fixture"])
         let head = try git(["rev-parse","HEAD"]), branch = try git(["rev-parse","--abbrev-ref","HEAD"])
         try after.write(to:file)
-        let payload = try CampWire.body(["version":1,"base_commit":head,"branch":branch,"files":[["path":"file.txt","before_sha256":PublishMessage.hash(before),"sha256":PublishMessage.hash(after),"data":after.base64EncodedString()]],"excluded":[]])
-        let local = CampSession(id:"real-guard",sessionID:"native-fixture",provider:"Codex",sourceID:"fixture",sourceLabel:"Fixture",root:profile.path,title:"Fixture",cwd:repository.path,updated:1,path:"",accountID:"",archived:false)
+        let transcript=profile.appendingPathComponent("session.jsonl");try Data().write(to:transcript)
+        let local = CampSession(id:"real-guard",sessionID:"native-fixture",provider:"Codex",sourceID:"fixture",sourceLabel:"Fixture",root:profile.path,title:"Fixture",cwd:repository.path,updated:1,path:transcript.path,accountID:"",archived:false)
+        func localRead(_ action:String)throws->Data {
+            let p=Process(),input=Pipe(),output=Pipe()
+            p.executableURL=URL(fileURLWithPath:FileManager.default.currentDirectoryPath).appendingPathComponent("build/camp-local");p.arguments=[action]
+            p.environment=ProcessInfo.processInfo.environment.merging(["CAPY_SUPPORT":root.appendingPathComponent("support").path]){_,new in new}
+            p.standardInput=input;p.standardOutput=output;p.standardError=FileHandle.nullDevice
+            try p.run();try input.fileHandleForWriting.write(contentsOf:CampWire.body(["session":JSONSerialization.jsonObject(with:JSONEncoder().encode(local)),"limit":1]));try input.fileHandleForWriting.close()
+            let data=output.fileHandleForReading.readDataToEndOfFile();p.waitUntilExit();check(p.terminationStatus==0,"Fixture history read failed");return data
+        }
+        let page=try JSONDecoder().decode(TranscriptExport.self,from:localRead("export-page"))
+        let children=try JSONDecoder().decode(LocalChildHistoryCatalog.self,from:localRead("child-history-catalog"))
+        let history=LocalHistoryBinding(parentId:children.parentID,mainRevision:page.snapshotRevision,children:children.sources.map{.init(sourceId:$0.id,revision:$0.revision)},transcriptRevision:1)
+        let payload = try CampWire.body(["version":1,"base_commit":head,"branch":branch,"files":[["path":"file.txt","before_sha256":PublishMessage.hash(before),"sha256":PublishMessage.hash(after),"data":after.base64EncodedString()]],"excluded":[],"history":JSONSerialization.jsonObject(with:CampWire.encoder().encode(history))])
         let handoffID = UUID().uuidString.lowercased()
         func guardProcess() -> LocalTransferHold {
             LocalTransferHold(session:local,payload:payload,deadline:Date().addingTimeInterval(15),handoffID:handoffID) {

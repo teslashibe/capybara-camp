@@ -201,6 +201,11 @@ files to include, inspect the captured contents and exclusions, and choose
 **Prepare Cloud**. The review pins the current local Git commit. That commit
 must already be available in the selected remote repository.
 
+Review waits for the current main and subagent histories to finish syncing.
+The capture binds their content revisions to the imported cloud revision and
+shows the subagent count. The source checks that same history before the final
+move, so an edit after review requires a fresh copy and review.
+
 Once the destination is ready, choose **Verify source** on the original Mac.
 Camp checks that the provider has stopped and the selected files still match.
 Review the destination permissions, then choose **Move to cloud**. The ticket

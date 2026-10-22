@@ -195,4 +195,17 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT execution_location,execution_epoch,execution_mode,prompt FROM prompt_requests WHERE id=$1`, request).Scan(&location, &epoch, &requestMode, &prompt); err != nil || location != "local" || epoch != 1 || requestMode != "chat" || prompt != "Preserved queued prompt" {
 		t.Fatal("queued request changed during migration", err)
 	}
+	var unbound bool
+	if err = pool.QueryRow(ctx, `SELECT history_sha256 IS NULL FROM session_transfers WHERE id=$1`, transfer).Scan(&unbound); err != nil || !unbound {
+		t.Fatal("Migration invented a history verification", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE session_transfers SET history_sha256=$2 WHERE id=$1`, transfer, strings.Repeat("d", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.Down(ctx); err == nil {
+		t.Fatal("Downgrade discarded verified transfer history")
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal("Rejected downgrade changed schema readiness", err)
+	}
 }

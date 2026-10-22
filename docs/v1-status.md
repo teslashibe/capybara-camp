@@ -123,23 +123,37 @@ does not accumulate network reads. The regression test observes cancellation
 of the earlier request and still rejects its late response. The staged secret
 scan passes.
 
-The next migration gap is the final history check. The existing source hold
-verifies the idle local process and reviewed files, but it does not yet prove
-that the imported main and child histories match the source at handoff. The
-fix must preserve independent activity in other conversations on the same
-profile and reject edits between publication, review and commit.
+The final history check is implemented in the current increment below. It
+preserves independent activity in other conversations on the same profile
+and checks edits between publication, review and commit.
 
 The local exporter now provides a content revision for the selected
 conversation, separate from the shared profile-file fingerprint. The native
 publisher checks this revision across pages and after child synchronization
-before reporting the copy complete. This is groundwork for the final handoff
-history check, not completion of it. Targeted Go tests cover selected-message
+before reporting the copy complete. These content revisions are now used by
+the final handoff history check. Targeted Go tests cover selected-message
 edits and unrelated Codex database writes. The full local-CLI and transfer Go
 race suites, vet and Linux helper/runner builds pass. Native publication tests
 reject changed pages, recover with the latest complete copy, and retain the
 existing parent/child and privacy checks. The packaged bridge and transfer
-suites also pass. The staged secret scan passes. The final source handoff
-binding remains open.
+suites also pass. The staged secret scan passes.
+
+The current history-binding increment saves the published main and child
+content revisions with the copied cloud revision. Go capture verifies that
+binding before and after reading selected files. The source guard checks it
+during the hold and immediately before the persistent commit fence. Schema 25
+stores the verified digest; the server rejects missing or mismatched bindings
+and prevents an older unverified local handoff from claiming or committing.
+The native review shows the included subagent count. Targeted local checks
+cover changed main/child contents, removed children, unrelated Codex writes and
+stale capture. The full Go race suite and vet pass with disposable PostgreSQL,
+including legacy handoff rejection and migration/downgrade checks. Native
+publication, transfer, source-guard, child-cache and packaged-helper suites pass.
+The packaged helper rejects a child edited after publication. Linux server,
+runner, controller, helper and migration builds pass. Live two-Mac transfer
+acceptance and the final visual walkthrough remain open.
+The two signed synthetic audit apps have been rebuilt and pass strict
+signature verification. Computer use still reports the Mac as locked.
 
 The transfer work includes a read-only Go capture layer for selected Git
 changes and owner-bound, encrypted, resumable upload storage. Completion checks

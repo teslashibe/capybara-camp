@@ -65,6 +65,9 @@ func (a *App) HoldTransferSource(ctx context.Context, input io.ReadCloser, outpu
 	if err != nil {
 		return err
 	}
+	if in.HandoffID != "" && manifest.History == nil {
+		return errHistoryChanged
+	}
 	review, err := manifest.Digest()
 	if err != nil {
 		return err
@@ -84,6 +87,11 @@ func (a *App) HoldTransferSource(ctx context.Context, input io.ReadCloser, outpu
 	verify := func() error {
 		if err := a.assertAvailable(ctx, session); err != nil {
 			return err
+		}
+		if manifest.History != nil {
+			if err := a.verifyHistoryBinding(ctx, session, manifest.History); err != nil {
+				return err
+			}
 		}
 		root, err := transfer.RepositoryRoot(ctx, session.CWD)
 		if err != nil {

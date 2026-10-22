@@ -232,7 +232,9 @@ remain open.
 
 The local helper's `child-history-catalog` action enumerates a selected parent's
 saved children. It returns opaque, profile-bound source IDs, provider metadata
-and a catalog revision without local file paths. The catalog supports at most
+and a catalog revision without local file paths. Child source revisions are
+content revisions, so an unrelated conversation's database write does not
+invalidate the child's contents. The catalog supports at most
 512 children; an oversized or unreadable set fails explicitly rather than
 returning a partial successful snapshot.
 
@@ -242,7 +244,7 @@ parent's current membership before reading any page. Another parent or profile
 cannot substitute a source ID or transcript path. Each page reuses the existing
 transcript index, preserving stable message IDs, amendments, tombstones and
 recorded model settings. The page has the normal 1 MiB sharing budget and rejects
-a changed source fingerprint. File fingerprints detect ordinary local changes;
+a changed child content revision. File fingerprints refresh the local index;
 they are not attestations against an adversary who can alter local provider
 files and their metadata.
 
@@ -258,8 +260,37 @@ The native publisher requires the same main-conversation content revision
 across all exported pages and checks it again after copying children. A changed
 copy retries before being marked synchronized. Already accepted upload batches
 remain on the server and are reconciled by that retry; this is not an atomic
-multi-page upload. The final source handoff still needs the history binding
-described below.
+multi-page upload. The final source handoff uses the history binding below.
+
+### Reviewed history binding
+
+A Local-source transfer manifest includes `history` with `version: 1`, a
+`parent_id`, `main_revision`, `children` (`source_id` and `revision` per child),
+and the imported cloud `transcript_revision`. Local IDs are opaque hashes;
+no transcript text, credentials or local paths enter this binding. The manifest
+and review hashes cover it along with the selected files.
+
+The publisher saves this binding only after all main pages and children finish
+copying. Capture requires its cloud revision to match the selected session,
+then the Go helper compares it with the local contents before and after file
+capture. A missing, changed or newly added child fails that comparison. Another
+Codex conversation writing to the same profile database does not fail it when
+the selected main/child contents remain unchanged.
+
+The source guard repeats this comparison during its hold and immediately
+before creating the persistent commit fence. The same session lock protects
+Camp's local conversation execution. External processes are still checked;
+the binding does not claim to defend against a malicious owner modifying their
+own provider files or cache while preserving its metadata.
+
+Schema 25 stores `history_sha256` after validating a completed upload. Local
+handoffs require this digest, including previously ready uploads and pending
+holds. The manifest's cloud revision must equal the transfer's pinned source
+revision. Old file-only reviews must be cancelled and recreated. Upgrade the
+API and runner builds, apply migration 25, and use the matching native app
+before enabling this flow. Migration 25 preserves older records without
+inventing verification; downgrade is refused while verified history records
+remain. No cloud migration has been deployed for this development increment.
 
 The native publisher sends these pages through the cloud storage contract
 below. Child navigation uses the same sidebar and transcript component as local
@@ -320,8 +351,9 @@ reply reuses the saved command. Source disappearance marks a child removed;
 reappearance keeps the same identity. The publisher rechecks the local child
 catalog before reporting synchronization complete.
 
-Before enabling child publication, upgrade every API process to the schema-24
-build and apply the migration through the normal backup and release procedure.
+Before enabling child publication and reviewed transfers, upgrade every API
+process to the schema-25 build and apply migrations through the normal backup
+and release procedure.
 Older API processes must not serve this database once child rows exist. The
 migration preserves existing histories and refuses destructive downgrade.
 
@@ -559,14 +591,10 @@ The capture and upload layers do not complete any destination handoff. Its
 lifecycle and permissions remain under the existing Camp, runner and
 local-client ownership boundaries.
 
-The current source hold verifies process ownership and the selected working
-files. It does not yet bind a final local main/child history snapshot to the
-imported cloud revision. Complete migration acceptance requires that check
-at the final source handoff, including changes during publication, other active
-conversations in the same profile, and changes between review and commit. Use
-evidence for the selected conversations: the current import fingerprint includes
-shared Codex database files, so treating that fingerprint alone as a permanent
-transfer seal would also reject unrelated conversations' writes.
+The source hold verifies process ownership, selected working files and the
+reviewed main/child history binding. Full migration acceptance still needs the
+native walkthrough and live two-Mac/provider checks, in addition to the
+remaining attachment, commit-graph and reverse-transfer work above.
 
 ## Validation
 

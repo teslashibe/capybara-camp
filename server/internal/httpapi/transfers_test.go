@@ -110,6 +110,7 @@ func TestTransferHTTPBoundsAndOwnerAuthorization(t *testing.T) {
 	}
 	file := bytes.Repeat([]byte("source\n"), 40000)
 	m := transfer.Manifest{Version: 1, BaseCommit: strings.Repeat("a", 40), Files: []transfer.File{{Path: "src/main.txt", Data: file, SHA256: digest(file)}}}
+	m.History = &transfer.HistoryBinding{Version: 1, ParentID: strings.Repeat("c", 64), MainRevision: strings.Repeat("d", 64), Children: []transfer.HistoryChild{}, TranscriptRevision: session.TranscriptRevision}
 	raw := encode(m)
 	review, err := m.Digest()
 	if err != nil {

@@ -64,6 +64,7 @@ type HandoffSource struct {
 
 const liveHandoffSQL = `h.state IN ('pending','claimed','acknowledged') AND h.expires_at>clock_timestamp()
  AND t.state='ready' AND t.expires_at>clock_timestamp()
+ AND (t.source_location<>'local' OR t.history_sha256 IS NOT NULL)
  AND t.source_epoch=s.execution_epoch AND t.source_location=s.execution_location
  AND t.source_workspace_id IS NOT DISTINCT FROM s.execution_workspace_id
  AND t.source_revision=s.revision AND t.source_transcript_revision=s.transcript_revision
@@ -115,6 +116,9 @@ func (s *Store) validateHandoff(ctx context.Context, tx pgx.Tx, a auth.Actor, h 
 	t, err := readTransfer(ctx, tx, a, h.CampID, h.SessionID, h.TransferID)
 	if err != nil {
 		return t, err
+	}
+	if t.SourceLocation == "local" && t.HistorySHA256 == "" {
+		return t, ErrTransition
 	}
 	if !oneOf(h.State, "pending", "claimed", "acknowledged") || !h.ExpiresAt.After(time.Now()) || t.State != "ready" || !t.ExpiresAt.After(time.Now()) {
 		return t, ErrTransition

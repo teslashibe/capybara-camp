@@ -130,11 +130,12 @@ actor ChangingHistoryFixture {
         await eventually("Stable history did not recover after retry"){changing.shares.first?.state=="Shared"}
         let settled=await changingServer.snapshot()
         precondition(settled.3["first"]?.text=="Updated first" && settled.3["second"]?.text=="Second","Retry did not replace the incomplete snapshot")
+        precondition(changing.shares.first?.publishedHistory?.mainRevision==String(repeating:"b",count:64) && changing.shares.first?.publishedHistory?.transcriptRevision==settled.0?.transcriptRevision,"Published history was not bound to its cloud revision")
         changing.attach(scope:nil,actor:nil,transport:nil)
         let server = PublishingFixture(scope: scope, actor: actor)
         let export: @Sendable (CampSession, Int64) async throws -> TranscriptExport = { _, after in
             let message = PublishMessage(id: after < 0 ? "first" : "second", ordinal: after < 0 ? 0 : 1, role: "assistant", text: after < 0 ? "First message" : "Second message", removed: false)
-            return TranscriptExport(messages: [message], after: message.ordinal, hasMore: after < 0, fingerprint: "fixture")
+            return TranscriptExport(messages: [message], after: message.ordinal, hasMore: after < 0, fingerprint: "fixture",contentRevision:String(repeating:"f",count:64))
         }
         let sharing = CampSharing(cache: cache, export: export)
         sharing.childCatalog={_ in LocalChildHistoryCatalog(parentID:String(repeating:"a",count:64),revision:String(repeating:"b",count:64),sources:[])}
@@ -216,6 +217,7 @@ actor ChangingHistoryFixture {
         let uploaded=await childServer.childSnapshot()
         precondition(uploaded.0.count==1 && uploaded.0[0].complete && uploaded.1.count==230 && uploaded.2==3,"Child pages were lost or repeated")
         precondition(uploaded.0[0].model==String(repeating:"m",count:100),"Child model identity was truncated")
+        precondition(childSharing.shares.first?.publishedHistory?.children==[.init(sourceId:String(repeating:"c",count:64),revision:String(repeating:"d",count:64))],"Published history omitted the child revision")
         let parentUpload=await childServer.snapshot()
         precondition(parentUpload.3["first"]?.text=="First message" && uploaded.1["first"]?.text=="Child message 0","Child transcript replaced its parent")
         let childID=uploaded.0[0].id,childFirst=uploaded.1["first"]!

@@ -266,9 +266,12 @@ struct LocalShareStatus {
                 try await commit(value, generation: token); value = try await perform(value, generation: token)
             }
             if !page.hasMore {
-                try await synchronizeChildren(&value,local:local,generation:token)
+                let children=try await synchronizeChildren(&value,local:local,generation:token)
                 let verified=try await export(local,-1);try check(token)
                 guard verified.snapshotRevision==snapshotRevision else {throw CampError.message("The conversation changed while syncing. Retrying the latest history")}
+                let history=LocalHistoryBinding(parentId:children.parentID,mainRevision:verified.snapshotRevision,children:children.children,transcriptRevision:value.remote?.transcriptRevision ?? 0)
+                value.publishedHistory=history.valid ? history : nil
+                try await commit(value,generation:token)
                 await state(id, value.shared ? "Shared" : "Saved to Camp", generation: token); return
             }
             after = page.after
@@ -276,7 +279,7 @@ struct LocalShareStatus {
         await state(id, "Transcript exceeds 200,000 messages", generation: token)
     }
 
-    private func synchronizeChildren(_ value:inout LocalShare,local:CampSession,generation token:UUID) async throws {
+    private func synchronizeChildren(_ value:inout LocalShare,local:CampSession,generation token:UUID) async throws -> (parentID:String,children:[LocalHistoryBinding.Child]) {
         guard let scope,let transport,let cache else{throw CampCloudError.cacheUnavailable}
         var catalog=try await childCatalog(local);try check(token)
         guard catalog.valid else{throw CampCloudError.invalidResponse}
@@ -304,7 +307,7 @@ struct LocalShareStatus {
             for _ in 0..<1000 {
                 let exported=try await childPage(local,source,after);try check(token)
                 guard exported.parentID==catalog.parentID,exported.source.id==source.id,exported.source.revision==source.revision,
-                      exported.page.fingerprint==source.revision,exported.page.messages.count<=200,
+                      exported.page.snapshotRevision==source.revision,exported.page.messages.count<=200,
                       !exported.page.hasMore || exported.page.after>after else{throw CampCloudError.invalidResponse}
                 let messages=try await cache.unpublished(exported.page.messages,scope:scope,sessionId:childID);try check(token)
                 if !messages.isEmpty || !exported.page.hasMore {
@@ -322,6 +325,7 @@ struct LocalShareStatus {
         }
         let verified=try await childCatalog(local);try check(token)
         guard verified.valid,verified.parentID==catalog.parentID,verified.revision==catalog.revision else{throw CampCloudError.server(409,"child_history_changed")}
+        return (catalog.parentID,catalog.sources.map{LocalHistoryBinding.Child(sourceId:$0.id,revision:$0.revision)}.sorted{$0.sourceId<$1.sourceId})
     }
 
     private static func childState(_ state:String)->String {
