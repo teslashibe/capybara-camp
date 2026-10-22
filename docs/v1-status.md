@@ -159,6 +159,11 @@ mark-all-read, settings and Escape back to the bell. The notification suite and
 strict bundle verification pass. Linux and Intel Mac helper builds also pass.
 Desktop-banner presentation and the full final UI review remain open.
 
+The separate arm64 development app, `build/Capybara Camp V1 Preview.app`, now
+builds with its bundled Go helper and the existing development signing identity.
+Strict deep signature verification passes. It uses a separate preview bundle
+identifier and retains version 0.0.1; it is not a notarized V1 distribution.
+
 Native import preparation now validates all saved versions, local quotes,
 planner bindings and copied implementation transcripts before creating the
 request. A scoped upload journal persists approval and the exact retry key.
