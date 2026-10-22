@@ -25,6 +25,12 @@ the Hetzner box with us. Cloud sign-in and
 the two-Mac acceptance run follow that deployment. Hardware has not been bought
 or provisioned for this goal.
 
+The transfer work now includes a read-only Go capture layer for selected Git
+changes, content hashes, exclusions and source-drift validation. Its real-Git
+tests pass. It is not yet wired to the native client, resumable staging or an
+assignment handoff, and does not make used workspaces movable. The current
+contract and remaining integration are in [transfer payload](transfer-payload.md).
+
 The native account form and synthetic provider walkthrough now pass locally.
 The Go controller provisions per-installation workers, renews managed grants,
 and removes old Pods before deleting their storage and Secrets. It fences stale

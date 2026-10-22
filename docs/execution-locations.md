@@ -135,3 +135,8 @@ Mac. That fixture simulates Git and provider sign-in; it runs no model and
 does not establish a real checkout. Remaining signed-in failure states and
 the deployed two-Mac test are still open. No live cloud provider run has been
 accepted yet.
+
+The [transfer payload](transfer-payload.md) now has a tested Go capture and
+validation layer. It does not enable a move: source locking, resumable staging,
+history migration, destination receipts and the assignment commit still need
+integration.
