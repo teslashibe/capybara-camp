@@ -62,6 +62,13 @@ struct CloudSession: Codable, Identifiable, Equatable, Sendable {
     var localSessionId: String; var title: String; var model: String; var state: String; var stage: String
     var shared: Bool; var allowRequests: Bool; var externalOwner: Bool
     var revision: Int64; var transcriptRevision: Int64; var permissionRevision: Int64; var updatedAt: Date
+    var activityRevision: Int64? = nil
+    var executionLocation: String? = nil
+    var executionEpoch: Int64? = nil
+    var executionWorkspaceId: String? = nil
+    func canReplace(_ old: CloudSession) -> Bool {
+        revision > old.revision || (revision == old.revision && transcriptRevision >= old.transcriptRevision && (activityRevision ?? 0) >= (old.activityRevision ?? 0))
+    }
 }
 struct CloudSessionPage: Codable, Sendable { var sessions: [CloudSession]; var next: String }
 struct CloudMessage: Codable, Identifiable, Equatable, Sendable {

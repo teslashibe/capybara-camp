@@ -74,6 +74,14 @@ import SQLite3
         stale = value; stale.transcriptRevision = 2
         try await cache.ingest(scope: scope, session: stale)
         check(try await cache.sessions(scope).first?.transcriptRevision == 3, "transcript revision monotonic")
+        value.activityRevision = 3; value.state = "running"; value.stage = "In progress"
+        try await cache.ingest(scope: scope, session: value)
+        stale = value; stale.activityRevision = 2; stale.state = "idle"; stale.stage = "Ready"
+        check(!stale.canReplace(value), "late idle response cannot replace running activity")
+        try await cache.ingest(scope: scope, session: stale)
+        check(try await cache.sessions(scope).first?.state == "running", "cached activity revision never regresses")
+        value.activityRevision = 4; value.state = "idle"; value.stage = "Ready"
+        try await cache.ingest(scope: scope, session: value)
         try await cache.ingest(scope: scope, cursor: 3, removed: (value.id, 4))
         check(try await cache.sessions(scope).count == 1, "duplicate event ignored atomically")
         try await cache.ingest(scope: scope, cursor: 4, removed: (value.id, 4))

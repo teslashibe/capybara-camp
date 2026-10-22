@@ -1,0 +1,254 @@
+package camp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/teslashibe/capybara-camp/server/internal/auth"
+	"github.com/teslashibe/capybara-camp/server/internal/localcli"
+)
+
+type ExecutionTarget struct {
+	Location    string                      `json:"location"`
+	Epoch       int64                       `json:"epoch"`
+	WorkspaceID string                      `json:"workspace_id,omitempty"`
+	Mode        string                      `json:"mode"`
+	Permissions localcli.PermissionSettings `json:"permissions"`
+	Available   bool                        `json:"available"`
+}
+
+type ExecutionInput struct {
+	Location                   string                      `json:"location"`
+	WorkspaceID                string                      `json:"workspace_id,omitempty"`
+	ExpectedEpoch              int64                       `json:"expected_epoch"`
+	ExpectedSessionRevision    int64                       `json:"expected_session_revision"`
+	ExpectedTranscriptRevision int64                       `json:"expected_transcript_revision"`
+	ExpectedWorkspaceRevision  int64                       `json:"expected_workspace_revision"`
+	ExecutionApproved          bool                        `json:"execution_approved"`
+	Permissions                localcli.PermissionSettings `json:"permissions,omitempty"`
+}
+
+// The session's execution epoch is independent from its display revision.
+// Moving work does not change the approved repository/history snapshot.
+func (s *Store) executionTarget(ctx context.Context, tx pgx.Tx, session Session) (ExecutionTarget, error) {
+	out := ExecutionTarget{Location: session.ExecutionLocation, Epoch: session.ExecutionEpoch, WorkspaceID: session.ExecutionWorkspaceID, Mode: "chat", Permissions: localcli.PermissionSettings{}, Available: true}
+	if out.Location == "local" {
+		return out, nil
+	}
+	var raw []byte
+	var purpose string
+	err := tx.QueryRow(ctx, `SELECT s.execution_permissions,w.purpose FROM sessions s
+ JOIN ticket_workspaces w ON w.id=s.execution_workspace_id
+ JOIN provider_installations p ON p.id=w.provider_installation_id
+ JOIN git_connections g ON g.id=w.git_connection_id
+ JOIN projects j ON j.id=w.project_id
+ WHERE s.id=$1 AND w.camp_id=s.camp_id AND w.session_id=s.id AND w.owner_user_id=s.owner_user_id AND w.project_id=s.project_id
+ AND w.state='ready' AND w.source_revision=s.revision AND w.project_revision=j.revision AND NOT j.archived
+ AND p.epoch=w.provider_epoch AND p.state='connected' AND (p.credential_expires_at IS NULL OR p.credential_expires_at>clock_timestamp())
+ AND g.epoch=w.git_epoch AND g.state='connected'`, session.ID).Scan(&raw, &purpose)
+	if errors.Is(err, pgx.ErrNoRows) {
+		out.Available = false
+		return out, ErrTransition
+	}
+	if err != nil {
+		return out, err
+	}
+	if json.Unmarshal(raw, &out.Permissions) != nil {
+		return out, ErrInput
+	}
+	if purpose == "implementation" {
+		out.Mode = "implementation"
+	}
+	return out, nil
+}
+
+func (s *Store) cloudActivity(ctx context.Context, tx pgx.Tx, r Request) error {
+	if r.ExecutionLocation != "cloud" {
+		return nil
+	}
+	state, stage := "", ""
+	switch r.State {
+	case "started", "cancel_requested":
+		state, stage = "running", "In progress"
+	case "completed":
+		state, stage = "done", "Done"
+	case "failed", "outcome_unknown":
+		state, stage = "waiting", "Needs you"
+	case "cancelled", "queued":
+		state, stage = "idle", "Ready"
+	case "pending_approval":
+		state, stage = "waiting", "Needs you"
+	default:
+		return nil
+	}
+	var running, unknown, approval, queued bool
+	err := tx.QueryRow(ctx, `SELECT
+ EXISTS(SELECT 1 FROM prompt_requests WHERE session_id=$1 AND state IN ('started','cancel_requested')),
+ EXISTS(SELECT 1 FROM prompt_requests WHERE session_id=$1 AND state='outcome_unknown'),
+ EXISTS(SELECT 1 FROM prompt_requests WHERE session_id=$1 AND state='pending_approval'),
+ EXISTS(SELECT 1 FROM prompt_requests WHERE session_id=$1 AND state IN ('queued','claimed'))`, r.SessionID).Scan(&running, &unknown, &approval, &queued)
+	if err != nil {
+		return err
+	}
+	switch {
+	case running:
+		state, stage = "running", "In progress"
+	case unknown || approval:
+		state, stage = "waiting", "Needs you"
+	case queued:
+		state, stage = "idle", "Ready"
+	}
+	session := Session{ID: r.SessionID}
+	err = tx.QueryRow(ctx, `UPDATE sessions SET state=$3,stage=$4,activity_revision=activity_revision+1,updated_at=now() WHERE id=$1 AND camp_id=$2 RETURNING revision,transcript_revision,activity_revision`, r.SessionID, r.CampID, state, stage).Scan(&session.Revision, &session.TranscriptRevision, &session.ActivityRevision)
+	if err != nil {
+		return err
+	}
+	return emitSession(ctx, tx, auth.Actor{UserID: r.OwnerUserID}, r.CampID, "session.activity", session, false)
+}
+
+func (s *Store) Execution(ctx context.Context, a auth.Actor, campID, id string) (ExecutionTarget, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ExecutionTarget{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = s.lock(ctx, tx, a, campID, false); err != nil {
+		return ExecutionTarget{}, err
+	}
+	session, err := s.readSession(ctx, tx, a, campID, id)
+	if err != nil {
+		return ExecutionTarget{}, err
+	}
+	if session.OwnerUserID != a.UserID {
+		return ExecutionTarget{}, ErrDenied
+	}
+	out, err := s.executionTarget(ctx, tx, session)
+	if errors.Is(err, ErrTransition) {
+		var raw []byte
+		var purpose string
+		if err = tx.QueryRow(ctx, `SELECT s.execution_permissions,w.purpose FROM sessions s JOIN ticket_workspaces w ON w.id=s.execution_workspace_id WHERE s.id=$1`, session.ID).Scan(&raw, &purpose); err != nil {
+			return out, err
+		}
+		if json.Unmarshal(raw, &out.Permissions) != nil {
+			return out, ErrInput
+		}
+		if purpose == "implementation" {
+			out.Mode = "implementation"
+		}
+		return out, nil
+	}
+	return out, err
+}
+
+// AssignExecution only changes ownership of future work. The caller must
+// review the prepared workspace and history. Active or queued requests block
+// assignment changes; they cannot be silently rerouted to a different account.
+func (s *Store) AssignExecution(ctx context.Context, a auth.Actor, campID, id, key string, in ExecutionInput) (ExecutionTarget, error) {
+	if !oneOf(in.Location, "local", "cloud") || in.ExpectedEpoch < 1 || in.ExpectedSessionRevision < 1 || in.ExpectedTranscriptRevision < 0 {
+		return ExecutionTarget{}, ErrInput
+	}
+	if in.Location == "local" && (in.WorkspaceID != "" || len(in.Permissions) > 0 || in.ExecutionApproved || in.ExpectedWorkspaceRevision != 0) {
+		return ExecutionTarget{}, ErrInput
+	}
+	if in.Location == "cloud" && (!validID(in.WorkspaceID) || in.ExpectedWorkspaceRevision < 1) {
+		return ExecutionTarget{}, ErrInput
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ExecutionTarget{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = s.lock(ctx, tx, a, campID, true); err != nil {
+		return ExecutionTarget{}, err
+	}
+	session, err := s.readSession(ctx, tx, a, campID, id)
+	if err != nil {
+		return ExecutionTarget{}, err
+	}
+	if session.OwnerUserID != a.UserID {
+		return ExecutionTarget{}, ErrDenied
+	}
+	var out ExecutionTarget
+	if hit, err := s.beginCommand(ctx, tx, a, key, "execution.assign:"+id, in, &out); err != nil {
+		return out, err
+	} else if hit {
+		// A replay is observational and must never move a newer assignment back.
+		return s.executionTarget(ctx, tx, session)
+	}
+	if session.ExecutionEpoch != in.ExpectedEpoch || session.Revision != in.ExpectedSessionRevision || session.TranscriptRevision != in.ExpectedTranscriptRevision {
+		return out, ErrRevision
+	}
+	if session.ExternalOwner || !(oneOf(session.State, "idle", "done") || session.ExecutionLocation == "cloud" && session.State == "waiting") {
+		return out, ErrTransition
+	}
+	var busy bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM prompt_requests WHERE session_id=$1 AND state NOT IN ('completed','failed','cancelled'))`, id).Scan(&busy); err != nil {
+		return out, err
+	}
+	if busy {
+		return out, ErrTransition
+	}
+	if session.ExecutionLocation == "cloud" && (in.Location == "local" || in.WorkspaceID != session.ExecutionWorkspaceID) {
+		var needsTransfer bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM prompt_requests r JOIN ticket_workspaces w ON w.id=r.execution_workspace_id WHERE r.session_id=$1 AND r.execution_workspace_id=$2 AND w.purpose='implementation' AND r.started_at IS NOT NULL)`, session.ID, session.ExecutionWorkspaceID).Scan(&needsTransfer); err != nil {
+			return out, err
+		}
+		// A destination change must not strand edits from an implementation.
+		// The reviewed transfer protocol will supply this release condition.
+		if needsTransfer {
+			return out, ErrTransition
+		}
+	}
+	permissions := localcli.PermissionSettings{}
+	if in.Location == "cloud" {
+		w, err := readWorkspace(ctx, tx, a, campID, in.WorkspaceID)
+		if err != nil {
+			return out, err
+		}
+		if w.SessionID != id || w.OwnerUserID != a.UserID || w.State != "ready" {
+			return out, ErrDenied
+		}
+		if w.Revision != in.ExpectedWorkspaceRevision || w.SourceRevision != session.Revision || w.ProjectID != session.ProjectID {
+			return out, ErrRevision
+		}
+		permissions, err = localcli.NormalizePermissions(session.Provider, in.Permissions)
+		if err != nil {
+			return out, ErrInput
+		}
+		if w.Purpose == "planning" && (len(permissions) > 0 || in.ExecutionApproved) {
+			return out, ErrInput
+		}
+		if w.Purpose == "implementation" {
+			if !in.ExecutionApproved {
+				return out, ErrDenied
+			}
+			if session.Provider == "Codex" && ((permissions["profile"] == "" && permissions["sandbox"] == "") || permissions["approval"] == "" || permissions["reviewer"] == "") {
+				return out, ErrInput
+			}
+			if session.Provider == "Claude" && permissions["claudeMode"] == "" {
+				return out, ErrInput
+			}
+		}
+	} else if session.OwnerDeviceID != a.DeviceID {
+		return out, ErrDenied
+	}
+	raw, _ := json.Marshal(permissions)
+	err = tx.QueryRow(ctx, `UPDATE sessions SET execution_location=$2,execution_workspace_id=NULLIF($3,'')::uuid,execution_permissions=$4,execution_epoch=execution_epoch+1,activity_revision=activity_revision+1,updated_at=now() WHERE id=$1 RETURNING execution_epoch,activity_revision`, id, in.Location, in.WorkspaceID, raw).Scan(&session.ExecutionEpoch, &session.ActivityRevision)
+	if err != nil {
+		return out, err
+	}
+	session.ExecutionLocation, session.ExecutionWorkspaceID = in.Location, in.WorkspaceID
+	out, err = s.executionTarget(ctx, tx, session)
+	if err != nil {
+		return out, err
+	}
+	if err = emitSession(ctx, tx, a, campID, "session.execution", session, false); err != nil {
+		return out, err
+	}
+	if err = s.finishCommand(ctx, tx, a, key, out); err != nil {
+		return out, err
+	}
+	return out, tx.Commit(ctx)
+}

@@ -29,7 +29,7 @@ func TestControllerRoleCanProvisionWithoutReadingHumanOrProviderSecrets(t *testi
 	if _, err := s.pool.Exec(ctx, `GRANT USAGE ON SCHEMA `+schema+` TO `+role); err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range []string{"00011_runner_provisioning.sql", "00014_workspace_claims.sql"} {
+	for _, file := range []string{"00011_runner_provisioning.sql", "00014_workspace_claims.sql", "00015_execution_assignments.sql"} {
 		raw, err := os.ReadFile("../database/migrations/" + file)
 		if err != nil {
 			t.Fatal(err)
@@ -64,7 +64,7 @@ func TestControllerRoleCanProvisionWithoutReadingHumanOrProviderSecrets(t *testi
 	if _, err = controller.EnsureControllerGrant(ctx, a, 4); err != nil {
 		t.Fatal("controller cannot check active workspaces", err)
 	}
-	for _, query := range []string{`SELECT encrypted_read_token FROM ticket_workspaces`, `SELECT repository_name FROM ticket_workspaces`, `SELECT encrypted_credentials FROM provider_installations`, `SELECT encrypted_challenge FROM provider_login_attempts`, `SELECT encrypted_credentials FROM git_connections`, `SELECT encrypted_context FROM git_logins`, `SELECT email FROM users`, `SELECT token_hash FROM devices`} {
+	for _, query := range []string{`SELECT prompt FROM prompt_requests`, `SELECT encrypted_read_token FROM ticket_workspaces`, `SELECT repository_name FROM ticket_workspaces`, `SELECT encrypted_credentials FROM provider_installations`, `SELECT encrypted_challenge FROM provider_login_attempts`, `SELECT encrypted_credentials FROM git_connections`, `SELECT encrypted_context FROM git_logins`, `SELECT email FROM users`, `SELECT token_hash FROM devices`} {
 		if _, err = limited.Exec(ctx, query); err == nil {
 			t.Fatal("controller read a prohibited column")
 		}

@@ -42,26 +42,30 @@ type SessionInput struct {
 	ExpectedRevision int64  `json:"expected_revision"`
 }
 type Session struct {
-	ID                 string    `json:"id"`
-	CampID             string    `json:"camp_id"`
-	ProjectID          string    `json:"project_id"`
-	ProfileID          string    `json:"profile_id"`
-	Provider           string    `json:"provider"`
-	ProfileLabel       string    `json:"profile_label"`
-	OwnerUserID        string    `json:"owner_user_id"`
-	OwnerDeviceID      string    `json:"owner_device_id"`
-	LocalSessionID     string    `json:"local_session_id"`
-	Title              string    `json:"title"`
-	Model              string    `json:"model"`
-	State              string    `json:"state"`
-	Stage              string    `json:"stage"`
-	Shared             bool      `json:"shared"`
-	AllowRequests      bool      `json:"allow_requests"`
-	ExternalOwner      bool      `json:"external_owner"`
-	Revision           int64     `json:"revision"`
-	TranscriptRevision int64     `json:"transcript_revision"`
-	PermissionRevision int64     `json:"permission_revision"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                   string    `json:"id"`
+	CampID               string    `json:"camp_id"`
+	ProjectID            string    `json:"project_id"`
+	ProfileID            string    `json:"profile_id"`
+	Provider             string    `json:"provider"`
+	ProfileLabel         string    `json:"profile_label"`
+	OwnerUserID          string    `json:"owner_user_id"`
+	OwnerDeviceID        string    `json:"owner_device_id"`
+	LocalSessionID       string    `json:"local_session_id"`
+	Title                string    `json:"title"`
+	Model                string    `json:"model"`
+	State                string    `json:"state"`
+	Stage                string    `json:"stage"`
+	Shared               bool      `json:"shared"`
+	AllowRequests        bool      `json:"allow_requests"`
+	ExternalOwner        bool      `json:"external_owner"`
+	Revision             int64     `json:"revision"`
+	TranscriptRevision   int64     `json:"transcript_revision"`
+	PermissionRevision   int64     `json:"permission_revision"`
+	UpdatedAt            time.Time `json:"updated_at"`
+	ExecutionLocation    string    `json:"execution_location"`
+	ExecutionEpoch       int64     `json:"execution_epoch"`
+	ExecutionWorkspaceID string    `json:"execution_workspace_id,omitempty"`
+	ActivityRevision     int64     `json:"activity_revision"`
 }
 type MessageInput struct {
 	ID      string `json:"id"`
@@ -123,13 +127,13 @@ func (s *Store) RegisterProfile(ctx context.Context, a auth.Actor, requestID str
 }
 
 const sessionColumns = `s.id,s.camp_id,s.project_id,s.profile_id,p.provider,p.label,s.owner_user_id,s.owner_device_id,s.local_session_id,
- s.title,s.model,s.state,s.stage,s.shared,s.allow_requests,s.external_owner,s.revision,s.transcript_revision,s.permission_revision,s.updated_at`
+ s.title,s.model,s.state,s.stage,s.shared,s.allow_requests,s.external_owner,s.revision,s.transcript_revision,s.permission_revision,s.updated_at,s.execution_location,s.execution_epoch,COALESCE(s.execution_workspace_id::text,''),s.activity_revision`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanSession(row rowScanner) (Session, error) {
 	var s Session
-	err := row.Scan(&s.ID, &s.CampID, &s.ProjectID, &s.ProfileID, &s.Provider, &s.ProfileLabel, &s.OwnerUserID, &s.OwnerDeviceID, &s.LocalSessionID, &s.Title, &s.Model, &s.State, &s.Stage, &s.Shared, &s.AllowRequests, &s.ExternalOwner, &s.Revision, &s.TranscriptRevision, &s.PermissionRevision, &s.UpdatedAt)
+	err := row.Scan(&s.ID, &s.CampID, &s.ProjectID, &s.ProfileID, &s.Provider, &s.ProfileLabel, &s.OwnerUserID, &s.OwnerDeviceID, &s.LocalSessionID, &s.Title, &s.Model, &s.State, &s.Stage, &s.Shared, &s.AllowRequests, &s.ExternalOwner, &s.Revision, &s.TranscriptRevision, &s.PermissionRevision, &s.UpdatedAt, &s.ExecutionLocation, &s.ExecutionEpoch, &s.ExecutionWorkspaceID, &s.ActivityRevision)
 	return s, err
 }
 func (s *Store) readSession(ctx context.Context, q interface {
@@ -202,6 +206,19 @@ func (s *Store) PublishSession(ctx context.Context, a auth.Actor, campID, reques
 		if input.ExpectedRevision != previous.Revision {
 			return result, ErrRevision
 		}
+		if previous.ExecutionLocation == "cloud" {
+			if input.Shared == previous.Shared && input.AllowRequests == previous.AllowRequests {
+				if input.Title != previous.Title || input.Model != previous.Model || input.State != previous.State || input.Stage != previous.Stage || input.ProjectID != previous.ProjectID || input.ExternalOwner != previous.ExternalOwner {
+					return result, ErrTransition
+				}
+				if err = s.finishCommand(ctx, tx, a, requestID, previous); err != nil {
+					return result, err
+				}
+				return previous, tx.Commit(ctx)
+			}
+			// Sharing can always be revoked even if the Mac's runtime copy is old.
+			input.Title, input.Model, input.State, input.Stage, input.ProjectID, input.ExternalOwner = previous.Title, previous.Model, previous.State, previous.Stage, previous.ProjectID, previous.ExternalOwner
+		}
 		_, err = tx.Exec(ctx, `UPDATE sessions SET permission_revision=permission_revision+CASE WHEN shared IS DISTINCT FROM $7 OR allow_requests IS DISTINCT FROM $8 THEN 1 ELSE 0 END,project_id=$2,title=$3,model=$4,state=$5,stage=$6,shared=$7,allow_requests=$8,external_owner=$9,revision=revision+1,updated_at=now() WHERE id=$1`, input.ID, input.ProjectID, input.Title, input.Model, input.State, input.Stage, input.Shared, input.AllowRequests, input.ExternalOwner)
 		if err != nil {
 			return result, err
@@ -233,7 +250,7 @@ func (s *Store) PublishSession(ctx context.Context, a auth.Actor, campID, reques
 }
 
 func emitSession(ctx context.Context, tx pgx.Tx, a auth.Actor, campID, kind string, session Session, tombstone bool) error {
-	if err := emit(ctx, tx, a, campID, kind, map[string]any{"session_id": session.ID, "revision": session.Revision, "transcript_revision": session.TranscriptRevision}); err != nil {
+	if err := emit(ctx, tx, a, campID, kind, map[string]any{"session_id": session.ID, "revision": session.Revision, "transcript_revision": session.TranscriptRevision, "activity_revision": session.ActivityRevision}); err != nil {
 		return err
 	}
 	var cursor int64
@@ -346,6 +363,9 @@ func (s *Store) WriteTranscript(ctx context.Context, a auth.Actor, campID, id, r
 	}
 	if session.OwnerUserID != a.UserID || session.OwnerDeviceID != a.DeviceID {
 		return 0, ErrDenied
+	}
+	if session.ExecutionLocation != "local" {
+		return 0, ErrTransition
 	}
 	var result int64
 	if hit, err := s.beginCommand(ctx, tx, a, requestID, "transcript.write:"+id, input, &result); err != nil {

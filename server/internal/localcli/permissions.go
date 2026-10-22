@@ -12,6 +12,12 @@ import (
 
 type PermissionSettings map[string]string
 
+// NormalizePermissions shares the supported CLI permission vocabulary with
+// the control plane. It validates a choice; it does not authorize execution.
+func NormalizePermissions(provider string, input PermissionSettings) (PermissionSettings, error) {
+	return normalizePermissions(provider, input)
+}
+
 var permissionProfile = regexp.MustCompile(`^[:a-zA-Z0-9_.-]+$`)
 
 func normalizePermissions(provider string, input PermissionSettings) (PermissionSettings, error) {

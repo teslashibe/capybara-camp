@@ -98,6 +98,19 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO git_connections(id,owner_user_id,github_user_id,github_login,state,epoch,encrypted_credentials) VALUES($1,$2,123,'preserved-user','connected',5,$3)`, connection, id, credentialFixture); err != nil {
 		t.Fatal(err)
 	}
+	device, profile, session, request := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO devices(id,user_id,name,token_hash,expires_at) VALUES($1,$2,'Preserved Mac',$3,now()+interval '1 day')`, device, id, bytes.Repeat([]byte{17}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO profiles(id,owner_user_id,owner_device_id,provider,local_id,label) VALUES($1,$2,$3,'Codex',$4,'Preserved profile')`, profile, id, device, strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO sessions(id,camp_id,project_id,profile_id,owner_user_id,owner_device_id,local_session_id,title,state,stage,shared) VALUES($1,$2,$3,$4,$5,$6,'preserved-session','Preserved session','idle','Ready',false)`, session, camp, project, profile, id, device); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO prompt_requests(id,camp_id,session_id,requester_user_id,owner_user_id,owner_device_id,permission_revision,prompt,model,effort,speed,state) VALUES($1,$2,$3,$4,$4,$5,1,'Preserved queued prompt','fixture-model','high','standard','queued')`, request, camp, session, id, device); err != nil {
+		t.Fatal(err)
+	}
 	if err = Migrate(ctx, u.String()); err != nil {
 		t.Fatal(err)
 	}
@@ -123,5 +136,12 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	}
 	if err = pool.QueryRow(ctx, `SELECT encrypted_credentials,epoch FROM git_connections WHERE id=$1`, connection).Scan(&credentials, &epoch); err != nil || !bytes.Equal(credentials, credentialFixture) || epoch != 5 {
 		t.Fatal("workspace migration changed Git credentials", err)
+	}
+	var location, requestMode, prompt string
+	if err = pool.QueryRow(ctx, `SELECT execution_location,execution_epoch FROM sessions WHERE id=$1`, session).Scan(&location, &epoch); err != nil || location != "local" || epoch != 1 {
+		t.Fatal("session migrated away from Local", err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT execution_location,execution_epoch,execution_mode,prompt FROM prompt_requests WHERE id=$1`, request).Scan(&location, &epoch, &requestMode, &prompt); err != nil || location != "local" || epoch != 1 || requestMode != "chat" || prompt != "Preserved queued prompt" {
+		t.Fatal("queued request changed during migration", err)
 	}
 }

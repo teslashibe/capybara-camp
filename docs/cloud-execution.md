@@ -3,9 +3,10 @@
 [Iteration 2](iteration-2.md) defines client projects, separate GitHub identities and per-ticket repository workspaces. A client project is a collection of tickets, not a filesystem directory or repository.
 
 Approved V1 scope, October 21, 2026. This is an implementation contract, not a
-claim that cloud runners or provider sign-in are shipped. The current Go service
-stores shared sessions and prompt requests; the native app can publish selected
-local transcripts. Cloud execution is the next runtime extension.
+claim that cloud model execution is shipped. The current Go service stores
+shared sessions, prompt requests, prepared workspaces and Local/Cloud execution
+assignments. The native app can publish selected local transcripts. The runner
+handles sign-in and checkout; provider-turn consumption is still pending.
 
 ## What people see
 
@@ -90,6 +91,12 @@ Mac and cloud does not reset its five-hour or weekly allowance. Automatic quota
 rotation remains outside this release.
 
 ## Runtime and persistence
+
+The implemented control-plane boundary is described in
+[execution assignments](execution-assignments.md). It reuses the existing prompt
+queue and event log. Choosing Cloud requires a prepared owner-bound workspace;
+only its assigned installation may claim that session's requests. The new API
+does not yet enable the native Run on control or submit cloud prompts to a CLI.
 
 Reuse the Go API, PostgreSQL, event stream and native cache. Add one Go
 `camp-runner` binary with Codex and Claude adapters; use official CLI stdio

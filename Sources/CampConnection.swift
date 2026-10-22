@@ -248,7 +248,7 @@ import SwiftUI
     }
     private func accepts(_ value: CloudSession) -> Bool {
         guard let old = sessionIndex[value.id] else { return true }
-        return value.revision > old.revision || (value.revision == old.revision && value.transcriptRevision >= old.transcriptRevision)
+        return value.canReplace(old)
     }
     func acceptPublishedSession(_ value: CloudSession, scope expectedScope: CloudScope, epoch: Int64) async {
         guard let scope, scope == expectedScope, scope.campId == value.campId, let cache else { return }

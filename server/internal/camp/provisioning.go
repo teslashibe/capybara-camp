@@ -85,7 +85,7 @@ func (s *Store) EnsureControllerGrant(ctx context.Context, expected ProviderAcco
 			return out, ErrManualRunner
 		}
 		var busy bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_login_attempts WHERE installation_id=$1 AND state IN ('queued','running','waiting') AND expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM ticket_workspaces WHERE provider_installation_id=$1 AND state='preparing' AND lease_until>clock_timestamp())`, a.InstallationID).Scan(&busy); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_login_attempts WHERE installation_id=$1 AND state IN ('queued','running','waiting') AND expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM ticket_workspaces WHERE provider_installation_id=$1 AND state='preparing' AND lease_until>clock_timestamp()) OR EXISTS(SELECT 1 FROM runner_execution_leases WHERE provider_installation_id=$1 AND lease_until>clock_timestamp())`, a.InstallationID).Scan(&busy); err != nil {
 			return out, err
 		}
 		if len(encrypted) > 0 && (out.ExpiresAt.After(now.Add(45*time.Minute)) || busy && out.ExpiresAt.After(now)) {

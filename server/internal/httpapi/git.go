@@ -29,6 +29,26 @@ func (a *API) gitAuthorize(next authorizedHandler) http.HandlerFunc {
 	})
 }
 func (a *API) gitRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/camps/{camp}/sessions/{session}/execution", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		out, err := a.Camps.Execution(r.Context(), u, r.PathValue("camp"), r.PathValue("session"))
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
+	mux.HandleFunc("PUT /v1/camps/{camp}/sessions/{session}/execution", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		var in camp.ExecutionInput
+		if !decode(w, r, &in) {
+			return
+		}
+		if in.Location == "cloud" && a.Git == nil {
+			problem(w, 503, "git_not_configured")
+			return
+		}
+		out, err := a.Camps.AssignExecution(r.Context(), u, r.PathValue("camp"), r.PathValue("session"), r.Header.Get("Idempotency-Key"), in)
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
 	mux.HandleFunc("GET /v1/runner/workspaces/next", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
 		out, err := a.Git.NextRunnerWorkspace(r.Context(), token(r))
 		if !fail(w, err) {
@@ -37,6 +57,28 @@ func (a *API) gitRoutes(mux *http.ServeMux) {
 			} else {
 				write(w, 200, out)
 			}
+		}
+	}))
+	mux.HandleFunc("POST /v1/runner/workspaces/{workspace}/requests/claim", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
+		var in struct {
+			ClaimID string `json:"claim_id"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := a.Git.ClaimRunnerRequest(r.Context(), token(r), r.PathValue("workspace"), in.ClaimID)
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
+	mux.HandleFunc("POST /v1/runner/workspaces/{workspace}/requests/{request}/actions", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
+		var in camp.RequestAction
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := a.Git.ActOnRunnerRequest(r.Context(), token(r), r.PathValue("workspace"), r.PathValue("request"), r.Header.Get("Idempotency-Key"), in)
+		if !fail(w, err) {
+			write(w, 200, out)
 		}
 	}))
 	for _, operation := range []string{"claim", "heartbeat", "token", "report", "status"} {

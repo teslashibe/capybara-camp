@@ -35,6 +35,11 @@ rotation during checkout. If the role is created after migration, apply the
 GRANT block from `00014_workspace_claims.sql` as well. Workspace credentials,
 repository names and other owners' user data remain unavailable to this role.
 
+Schema 15 adds `runner_execution_leases`, which exposes only installation IDs
+and lease times. The controller uses it to defer rotation during a cloud turn.
+If creating the role after migration, apply that migration's GRANT block too.
+Prompt bodies and request history remain inaccessible to the controller.
+
 ## Reconciliation and cleanup
 
 Each pass reads at most 64 accounts. Account locks serialize managed-grant

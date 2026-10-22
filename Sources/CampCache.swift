@@ -164,7 +164,7 @@ actor CampCache {
     private func save(_ session: CloudSession, scope: CloudScope) throws {
         try execute("""
         INSERT INTO sessions(scope,id,revision,transcript_revision,body) SELECT ?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope=? AND id=? AND revision>=?)
-        ON CONFLICT(scope,id) DO UPDATE SET revision=excluded.revision,transcript_revision=excluded.transcript_revision,body=excluded.body WHERE excluded.revision>sessions.revision OR (excluded.revision=sessions.revision AND excluded.transcript_revision>=sessions.transcript_revision)
+        ON CONFLICT(scope,id) DO UPDATE SET revision=excluded.revision,transcript_revision=excluded.transcript_revision,body=excluded.body WHERE excluded.revision>sessions.revision OR (excluded.revision=sessions.revision AND excluded.transcript_revision>=sessions.transcript_revision AND COALESCE(json_extract(CAST(excluded.body AS TEXT),'$.activity_revision'),0)>=COALESCE(json_extract(CAST(sessions.body AS TEXT),'$.activity_revision'),0))
         """, [.text(scope.key), .text(session.id), .integer(session.revision), .integer(session.transcriptRevision), .blob(try CampWire.encoder().encode(session)), .text(scope.key), .text(session.id), .integer(session.revision)])
     }
     private func save(_ request: CloudRequest, scope: CloudScope) throws {

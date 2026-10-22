@@ -2,6 +2,7 @@ package camp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
+	"github.com/teslashibe/capybara-camp/server/internal/localcli"
 )
 
 var ErrTransition = errors.New("request state has changed")
@@ -27,29 +29,35 @@ type RequestInput struct {
 	Sources []SourceRef `json:"sources"`
 }
 type Request struct {
-	Kind               string      `json:"kind"`
-	PlanID             string      `json:"plan_id,omitempty"`
-	PlanVersion        int64       `json:"plan_version,omitempty"`
-	PlanStep           int         `json:"plan_step"`
-	ID                 string      `json:"id"`
-	CampID             string      `json:"camp_id"`
-	SessionID          string      `json:"session_id"`
-	RequesterUserID    string      `json:"requester_user_id"`
-	OwnerUserID        string      `json:"owner_user_id"`
-	OwnerDeviceID      string      `json:"owner_device_id"`
-	PermissionRevision int64       `json:"permission_revision"`
-	Revision           int64       `json:"revision"`
-	Prompt             string      `json:"prompt"`
-	Model              string      `json:"model"`
-	Effort             string      `json:"effort"`
-	Speed              string      `json:"speed"`
-	State              string      `json:"state"`
-	LeaseToken         string      `json:"lease_token,omitempty"`
-	LeaseUntil         *time.Time  `json:"lease_until,omitempty"`
-	CreatedAt          time.Time   `json:"created_at"`
-	Evidence           string      `json:"evidence,omitempty"`
-	Reason             string      `json:"reason,omitempty"`
-	Sources            []SourceRef `json:"sources"`
+	Kind                 string                      `json:"kind"`
+	PlanID               string                      `json:"plan_id,omitempty"`
+	PlanVersion          int64                       `json:"plan_version,omitempty"`
+	PlanStep             int                         `json:"plan_step"`
+	ID                   string                      `json:"id"`
+	CampID               string                      `json:"camp_id"`
+	SessionID            string                      `json:"session_id"`
+	RequesterUserID      string                      `json:"requester_user_id"`
+	OwnerUserID          string                      `json:"owner_user_id"`
+	OwnerDeviceID        string                      `json:"owner_device_id"`
+	PermissionRevision   int64                       `json:"permission_revision"`
+	Revision             int64                       `json:"revision"`
+	Prompt               string                      `json:"prompt"`
+	Model                string                      `json:"model"`
+	Effort               string                      `json:"effort"`
+	Speed                string                      `json:"speed"`
+	State                string                      `json:"state"`
+	LeaseToken           string                      `json:"lease_token,omitempty"`
+	LeaseUntil           *time.Time                  `json:"lease_until,omitempty"`
+	CreatedAt            time.Time                   `json:"created_at"`
+	Evidence             string                      `json:"evidence,omitempty"`
+	Reason               string                      `json:"reason,omitempty"`
+	Sources              []SourceRef                 `json:"sources"`
+	ExecutionLocation    string                      `json:"execution_location"`
+	ExecutionEpoch       int64                       `json:"execution_epoch"`
+	ExecutionWorkspaceID string                      `json:"execution_workspace_id,omitempty"`
+	Permissions          localcli.PermissionSettings `json:"permissions"`
+	Mode                 string                      `json:"mode"`
+	RunnerGrantID        string                      `json:"-"`
 }
 type RequestAction struct {
 	Output     string         `json:"output,omitempty"`
@@ -61,11 +69,15 @@ type RequestAction struct {
 }
 
 const requestColumns = `r.id,r.camp_id,r.session_id,r.requester_user_id,r.owner_user_id,r.owner_device_id,r.permission_revision,r.revision,r.prompt,r.model,r.effort,r.speed,r.state,
- COALESCE(r.lease_token::text,''),r.lease_until,r.created_at,r.outcome_evidence,r.reason,r.kind,COALESCE(r.plan_id::text,''),COALESCE(r.plan_version,0),COALESCE(r.plan_step,-1)`
+ COALESCE(r.lease_token::text,''),r.lease_until,r.created_at,r.outcome_evidence,r.reason,r.kind,COALESCE(r.plan_id::text,''),COALESCE(r.plan_version,0),COALESCE(r.plan_step,-1),r.execution_location,r.execution_epoch,COALESCE(r.execution_workspace_id::text,''),r.execution_permissions,r.execution_mode,COALESCE(r.runner_grant_id::text,'')`
 
 func scanRequest(row rowScanner) (Request, error) {
 	r := Request{Sources: []SourceRef{}}
-	err := row.Scan(&r.ID, &r.CampID, &r.SessionID, &r.RequesterUserID, &r.OwnerUserID, &r.OwnerDeviceID, &r.PermissionRevision, &r.Revision, &r.Prompt, &r.Model, &r.Effort, &r.Speed, &r.State, &r.LeaseToken, &r.LeaseUntil, &r.CreatedAt, &r.Evidence, &r.Reason, &r.Kind, &r.PlanID, &r.PlanVersion, &r.PlanStep)
+	var permissions []byte
+	err := row.Scan(&r.ID, &r.CampID, &r.SessionID, &r.RequesterUserID, &r.OwnerUserID, &r.OwnerDeviceID, &r.PermissionRevision, &r.Revision, &r.Prompt, &r.Model, &r.Effort, &r.Speed, &r.State, &r.LeaseToken, &r.LeaseUntil, &r.CreatedAt, &r.Evidence, &r.Reason, &r.Kind, &r.PlanID, &r.PlanVersion, &r.PlanStep, &r.ExecutionLocation, &r.ExecutionEpoch, &r.ExecutionWorkspaceID, &permissions, &r.Mode, &r.RunnerGrantID)
+	if err == nil {
+		err = json.Unmarshal(permissions, &r.Permissions)
+	}
 	return r, err
 }
 func loadRequest(ctx context.Context, tx pgx.Tx, campID, id string) (Request, error) {
@@ -109,6 +121,14 @@ func (s *Store) requestAccess(ctx context.Context, tx pgx.Tx, r Request) (Sessio
 	}
 	if session.OwnerUserID != r.OwnerUserID || session.OwnerDeviceID != r.OwnerDeviceID {
 		return session, ErrDenied
+	}
+	if session.ExecutionLocation != r.ExecutionLocation || session.ExecutionEpoch != r.ExecutionEpoch || session.ExecutionWorkspaceID != r.ExecutionWorkspaceID {
+		return session, ErrDenied
+	}
+	if r.ExecutionLocation == "cloud" {
+		if _, err = s.executionTarget(ctx, tx, session); err != nil {
+			return session, err
+		}
 	}
 	owner := auth.Actor{UserID: r.OwnerUserID}
 	if _, err = s.readSession(ctx, tx, owner, r.CampID, r.SessionID); err != nil {
@@ -180,11 +200,18 @@ func (s *Store) CreateRequest(ctx context.Context, a auth.Actor, campID, session
 // the bounded planning coordinator. Callers hold the Camp transaction lock.
 func (s *Store) enqueueRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campID string, session Session, input RequestInput, planning *planningStepLink) (Request, error) {
 	r := Request{Kind: "chat", PlanStep: -1, ID: uuid.NewString(), CampID: campID, SessionID: session.ID, RequesterUserID: a.UserID, OwnerUserID: session.OwnerUserID, OwnerDeviceID: session.OwnerDeviceID, PermissionRevision: session.PermissionRevision, Revision: 1, Prompt: input.Prompt, Model: input.Model, Effort: input.Effort, Speed: input.Speed, State: "pending_approval", Sources: []SourceRef{}}
+	target, err := s.executionTarget(ctx, tx, session)
+	if err != nil {
+		return Request{}, err
+	}
+	r.ExecutionLocation, r.ExecutionEpoch, r.ExecutionWorkspaceID, r.Permissions, r.Mode = target.Location, target.Epoch, target.WorkspaceID, target.Permissions, target.Mode
 	if planning != nil {
 		r.Kind = "planning"
 		r.PlanID = planning.PlanID
 		r.PlanVersion = planning.Version
 		r.PlanStep = planning.Ordinal
+		r.Mode = "planning"
+		r.Permissions = localcli.PermissionSettings{}
 	}
 	if r.Model == "" {
 		r.Model = session.Model
@@ -218,8 +245,9 @@ func (s *Store) enqueueRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, cam
 	if _, err := s.requestAccess(ctx, tx, r); err != nil {
 		return Request{}, err
 	}
-	err := tx.QueryRow(ctx, `INSERT INTO prompt_requests(id,camp_id,session_id,requester_user_id,owner_user_id,owner_device_id,permission_revision,prompt,model,effort,speed,state,kind,plan_id,plan_version,plan_step)
-	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULLIF($14,'')::uuid,NULLIF($15,0),NULLIF($16,-1)) RETURNING created_at`, r.ID, campID, session.ID, a.UserID, r.OwnerUserID, r.OwnerDeviceID, r.PermissionRevision, r.Prompt, r.Model, r.Effort, r.Speed, r.State, r.Kind, r.PlanID, r.PlanVersion, r.PlanStep).Scan(&r.CreatedAt)
+	permissions, _ := json.Marshal(r.Permissions)
+	err = tx.QueryRow(ctx, `INSERT INTO prompt_requests(id,camp_id,session_id,requester_user_id,owner_user_id,owner_device_id,permission_revision,prompt,model,effort,speed,state,kind,plan_id,plan_version,plan_step,execution_location,execution_epoch,execution_workspace_id,execution_permissions,execution_mode)
+	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULLIF($14,'')::uuid,NULLIF($15,0),NULLIF($16,-1),$17,$18,NULLIF($19,'')::uuid,$20,$21) RETURNING created_at`, r.ID, campID, session.ID, a.UserID, r.OwnerUserID, r.OwnerDeviceID, r.PermissionRevision, r.Prompt, r.Model, r.Effort, r.Speed, r.State, r.Kind, r.PlanID, r.PlanVersion, r.PlanStep, r.ExecutionLocation, r.ExecutionEpoch, r.ExecutionWorkspaceID, permissions, r.Mode).Scan(&r.CreatedAt)
 	if err != nil {
 		return Request{}, err
 	}
@@ -229,6 +257,9 @@ func (s *Store) enqueueRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, cam
 		}
 	}
 	if err = emitRequest(ctx, tx, a, r, "request.created", false); err != nil {
+		return r, err
+	}
+	if err = s.cloudActivity(ctx, tx, r); err != nil {
 		return r, err
 	}
 	return r, nil
@@ -300,6 +331,9 @@ func emitRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, r Request, kind s
 	}
 	return notifyRequest(ctx, tx, a, r)
 }
+
+const eligiblePlanningRequestSQL = `(r.kind='chat' OR (EXISTS(SELECT 1 FROM planning_versions v JOIN planning_tickets p ON p.id=v.plan_id WHERE v.plan_id=r.plan_id AND v.version=r.plan_version AND v.state='running' AND p.active_version=v.version)
+ AND NOT EXISTS(SELECT 1 FROM prompt_requests b WHERE b.plan_id=r.plan_id AND b.plan_version=r.plan_version AND b.state IN ('failed','cancelled','outcome_unknown'))))`
 
 // ClaimRequest never starts a provider. The worker must durably mark its local
 // attempt and acknowledge Start before invoking the CLI. An expired Start is
@@ -390,8 +424,8 @@ func (s *Store) claimRequest(ctx context.Context, a auth.Actor, campID, key stri
 	var id string
 	err = tx.QueryRow(ctx, `SELECT r.id FROM prompt_requests r JOIN sessions s ON s.id=r.session_id JOIN profiles profile ON profile.id=s.profile_id
 	 WHERE r.camp_id=$1 AND r.owner_device_id=$2 AND r.owner_user_id=$4 AND (r.kind=$5 OR $5='all') AND r.state='queued' AND NOT s.external_owner
-	 AND (r.kind='chat' OR (EXISTS(SELECT 1 FROM planning_versions v JOIN planning_tickets p ON p.id=v.plan_id WHERE v.plan_id=r.plan_id AND v.version=r.plan_version AND v.state='running' AND p.active_version=v.version)
-	 AND NOT EXISTS(SELECT 1 FROM prompt_requests b WHERE b.plan_id=r.plan_id AND b.plan_version=r.plan_version AND b.state IN ('failed','cancelled','outcome_unknown'))))
+	 AND r.execution_location='local' AND s.execution_location='local' AND r.execution_epoch=s.execution_epoch
+	 AND `+eligiblePlanningRequestSQL+`
 	 AND ($3::uuid[] IS NULL OR r.session_id=ANY($3))
 	 AND NOT EXISTS(SELECT 1 FROM prompt_requests running WHERE running.session_id=r.session_id AND running.state IN ('claimed','started','cancel_requested','outcome_unknown'))
 	 AND (r.kind='chat' OR NOT EXISTS(SELECT 1 FROM prompt_requests running JOIN sessions rs ON rs.id=running.session_id JOIN profiles rp ON rp.id=rs.profile_id
@@ -460,6 +494,17 @@ func (s *Store) ActOnRequest(ctx context.Context, a auth.Actor, campID, id, key 
 	if err != nil {
 		return r, err
 	}
+	worker := a.DeviceID == r.OwnerDeviceID && a.UserID == r.OwnerUserID && r.ExecutionLocation == "local"
+	if input.Action == "reconcile" && r.ExecutionLocation == "cloud" && a.UserID == r.OwnerUserID && input.LeaseToken == "" {
+		input.LeaseToken = r.LeaseToken
+		worker = true
+	}
+	return s.actOnRequest(ctx, tx, a, campID, id, key, input, r, worker, "request.action:"+id)
+}
+
+// Device and installation workers share the same transitions after their own authorization checks.
+func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campID, id, key string, input RequestAction, r Request, worker bool, receiptScope string) (Request, error) {
+	var err error
 	if r.RequesterUserID != a.UserID && r.OwnerUserID != a.UserID {
 		return Request{}, ErrDenied
 	}
@@ -474,7 +519,7 @@ func (s *Store) ActOnRequest(ctx context.Context, a auth.Actor, campID, id, key 
 		}
 	}
 	var prior Request
-	if hit, err := s.beginCommand(ctx, tx, a, key, "request.action:"+id, input, &prior); err != nil {
+	if hit, err := s.beginCommand(ctx, tx, a, key, receiptScope, input, &prior); err != nil {
 		return r, err
 	} else if hit {
 		if oneOf(input.Action, "start", "heartbeat") && (r.State != prior.State || !leaseValid) {
@@ -491,7 +536,6 @@ func (s *Store) ActOnRequest(ctx context.Context, a auth.Actor, campID, id, key 
 		r.LeaseToken = ""
 		return r, nil
 	}
-	worker := a.DeviceID == r.OwnerDeviceID && a.UserID == r.OwnerUserID
 	if oneOf(input.Action, "start", "heartbeat", "release", "finish", "reconcile") && !worker {
 		return r, ErrDenied
 	}
@@ -595,6 +639,11 @@ func (s *Store) ActOnRequest(ctx context.Context, a auth.Actor, campID, id, key 
 			return r, err
 		}
 	}
+	if r.ExecutionLocation == "cloud" && input.Action != "heartbeat" {
+		if err = s.cloudActivity(ctx, tx, r); err != nil {
+			return r, err
+		}
+	}
 	r.LeaseToken = ""
 	if err = s.finishCommand(ctx, tx, a, key, r); err != nil {
 		return r, err
@@ -670,14 +719,14 @@ func (s *Store) invalidateRequests(ctx context.Context, tx pgx.Tx, a auth.Actor,
 func (s *Store) reapCamp(ctx context.Context, tx pgx.Tx, campID string) error {
 	rows, err := tx.Query(ctx, `UPDATE prompt_requests SET revision=revision+1,state=CASE WHEN state='claimed' THEN 'queued' ELSE 'outcome_unknown' END,reason='lease_expired',lease_until=NULL
 	 WHERE id IN(SELECT id FROM prompt_requests WHERE camp_id=$1 AND state IN ('claimed','started','cancel_requested') AND lease_until<=clock_timestamp() LIMIT 100)
-	 RETURNING id,session_id,owner_user_id,state,revision,kind,COALESCE(plan_id::text,''),COALESCE(plan_version,0),COALESCE(plan_step,-1)`, campID)
+	 RETURNING id,session_id,owner_user_id,state,revision,kind,COALESCE(plan_id::text,''),COALESCE(plan_version,0),COALESCE(plan_step,-1),execution_location`, campID)
 	if err != nil {
 		return err
 	}
 	var results []Request
 	for rows.Next() {
 		r := Request{CampID: campID, Reason: "lease_expired"}
-		if err = rows.Scan(&r.ID, &r.SessionID, &r.OwnerUserID, &r.State, &r.Revision, &r.Kind, &r.PlanID, &r.PlanVersion, &r.PlanStep); err != nil {
+		if err = rows.Scan(&r.ID, &r.SessionID, &r.OwnerUserID, &r.State, &r.Revision, &r.Kind, &r.PlanID, &r.PlanVersion, &r.PlanStep, &r.ExecutionLocation); err != nil {
 			rows.Close()
 			return err
 		}
@@ -690,6 +739,9 @@ func (s *Store) reapCamp(ctx context.Context, tx pgx.Tx, campID string) error {
 	}
 	for _, r := range results {
 		if err = emitRequest(ctx, tx, auth.Actor{UserID: r.OwnerUserID}, r, "request.lease_expired", true); err != nil {
+			return err
+		}
+		if err = s.cloudActivity(ctx, tx, r); err != nil {
 			return err
 		}
 	}

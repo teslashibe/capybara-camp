@@ -195,6 +195,29 @@ func TestWorkspaceHTTPRequiresOwnerAndReplaysReceipt(t *testing.T) {
 	call("POST", runnerPath+"/report", grant.Token, "", reportJSON, 200)
 	call("POST", runnerPath+"/report", grant.Token, "", reportJSON, 200)
 	call("POST", runnerPath+"/token", grant.Token, "", claimJSON, 409)
+	executionPath := "/v1/camps/" + c.ID + "/sessions/" + session.ID + "/execution"
+	assignment, _ := json.Marshal(camp.ExecutionInput{Location: "cloud", WorkspaceID: workspace.ID, ExpectedEpoch: 1, ExpectedSessionRevision: session.Revision, ExpectedTranscriptRevision: session.TranscriptRevision, ExpectedWorkspaceRevision: 3})
+	call("PUT", executionPath, "", uuid.NewString(), assignment, 401)
+	call("PUT", executionPath, tokens[1], uuid.NewString(), assignment, 404)
+	call("PUT", executionPath, tokens[0], uuid.NewString(), assignment, 200)
+	call("GET", executionPath, tokens[1], "", nil, 404)
+	call("GET", executionPath, tokens[0], "", nil, 200)
+	raw = call("POST", "/v1/camps/"+c.ID+"/sessions/"+session.ID+"/requests", tokens[0], uuid.NewString(), []byte(`{"prompt":"Use this workspace"}`), 201)
+	var request camp.Request
+	if err = json.Unmarshal(raw, &request); err != nil {
+		t.Fatal(err)
+	}
+	requestClaim := uuid.NewString()
+	requestBody, _ := json.Marshal(map[string]string{"claim_id": requestClaim})
+	call("POST", runnerPath+"/requests/claim", tokens[0], "", requestBody, 401)
+	call("POST", runnerPath+"/requests/claim", grant.Token, "", requestBody, 200)
+	startBody, _ := json.Marshal(camp.RequestAction{Action: "start", LeaseToken: requestClaim})
+	call("POST", "/v1/camps/"+c.ID+"/requests/"+request.ID+"/actions", tokens[0], uuid.NewString(), startBody, 404)
+	call("POST", runnerPath+"/requests/"+request.ID+"/actions", grant.Token, uuid.NewString(), startBody, 200)
+	finishBody, _ := json.Marshal(camp.RequestAction{Action: "finish", LeaseToken: requestClaim, Outcome: "completed", Evidence: "Fixture provider receipt"})
+	call("POST", runnerPath+"/requests/"+request.ID+"/actions", grant.Token, uuid.NewString(), finishBody, 200)
+	localBody, _ := json.Marshal(camp.ExecutionInput{Location: "local", ExpectedEpoch: 2, ExpectedSessionRevision: session.Revision, ExpectedTranscriptRevision: session.TranscriptRevision})
+	call("PUT", executionPath, tokens[0], uuid.NewString(), localBody, 200)
 	call("POST", readPath+"/cancel", tokens[1], uuid.NewString(), []byte(`{"expected_revision":1}`), 404)
 	raw = call("POST", readPath+"/cancel", tokens[0], uuid.NewString(), []byte(`{"expected_revision":3}`), 200)
 	if err = json.Unmarshal(raw, &workspace); err != nil || workspace.State != "cancelled" {
