@@ -25,6 +25,7 @@ actor WorkerFixture: CampPublishingTransport {
     func snapshot() -> (CloudRequest, [String: [String]], Bool) { (request, calls, held) }
     func release() { gate?.resume(); gate = nil }
     func perform(_ operation: CampPublication) async throws -> Data {
+        if operation.kind == "handoff" { return Data() }
         calls[operation.kind, default: []].append(operation.key)
         if operation.kind == "read" {
             if operation.path.contains("/sessions/") { return try CampWire.encoder().encode(session) }

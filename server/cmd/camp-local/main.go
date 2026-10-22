@@ -25,7 +25,7 @@ func main() {
 	var result any
 	if err == nil {
 		app := localcli.New(cfg)
-		if len(os.Args) == 2 && os.Args[1] == "conversation" {
+		if len(os.Args) == 2 && (os.Args[1] == "conversation" || os.Args[1] == "transfer-source") {
 			var input, output *os.File
 			input, err = pollableInput(os.Stdin)
 			if err == nil {
@@ -36,7 +36,11 @@ func main() {
 				defer output.Close()
 				stopIO := context.AfterFunc(ctx, func() { _ = input.Close(); _ = output.Close() })
 				defer stopIO()
-				err = app.Conversation(ctx, input, output)
+				if os.Args[1] == "transfer-source" {
+					err = app.HoldTransferSource(ctx, input, output)
+				} else {
+					err = app.Conversation(ctx, input, output)
+				}
 			}
 			if err == nil {
 				return

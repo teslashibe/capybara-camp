@@ -282,10 +282,9 @@ against the manifest before posting to `/ack`:
 The server validates the source identity, claim, hashes and current snapshots.
 Repeating the same acknowledgement returns its existing result. The `stopped`
 field is a declaration from the authenticated source client; the API does not
-itself stop a CLI. The cloud worker now supplies that declaration only after
+itself stop a CLI. The cloud worker supplies that declaration only after
 reconciling its saved turn, verifying that no active turn journal remains, and
-checking the selected source files against the manifest. The native source
-client still needs this stop/verification integration.
+checking the selected source files against the manifest.
 
 Cloud handoff claims are saved in a private journal before submission. The
 worker rechecks source files when retrying an acknowledgement, including after
@@ -294,6 +293,21 @@ remain readable and replayable during a hold, so a lost finish response cannot
 prevent the worker from reaching an idle state. New turns remain blocked, and
 the scheduler skips held sessions. The source stays assigned until the separate
 final commit is implemented and accepted.
+
+The source Mac consumes handoff jobs through its existing local worker. It
+persists the claim before submission, resolves the original imported session,
+and sends the reviewed payload to the bundled Go helper. The helper acquires
+the same process-held lock as local chat, checks external session ownership,
+and verifies the selected Git files. It refuses a session still open in Codex
+or Claude; it does not interrupt another application's provider process.
+
+The helper remains alive after acknowledgement, retains the lock, and checks
+for file or ownership changes during the hold. The Mac worker checks it again
+before acknowledging. A restart reacquires and rechecks the source; a lost
+acknowledgement is reconciled through the existing claim. Release, expiry,
+sign-out or a closed app ends the local hold. A failed source check invalidates
+the handoff without starting a model turn. Idle discovery is bounded to one
+check every ten seconds and handoff events wake it immediately.
 
 The owner reads status at
 `GET /v1/camps/{camp}/sessions/{session}/handoffs/{handoff}` and releases it by
@@ -306,15 +320,13 @@ history migration operation yet.
 
 The agreed transfer flow still requires:
 
-1. Wire the native source client to the handoff hold, close and verify its
-   provider instance, and acknowledge terminal state without losing queued work
-2. Transfer transcript, child-session and attachment provenance, including
+1. Transfer transcript, child-session and attachment provenance, including
    provider continuation and commits not available from the remote repository
-3. Native conflict review and the complete base-repository credential policy,
+2. Native conflict review and the complete base-repository credential policy,
    followed by cloud-to-local and cross-account destination acceptance
-4. A durable destination receipt followed by one atomic assignment-epoch
+3. A durable destination receipt followed by one atomic assignment-epoch
    change, with replay-safe recovery and the source retained on failure
-5. Native review, standalone-plan history migration, and local-to-cloud and
+4. Native review, standalone-plan history migration, and local-to-cloud and
    cloud-to-local acceptance through both provider clients
 
 The capture and upload layers do not complete any destination handoff. Its
@@ -330,6 +342,9 @@ go test -race ./internal/transfer
 go test -race -run 'TestTransfer|TestWorkerStagesTransfer|TestRunnerHandoff|TestWorkspaceHTTP|TestMigration' \
   ./internal/camp ./internal/httpapi ./internal/database ./internal/runner
 go vet ./internal/transfer ./internal/camp ./internal/httpapi
+# From the repository root, including the real bundled Go source guard:
+cd ..
+./test.sh CampHandoffTests CampWorkerTests CampExecutionTests
 ```
 
 The tests use temporary Git repositories. They cover additions, deletions,
@@ -350,5 +365,7 @@ idempotent acknowledgement, queue preservation, expiry, release and source drift
 The source-runner tests use both provider protocol fixtures, verify their actual
 subprocesses have exited, recover a lost finish response during a hold, and retry
 a lost handoff acknowledgement. Changed source files are rejected without
-starting another provider turn. Live provider and native-source acceptance
-remain separate gates.
+starting another provider turn. Native tests cover claim and acknowledgement
+response loss, relaunch, retained locks, changed files, scope erasure and the
+real helper against a temporary Git repository. Live provider, native transfer
+review and two-Mac acceptance remain separate gates.

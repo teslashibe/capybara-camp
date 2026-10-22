@@ -19,6 +19,7 @@ import SwiftUI
     private let cache: CampCache?
     private let automatic: Bool
     private let heartbeatInterval: TimeInterval
+    private let handoff: CampLocalHandoff
     private var context: Context?
     private var sessions: [CloudSession] = []
     private var task: Task<Void, Never>?
@@ -37,6 +38,7 @@ import SwiftUI
 
     init(cache: CampCache?, automatic: Bool = true, heartbeatInterval: TimeInterval = 10) {
         self.cache = cache; self.automatic = automatic; self.heartbeatInterval = heartbeatInterval
+        self.handoff = CampLocalHandoff(cache: cache)
     }
     deinit { task?.cancel(); leaseTask?.cancel() }
     var activePlanningCount: Int { reservedPlanningSession != nil || activeAttempt?.request.isPlanning == true ? 1 : 0 }
@@ -45,6 +47,7 @@ import SwiftUI
     }
 
     func attach(scope: CloudScope?, actor: CloudActor?, transport: (any CampPublishingTransport)?, sessions: [CloudSession]) {
+        handoff.attach(scope: scope, actor: actor, transport: transport)
         let priorEligibility = Set(self.sessions.map { "\($0.id):\($0.ownerUserId):\($0.ownerDeviceId):\($0.externalOwner)" })
         let nextEligibility = Set(sessions.map { "\($0.id):\($0.ownerUserId):\($0.ownerDeviceId):\($0.externalOwner)" })
         self.sessions = sessions
@@ -77,7 +80,7 @@ import SwiftUI
         if request.id == preparingRequestID, ["cancel_requested", "cancelled", "outcome_unknown"].contains(request.state) { preparationInterruption = request.state }
         wake()
     }
-    func scan() { hasWorkHint = true; queueSignal &+= 1; wake() }
+    func scan() { hasWorkHint = true; queueSignal &+= 1; handoff.wake(); wake() }
     private func check(_ c: Context) throws {
         guard context?.generation == c.generation, !Task.isCancelled else { throw CancellationError() }
     }
@@ -126,6 +129,10 @@ import SwiftUI
             for attempt in saved where attempt.state == "finish_pending" { try await settle(attempt, c) }
             if let attempt = saved.first(where: { $0.state == "claimed" }) {
                 try await begin(attempt, c); return
+            }
+            if saved.allSatisfy({ ["finish_pending","completed","failed","cancelled"].contains($0.state) }) {
+                handoff.nativeSession = nativeSession; handoff.available = available
+                if try await handoff.poll() { status = handoff.status; return }
             }
             guard saved.count < 200 else { status = "Review unconfirmed work before starting more requests"; return }
             guard hasWorkHint else { return }

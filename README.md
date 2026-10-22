@@ -216,8 +216,10 @@ runner, stages files in a private checkout and validates its receipt. These are
 internal parts of the unfinished transfer flow: an upload alone does not move
 the session or apply files. The source cloud runner can now verify an idle
 provider and the reviewed files under a temporary session hold. It retries lost
-acknowledgements without restarting the provider. Native source verification,
-complete history migration and the final assignment change remain unfinished.
+acknowledgements without restarting the provider. The Mac worker also holds the
+local conversation lock while the bundled Go helper checks its source files.
+Complete history migration, the native transfer review and the final assignment
+change remain unfinished.
 See the [transfer contract](docs/transfer-payload.md) for ownership, limits,
 recovery and the remaining handoff work.
 

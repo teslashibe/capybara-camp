@@ -78,16 +78,38 @@ func revision(ctx context.Context, dir string) (string, string, error) {
 	return head, name, nil
 }
 
-func verifyRoot(ctx context.Context, dir string) error {
+// RepositoryRoot resolves a session's working directory to its Git worktree.
+// Session CLIs may start in a subdirectory; manifest paths are repository-relative.
+func RepositoryRoot(ctx context.Context, dir string) (string, error) {
 	if !filepath.IsAbs(dir) {
-		return ErrInput
+		return "", ErrInput
 	}
 	top, err := git(ctx, dir, 8192, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	canonical, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", ErrRepository
+	}
+	root, err := filepath.EvalSymlinks(strings.TrimSpace(string(top)))
+	if err != nil || !filepath.IsAbs(root) {
+		return "", ErrRepository
+	}
+	relative, err := filepath.Rel(root, canonical)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return "", ErrRepository
+	}
+	return root, nil
+}
+
+func verifyRoot(ctx context.Context, dir string) error {
+	root, err := RepositoryRoot(ctx, dir)
 	if err != nil {
 		return err
 	}
 	canonical, err := filepath.EvalSymlinks(dir)
-	if err != nil || filepath.Clean(strings.TrimSpace(string(top))) != canonical {
+	if err != nil || root != canonical {
 		return ErrRepository
 	}
 	return nil

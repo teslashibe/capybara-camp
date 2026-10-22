@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 import Combine
 
-private func conversationChunk(_ handle: FileHandle, limit: Int) throws -> Data {
+func conversationChunk(_ handle: FileHandle, limit: Int) throws -> Data {
     var buffer = [UInt8](repeating: 0, count: limit)
     while true {
         let count = Darwin.read(handle.fileDescriptor, &buffer, buffer.count)
@@ -288,7 +288,7 @@ struct ConversationResult: Sendable {
     }
 }
 
-private final class ConversationInput: @unchecked Sendable {
+final class ConversationInput: @unchecked Sendable {
     private static let ignoreBrokenPipe: Void = { _ = Darwin.signal(SIGPIPE, SIG_IGN) }()
     private let lock = NSLock()
     private var handle: FileHandle?

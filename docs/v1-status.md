@@ -38,8 +38,8 @@ and reports the required file-verification receipt. The integration test uses
 the real Go API and Git transport with disposable PostgreSQL, drops download and
 completion responses, and verifies recovery without changing the source. Schema
 21 retains older uploads and adds the destination binding. Ordinary Run on
-assignment rejects these workspaces until the final handoff exists. Native source
-verification, complete history/commit migration and transfer review remain open.
+assignment rejects these workspaces until the final handoff exists. Complete
+history/commit migration and native transfer review remain open.
 The targeted upload, staging and runner tests pass, including an abrupt
 staging-process exit and recovery, owner-only access, stale snapshots, concurrent
 quotas and migration retention. Native end-to-end transfer and deployed Linux
@@ -61,9 +61,23 @@ The cloud source worker now reconciles its terminal turn, verifies the reviewed
 source files and acknowledges the handoff under a durable claim. Tests for both
 provider protocols confirm the actual fixture processes have exited, recover
 lost finish and handoff responses, and reject changed files without starting
-another model turn. Native source integration, history migration and the final
-assignment commit remain open. The complete Go race suite, vet and Linux command
+another model turn. History migration and the final assignment commit remain
+open. The complete Go race suite, vet and Linux command
 build pass with this integration at schema 22.
+
+The native source worker now saves its handoff claim, resolves the original
+profile and holds the local conversation lock through the bundled Go helper.
+It verifies the reviewed Git files before acknowledging and retains the lock
+until release or expiry. Reconnection rechecks the source. A session still open
+in an external client is refused. Full native transfer review, live-provider
+acceptance and the final assignment change are still pending.
+The full native regression suite passes, including source verification with
+the real Go helper and temporary Git files. It covers lost claim/acknowledgement
+responses, app-worker restart, concurrent-start refusal, file drift, expiry,
+sign-out and revocation during verification. Go race tests and vet pass; the
+transfer and local-adapter suites also pass after adding subdirectory support,
+and the Linux commands build. These are synthetic/local checks, not a completed
+native transfer walkthrough or cloud deployment.
 
 The native account form and synthetic provider walkthrough now pass locally.
 The Go controller provisions per-installation workers, renews managed grants,

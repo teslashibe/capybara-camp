@@ -260,6 +260,7 @@ import SwiftUI
         if event.kind == "transcript.updated", let id = event.payload.sessionId { transcriptChanged?(id) }
         if let id = event.payload.sessionId { live.invalidate(id) }
         if event.kind.hasPrefix("request.") { refreshControls() }
+        if event.kind == "transfer.handoff" { worker.scan() }
         if event.kind == "planning.changed", let id = event.payload.planId { planningChanged?(id) }
         if event.kind == "notification.changed" || event.kind.hasPrefix("session.") || event.kind.hasPrefix("planning.") || event.kind.hasPrefix("member.") { scheduleNotifications(generation: token) }
         if event.payload.sessionId == nil && event.kind != "notification.changed" {

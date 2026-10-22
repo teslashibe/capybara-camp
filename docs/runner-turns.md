@@ -80,8 +80,9 @@ turn receipt. Provider calls have closed and joined before that journal is
 cleared. It then claims the handoff, verifies the reviewed source files and
 acknowledges their hashes. The claim survives response loss and every retry
 rechecks the source. Held sessions are excluded from new work, while terminal
-receipt reconciliation remains available. The native source path and final
-assignment commit are still pending.
+receipt reconciliation remains available. The native source worker uses the
+bundled Go helper to hold its conversation lock and verify its files. The final
+assignment commit and full transfer review are still pending.
 
 Schema 17 permits multiple ready workspaces per installation while retaining a
 unique preparing workspace. It adds request/workspace scheduling indexes and

@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 mkdir -p build/test-support
-(cd server && go test -race ./internal/localcli ./internal/config ./cmd/camp-local ./cmd/camp-test-provider && go build -o ../build/camp-test-provider ./cmd/camp-test-provider)
+(cd server && go test -race ./internal/localcli ./internal/config ./cmd/camp-local ./cmd/camp-test-provider && go build -o ../build/camp-test-provider ./cmd/camp-test-provider && go build -o ../build/camp-local ./cmd/camp-local)
 
 # Compile the shared app code once; every suite exercises that same module.
 swiftc -parse-as-library -emit-library -emit-module -enable-testing -D CAMP_TESTING \
@@ -14,7 +14,7 @@ swiftc -parse-as-library -emit-library -emit-module -enable-testing -D CAMP_TEST
   -o build/test-support/libCampTestSupport.dylib
 WORK="$(mktemp -d "$ROOT/build/.camp-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-SUITES=(CampStateTests CampCloudTests CampSharingTests LocalConversationTests CampWorkerTests SessionMentionsTests LocalPlanningTests ExecutionApprovalTests ImplementationFlowTests CampNotificationTests CampPlanningTests CodexActivityTests CampProjectsTests PermissionSettingsTests CampOnboardingTests CampProviderAccountTests CampGitConnectionTests CampExecutionTests ExecutionDefaultsTests)
+SUITES=(CampStateTests CampCloudTests CampSharingTests LocalConversationTests CampWorkerTests CampHandoffTests SessionMentionsTests LocalPlanningTests ExecutionApprovalTests ImplementationFlowTests CampNotificationTests CampPlanningTests CodexActivityTests CampProjectsTests PermissionSettingsTests CampOnboardingTests CampProviderAccountTests CampGitConnectionTests CampExecutionTests ExecutionDefaultsTests)
 if [ "$#" -gt 0 ]; then
   for requested in "$@"; do
     found=false

@@ -4,15 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -195,37 +192,12 @@ func (a *App) runConversation(ctx context.Context, request conversationRequest, 
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(a.Config.Support, 0700); err != nil {
-		return errors.New("Could not open Camp's local state")
+	locks, err := a.sessionLocks()
+	if err != nil {
+		return err
 	}
-	locks := map[string]*os.File{}
-	defer func() {
-		for _, lock := range locks {
-			_ = lock.Close()
-		}
-	}()
-	acquire := func(key string) error {
-		if locks[key] != nil {
-			return nil
-		}
-		digest := sha256.Sum256([]byte(key))
-		path := filepath.Join(a.Config.Support, "run-"+hex.EncodeToString(digest[:])+".lock")
-		file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
-		if err != nil {
-			return errors.New("Could not acquire the local session lock")
-		}
-		info, err := file.Stat()
-		if err != nil || !info.Mode().IsRegular() || !ownedByUser(info) || info.Mode().Perm()&0077 != 0 {
-			file.Close()
-			return errors.New("The local session lock is not private to this user")
-		}
-		if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-			file.Close()
-			return errors.New("This session is already running in Capybara Camp")
-		}
-		locks[key] = file
-		return nil
-	}
+	defer locks.close()
+	acquire := locks.acquire
 	key := session.Provider + ":" + session.Root + ":" + session.SessionID
 	if planning {
 		key = "planning:" + session.Provider
