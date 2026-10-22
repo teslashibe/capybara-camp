@@ -106,6 +106,11 @@ The shorter planning panes wrap their own text and follow the bottom after
 resizing. Recorded planning settings appear beside each response. Shared-state
 and final keyboard/permission/notification checks remain pending.
 
+The same viewport now handles main and child chats. A separate native interaction
+harness verified running/approval board transitions, reported effort/speed,
+queue editing, steering and cancellation with synthetic Go responses. It makes
+no model calls and does not replace live provider or two-Mac acceptance tests.
+
 The GitHub QA walkthrough also found that Command-Q took effect after closing
 the Manage sources sheet, but did not close the app from inside that sheet.
 Check quit behavior for every modal during the final keyboard-access audit.

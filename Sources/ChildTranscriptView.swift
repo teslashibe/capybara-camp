@@ -22,12 +22,12 @@ struct ChildTranscriptView: View {
             }.padding(22)
             Divider()
             ScrollViewReader { proxy in
-                ScrollView {
+                CampTranscriptViewport(padding: 25, followBottom: { proxy.scrollTo("child-bottom", anchor: .bottom) }) {
                     VStack(alignment: .leading, spacing: 22) {
                         if !error.isEmpty { Text(error).font(.system(size: 12)).foregroundStyle(Color.orange) }
                         ForEach(messages) { MessageView(message: $0) }
                         Color.clear.frame(height: 1).id("child-bottom")
-                    }.padding(25).frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }.onChange(of: messages) { _, _ in
                     DispatchQueue.main.async { proxy.scrollTo("child-bottom", anchor: .bottom) }
                 }

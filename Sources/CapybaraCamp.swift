@@ -1392,11 +1392,6 @@ struct SessionCard: View {
     }
 }
 
-struct TranscriptBottomKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
 struct RecentSessionsList: View {
     @ObservedObject var store: CampStore
     var body: some View {
@@ -1508,9 +1503,8 @@ struct ChatView: View {
                     if store.planning.ticket(s.id)?.implementation != nil { ImplementationStatusView(store: store, planning: store.planning, id: s.id) }
                     if let live = store.activityFor(s) { Text("\(live.owner) · \(live.state) · Model choice applies to the next Camp reply").font(.system(size: 11)).foregroundStyle(campGreen).padding(.bottom, 8) }
                     HStack { Text(s.sourceLabel).font(.system(size: 10, weight: .medium)); if !s.accountID.isEmpty { Text("· author \(s.accountID.prefix(8))").font(.system(size: 10)).foregroundStyle(campMuted) }; Spacer(); Menu(store.stage(s).rawValue) { ForEach(Stage.allCases, id: \.self) { stage in Button(stage.rawValue) { store.move(s.id, stage) } } }.fixedSize() }.padding(.horizontal, 22).padding(.vertical, 10)
-                    GeometryReader { viewport in
                       ScrollViewReader { proxy in
-                        ScrollView {
+                        CampTranscriptViewport(padding: 25, followBottom: { proxy.scrollTo("bottom", anchor: .bottom) }) {
                             // Pages are bounded to 120 messages; measure their real heights so
                             // scrolling to the end cannot land in a lazy stack's estimated gap.
                             VStack(alignment: .leading, spacing: 22) {
@@ -1519,11 +1513,8 @@ struct ChatView: View {
                                 ForEach(store.messages) { m in MessageView(message: m).id(m.id) }
                                 if store.runningID == s.id { MessageView(message: Message(id: "live", role: "assistant", text: store.liveText.isEmpty ? "Thinking…" : store.liveText)) }
                                 Color.clear.frame(height: 1).id("bottom")
-                                    .background(GeometryReader { geometry in
-                                        Color.clear.preference(key: TranscriptBottomKey.self, value: geometry.frame(in: .named("transcript")).maxY)
-                                    })
-                            }.padding(25)
-                        }.coordinateSpace(name: "transcript")
+                            }
+                        }
                         .onReceive(store.$messages) { new in
                             let target = store.notificationMessageID.flatMap { id in new.contains(where: { $0.id == id }) ? id : nil } ?? "bottom"
                             DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo(target, anchor: .bottom) } }
@@ -1533,9 +1524,7 @@ struct ChatView: View {
                             DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo("bottom", anchor: .bottom) } }
                         }
                         .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
-                        .onChange(of: viewport.size.height) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
                       }
-                    }
                     VStack(alignment: .leading, spacing: 9) {
                         if let conversation = store.conversation(s) { ConversationApprovalsView(conversation: conversation) }
                         if let remote = store.cloudSessions[s.id] { CloudRequestQueueView(cloud: store.cloud, session: remote) }

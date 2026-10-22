@@ -141,6 +141,52 @@ func run(scenario string, args []string) error {
 		return err
 	}
 	switch scenario {
+	case "ui-audit":
+		// Interactive synthetic transport for exercising the real native UI.
+		// This executable never invokes either provider or executes a command.
+		provider := text(object(r["session"])["provider"])
+		model := text(r["model"])
+		if model == "" {
+			model = "synthetic-model"
+		}
+		speed := "ultrafast"
+		if provider == "Claude" {
+			speed = "fast"
+		}
+		_ = emit(message{"type": "settings", "model": model, "effort": "high", "speed": speed})
+		_ = emit(message{"type": "started"})
+		prompt := strings.ToLower(text(r["prompt"]))
+		if strings.Contains(prompt, "complete") {
+			_ = emit(message{"type": "text", "text": "Synthetic queued response completed"})
+			break
+		}
+		_ = emit(message{"type": "text", "text": "Synthetic streaming response\n\nThis deliberately long paragraph checks wrapping, readable response spacing, and whether the chat follows its latest content when the window changes width. It uses the native conversation transport without calling Codex or Claude.\n\nThe next input can steer this response, queue a separate prompt, or stop it. The final line must remain visible.\n\nLatest synthetic streaming marker"})
+		approvalID := "e8a1e25a-2b71-4fb9-8122-9ad03a842993"
+		if strings.Contains(prompt, "approval") {
+			_ = emit(approval(approvalID, "command"))
+		}
+		for {
+			control, err := i.request()
+			if err != nil {
+				return err
+			}
+			switch text(control["type"]) {
+			case "stop":
+				return emit(message{"type": "cancelled"})
+			case "steer":
+				_ = emit(message{"type": "boundary"})
+				_ = emit(message{"type": "steerAccepted", "requestID": control["id"]})
+				_ = emit(message{"type": "text", "text": "\n\nSteering received: " + text(control["text"])})
+				if strings.Contains(strings.ToLower(text(control["text"])), "finish") {
+					return emit(message{"type": "done"})
+				}
+			case "approval":
+				_ = emit(message{"type": "approvalResolved", "requestID": approvalID})
+				_ = emit(message{"type": "boundary"})
+				_ = emit(message{"type": "text", "text": "\n\nSynthetic approval recorded; no command was executed"})
+				return emit(message{"type": "done"})
+			}
+		}
 	case "reported-settings":
 		_ = emit(message{"type": "settings", "model": "actual-model", "effort": "ultra", "speed": "ultrafast"})
 		_ = emit(message{"type": "started"})
