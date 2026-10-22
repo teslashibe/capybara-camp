@@ -1572,11 +1572,10 @@ struct RecentSessionsList: View {
                     Spacer()
                     Text("\(store.recentSessions.count)").font(.system(size: 10)).foregroundStyle(campMuted)
                 }.padding(.horizontal, 16).padding(.top, 10)
-                Menu { ForEach(["All types", "Planning", "Codex", "Claude"], id: \.self) { value in Button(value) { store.setRecentType(value) } } } label: {
-                    CampDropdownLabel(title: store.recentType, icon: "line.3.horizontal.decrease")
-                }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).font(.system(size: 11)).controlSize(.small)
-                    .padding(.horizontal, 14)
-                    .help("Filter recent sessions").accessibilityLabel("Filter recent sessions").accessibilityValue(store.recentType)
+                CampDropdown(title: store.recentType, accessibilityLabel: "Filter recent sessions", icon: "line.3.horizontal.decrease",
+                    entries: ["All types", "Planning", "Codex", "Claude"].map { value in
+                        CampMenuEntry(title: value, checked: store.recentType == value, action: { store.setRecentType(value) })
+                    }).padding(.horizontal, 14)
                 ScrollView {
                 LazyVStack(spacing: 5) {
                     ForEach(store.recentSessions) { s in CampPlainButton { store.open(s) } label: {
@@ -1914,54 +1913,58 @@ struct ModelSettingsMenu: View {
         .disabled(locked).accessibilityLabel("Model settings for \(title)")
         .accessibilityValue("\(displayedModel), \(effortTitle) effort, \(speedTitle)")
     }
-    @ViewBuilder private var modelOptions: some View {
-        Button("Use session model") { selectModel("") }
-        if !sessionModel.isEmpty && !models.contains(where: { $0.id == sessionModel && ($0.showInPicker || provider == "Claude") }) { Button(sessionModel) { selectModel(sessionModel) } }
+    private var modelEntries: [CampMenuEntry] {
+        var result = [CampMenuEntry(title: "Use session model", action: { selectModel("") })]
+        if !sessionModel.isEmpty && !models.contains(where: { $0.id == sessionModel && ($0.showInPicker || provider == "Claude") }) {
+            result.append(CampMenuEntry(title: sessionModel, action: { selectModel(sessionModel) }))
+        }
         if provider == "Claude" {
-            Section("Latest aliases") {
-                ForEach(models.filter { !$0.id.hasPrefix("claude-") && $0.showInPicker }) { option in modelOption(option) }
-            }
-            Section("Model versions") {
-                ForEach(models.filter { $0.id.hasPrefix("claude-") }) { option in modelOption(option) }
-            }
+            result.append(CampMenuEntry(title: "Latest aliases"))
+            result += models.filter { !$0.id.hasPrefix("claude-") && $0.showInPicker }.map(modelEntry)
+            result.append(CampMenuEntry(title: "Model versions"))
+            result += models.filter { $0.id.hasPrefix("claude-") }.map(modelEntry)
         } else {
-            Section("Model versions") { ForEach(models.filter(\.showInPicker)) { option in modelOption(option) } }
+            result.append(CampMenuEntry(title: "Model versions"))
+            result += models.filter(\.showInPicker).map(modelEntry)
         }
+        return result
     }
-    private func modelOption(_ option: ModelOption) -> some View {
-        Button { selectModel(option.id) } label: { row(option.label, checked: option.id == modelLabel) }
+    private func modelEntry(_ option: ModelOption) -> CampMenuEntry {
+        CampMenuEntry(title: option.label, checked: option.id == modelLabel, action: { selectModel(option.id) })
     }
-    @ViewBuilder private var effortOptions: some View {
-        Text("More reasoning can take longer and use more tokens")
-        Button { tune("", nil) } label: { row("Default", checked: choice.effort.isEmpty) }
-        ForEach(caps.efforts, id: \.self) { level in
-            Button { tune(level, nil) } label: { row(Self.effortName(level), checked: choice.effort == level) }
+    private var effortEntries: [CampMenuEntry] {
+        var result = [CampMenuEntry(title: "More reasoning can take longer and use more tokens"),
+            CampMenuEntry(title: "Default", checked: choice.effort.isEmpty, action: { tune("", nil) })]
+        result += caps.efforts.map { level in
+            CampMenuEntry(title: Self.effortName(level), checked: choice.effort == level, action: { tune(level, nil) })
         }
-        if caps.efforts.isEmpty { Text("Effort is not advertised for this model") }
+        if caps.efforts.isEmpty { result.append(CampMenuEntry(title: "Effort is not advertised for this model")) }
+        return result
     }
-    @ViewBuilder private var speedOptions: some View {
-        Text("Faster modes can use more allowance or credits")
-        ForEach(caps.speeds, id: \.self) { speed in
-            Button { tune(nil, speed) } label: { row(Self.speedName(speed), checked: choice.speed == speed) }
+    private var speedEntries: [CampMenuEntry] {
+        var result = [CampMenuEntry(title: "Faster modes can use more allowance or credits")]
+        result += caps.speeds.map { speed in
+            CampMenuEntry(title: Self.speedName(speed), checked: choice.speed == speed, action: { tune(nil, speed) })
         }
-        if provider == "Claude" && !caps.speeds.contains("fast") { Text("Fast requires a supported Opus model") }
+        if provider == "Claude" && !caps.speeds.contains("fast") { result.append(CampMenuEntry(title: "Fast requires a supported Opus model")) }
+        return result
     }
+    private var modelOptions: some View { CampMenuEntries(entries: modelEntries) }
+    private var effortOptions: some View { CampMenuEntries(entries: effortEntries) }
+    private var speedOptions: some View { CampMenuEntries(entries: speedEntries) }
     private var modelField: some View {
         field("Model") {
-            Menu { modelOptions } label: { CampDropdownLabel(title: displayedModel) }
-                .accessibilityLabel("Model settings for \(title)").accessibilityValue(displayedModel)
+            CampDropdown(title: displayedModel, accessibilityLabel: "Model settings for \(title)", entries: modelEntries)
         }
     }
     private var effortField: some View {
         field("Effort") {
-            Menu { effortOptions } label: { CampDropdownLabel(title: effortTitle) }
-                .accessibilityLabel("Effort for \(title)").accessibilityValue(effortTitle)
+            CampDropdown(title: effortTitle, accessibilityLabel: "Effort for \(title)", entries: effortEntries)
         }
     }
     private var speedField: some View {
         field("Speed") {
-            Menu { speedOptions } label: { CampDropdownLabel(title: speedTitle) }
-                .accessibilityLabel("Speed for \(title)").accessibilityValue(speedTitle)
+            CampDropdown(title: speedTitle, accessibilityLabel: "Speed for \(title)", entries: speedEntries)
         }
     }
     private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
@@ -1972,9 +1975,6 @@ struct ModelSettingsMenu: View {
             if !planningRow { ProviderMark(provider: provider, size: 13, muted: true) }
             Text(displayedModel).font(.system(size: planningRow ? 9 : 10)).foregroundStyle(campInk).lineLimit(1)
         }.frame(minHeight: 24)
-    }
-    @ViewBuilder func row(_ title: String, checked: Bool) -> some View {
-        if checked { Label(title, systemImage: "checkmark") } else { Text(title) }
     }
 }
 struct MessageView: View {

@@ -87,6 +87,30 @@ were skipped in this Tab sequence. The far-right child-row pointer attempt
 again returned no available windows. This check does not close those findings
 or the full interaction audit.
 
+The next rebuild fixes the Model/Effort/Speed and Recent filter keyboard gap.
+Those fields retain `CampDropdownLabel` and use one native menu trigger for
+pointer, accessibility and keyboard activation. Compact card menus and expanded
+fields consume the same option/action lists. The bridge holds its native button
+weakly; menu actions retain only the selection snapshot while the menu is open.
+
+Native computer use verified Tab/Shift-Tab to the fields, Space opening Model,
+Escape cancellation, Return opening Effort, type selection plus Return saving
+High, and Down opening Speed. Sonnet still exposes only Standard speed. The
+Recent filter opened with Space and selected Codex through keyboard input,
+showing six Codex sessions while preserving the open Claude chat. Pointer clicks
+at Model's lower-left padding and Effort/Speed's lower-right padding opened the
+correct menus. The following child-row edge check failed at screenshot capture;
+that does not invalidate the three completed menu clicks or prove that child
+target passed. Captures: `native-menu-keyboard-oct22.png` and
+`native-dropdowns-filter-oct22.png` under `build/ui-audit/`.
+
+`build/native-menu-final-tests.log` records the passing state and imported-plan
+suites and Go helper race checks. Strict deep bundle verification passes.
+VoiceOver speech and the remaining whole-app pointer/keyboard inventory are
+still release gates. The automation exposes each native popup's label and value,
+but does not report the focused element while its SwiftUI focus wrapper owns
+keyboard focus; the visible focus ring and menu activation were checked directly.
+
 ## Transfer review
 
 `tools/transfer-ui-audit.sh` builds a separate native window using the production
@@ -229,6 +253,7 @@ remain unverified by pointer; this retry does not close the whole-app audit.
 | UI-29 | Provider tiles labelled unconfirmed or failed planning work as Ready or Draft ready | One presentation function now serves local and shared planning. Native synthetic-state checks verify Needs review, Failed, Paused, Cancelled and Reviewed; imported/local regressions pass. Status is also exposed to accessibility |
 | UI-30 | Tab skipped planning navigation and stages; focus alone did not make Space activate them | The shared plain button now supports focus and Space/Return activation. Native checks passed provider drill-down, Both chats, Reviews, reverse focus and skipping disabled Implementation. The remaining whole-app keyboard inventory is open |
 | UI-31 | Tab skipped the main/child chat navigation and Recent sessions | Shared keyboard handling now reaches those rows and the child footer. Native checks passed child selection, collapse/expand, both returns and recent-plan navigation. Menu keyboard access and the full pointer audit remain open |
+| UI-32 | Expanded model/effort/speed and Recent filter menus could be focused but did not open from the keyboard | Shared native menu activation now supports Space/Return/Down, native selection and Escape. Native checks passed keyboard selection and three padded-edge pointer clicks. Card menus reuse the same options and retain their compact labels. Full VoiceOver and whole-app audits remain open |
 
 Local captures are in `build/ui-audit/`: `reference-chat.png`,
 `reference-board.png`, `reference-planning.png`, `native-chat-before.png`, and

@@ -53,6 +53,13 @@ plan; the state, child-history and imported-planning regressions pass. Menu
 keyboard access and pointer edge checks remain open. See `docs/ui-audit.md`
 for the capture and the reverse-focus transition to repeat at final acceptance.
 
+The subsequent dropdown pass fixes keyboard activation for Model/Effort/Speed
+and the Recent-session filter using the existing field design and a shared
+native menu trigger. Native checks passed opening, selection, Escape and filter
+changes without losing the current chat. Pointer clicks in the padded edges
+of all three settings fields passed. Focused regressions and strict bundle
+verification pass; full VoiceOver and remaining interaction checks stay open.
+
 The October 22 transfer review now keeps checking the source hold while the
 user reviews permissions. Computer use reproduced the stale Source verified
 label, then verified the correction with the real native handoff coordinator
