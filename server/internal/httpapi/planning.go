@@ -7,6 +7,12 @@ import (
 )
 
 func (a *API) planningRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/camps/{camp}/planning-sources", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		value, err := a.Camps.PlanningSources(r.Context(), u, r.PathValue("camp"), r.URL.Query().Get("project_id"), r.URL.Query().Get("account_id"))
+		if !fail(w, err) {
+			write(w, 200, value)
+		}
+	}))
 	mux.HandleFunc("POST /v1/camps/{camp}/planning", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		var input camp.PlanningInput
 		if !decode(w, r, &input) {

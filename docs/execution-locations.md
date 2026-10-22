@@ -6,6 +6,38 @@ Mac; Cloud means an explicitly assigned workspace and provider installation.
 Changing location does not silently choose another account or reroute queued
 prompts.
 
+## Defaults for new plans
+
+The Defaults tab in Manage sources and the Defaults onboarding step use the
+same controls. Save Local or Cloud, an optional single-plan provider and
+separate Codex/Claude profiles or accounts. Cloud also requires a project.
+These are private preferences for this Mac. Cloud choices are scoped by
+server, signed-in user and Camp, with no provider credentials in the file.
+Signing out retains the Cloud location preference so a new plan asks for
+sign-in instead of unexpectedly starting on this Mac. Another Camp login
+does not inherit the saved account IDs.
+
+Local planning uses the selected profile. An explicitly selected profile that
+is no longer available blocks creation until the user reviews the defaults.
+Leaving a profile unspecified allows the first available imported profile for
+that provider. Automatic provider selection uses the selected session's
+provider if available, otherwise Codex if available, otherwise Claude.
+
+Cloud planning requires an already prepared, assigned workspace in the
+selected account and project. The default project is used unless the board
+is filtered to another cloud project. For comparison, both selected accounts
+must have eligible workspaces. The newest updated eligible source for each
+provider is placed in a private draft, where its model, settings and execution
+assignment can be reviewed before Start. This does not create a new checkout
+or start a model automatically. Missing accounts or workspaces show an error;
+they do not fall back to another account or Local. A **Plan on this Mac** menu
+action explicitly overrides the location for that new draft.
+
+Changing defaults never edits an existing plan or moves a ticket. The Run on
+setup sheet prefers the configured account for new preparation, preserves a
+selected account if it becomes unavailable, and requires a replacement to be
+chosen explicitly.
+
 ## Moving into the cloud
 
 1. Copy a local transcript into a private Camp project, if it is not already
@@ -46,6 +78,16 @@ workspace records to the session owner only. It reuses the existing workspace
 authorization and representation. Other Camp members cannot read the owner's
 account or Git identities through this endpoint.
 
+`GET /v1/camps/{camp}/planning-sources?project_id={project}&account_id={account}`
+returns at most 100 of the caller's eligible prepared cloud sources, ordered
+by session update time. A source includes its ordinary session representation,
+account ID and repository name. Eligibility requires a ready assigned
+workspace, matching session/project revisions, an active project, connected
+provider and Git installations at their saved epochs, and unexpired provider
+credentials. Other members' sources are excluded, even when the sessions are
+shared. The planning command still revalidates the chosen assignment when
+Start is submitted and before each later phase.
+
 The execution response includes `requires_transfer` after a published cloud
 turn or a started implementation. Changing away from that workspace then
 requires the reviewed transfer protocol. Until that protocol is implemented,
@@ -53,8 +95,10 @@ the app explains the requirement and the server blocks the move.
 
 ## Remaining acceptance
 
-The complete history/base/ref/patch transfer flow and location defaults remain
-separate unfinished parts of V1. Native [cloud steering](cloud-controls.md) now
+The complete history/base/ref/patch transfer flow and per-planner destination
+selection remain unfinished parts of V1. Defaults currently select existing
+prepared cloud sources; creating a new workspace directly from a planning
+draft still needs implementation. Native [cloud steering](cloud-controls.md) now
 uses the chat composer. A plain repository
 checkout is not an accepted transfer of local edits. The signed-in native
 happy path has been exercised against the real local API and disposable

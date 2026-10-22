@@ -80,8 +80,7 @@ struct RunLocationView: View {
             HStack { Text("Run on").font(.title2); Spacer(); Button("Done") { dismiss() } }
             Text(session.title).font(.system(size: 14, weight: .medium)).lineLimit(2)
             Text("Currently \(currentLocation)").font(.system(size: 11)).foregroundStyle(campMuted)
-            CampSegmentedControl(options: [("Local", "Local"), ("Cloud", "Cloud")], selection: $location, icons: ["Local": "desktopcomputer", "Cloud": "cloud"])
-                .frame(width: 150).accessibilityLabel("Execution location")
+            ExecutionLocationPicker(selection: $location)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if busy { Text("Finish or stop the current turn before moving this session").font(.system(size: 12)).foregroundStyle(campMuted) }
@@ -175,7 +174,9 @@ struct RunLocationView: View {
             Picker("\(session.provider) cloud account", selection: $accountID) {
                 Text("Choose an account").tag("")
                 ForEach(candidates) { Text($0.label).tag($0.id) }
+                if !accountID.isEmpty, !candidates.contains(where: { $0.id == accountID }) { Text("Selected account unavailable").tag(accountID) }
             }
+            if !accountID.isEmpty, !candidates.contains(where: { $0.id == accountID }) { Text("Choose a connected account or reconnect the selected account").font(.caption).foregroundStyle(.orange) }
             if let message=candidates.first(where:{$0.id==accountID})?.workloadMessage { Text(message).font(.caption).foregroundStyle(campMuted) }
             HStack {
                 Button("Manage accounts") { manageAccounts = true }
@@ -202,7 +203,7 @@ struct RunLocationView: View {
                 Text("Cloud preparation uses this repository revision. Uncommitted local files are not copied.").font(.caption).foregroundStyle(campMuted)
             }
             if !git.error.isEmpty { Text(git.error).font(.caption).foregroundStyle(.orange) }
-            Button("Review move") { prepare(remote) }.disabled(busy || accountID.isEmpty || repositoryID == 0 || execution.working || execution.pending)
+            Button("Review move") { prepare(remote) }.disabled(busy || !candidates.contains(where: { $0.id == accountID }) || repositoryID == 0 || execution.working || execution.pending)
         }
     }
     @ViewBuilder func reviewForm(_ workspace: CloudWorkspace, remote: CloudSession) -> some View {
@@ -222,7 +223,11 @@ struct RunLocationView: View {
         }
         if execution.target?.location == "cloud", execution.target?.workspaceId == workspace.id { Label("Runs in Cloud", systemImage: "checkmark").font(.caption) }
     }
-    private func chooseAccount() { if !candidates.contains(where: { $0.id == accountID }) { accountID = candidates.first?.id ?? "" } }
+    private func chooseAccount() {
+        guard accountID.isEmpty else { return }
+        let saved = store.executionDefaults.value(for: cloud.scope).cloudAccounts[session.provider] ?? ""
+        accountID = workspace?.providerAccountId ?? (saved.isEmpty ? candidates.first?.id ?? "" : saved)
+    }
     private func prepare(_ remote: CloudSession) {
         guard let project, let repo = repositories.first(where: { $0.id == repositoryID }), let account = candidates.first(where: { $0.id == accountID }), let connection = git.selection else { return }
         Task { await execution.prepare(remote, input: CloudWorkspaceInput(providerAccountId: account.id, gitConnectionId: connection.id, githubInstallationId: git.selectedInstallation, repositoryId: repo.id, installationPage: git.installationPage, repositoryPage: git.repositoryPage, ref: ref, purpose: implementation ? "implementation" : "planning", expectedSessionRevision: remote.revision, expectedProjectRevision: project.version)) }

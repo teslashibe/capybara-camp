@@ -5,17 +5,58 @@ extension CampStore {
         var seen = Set<String>()
         return sessions.filter { $0.provider == provider && !$0.isCloud && !$0.isPlan && !$0.root.isEmpty && seen.insert($0.sourceID).inserted }
     }
-    func newPlan(mode: PlanningMode = .single) {
-        let preferred = selected.flatMap { ["Codex", "Claude"].contains($0.provider) ? $0.provider : nil } ?? (planningProfiles("Codex").isEmpty ? "Claude" : "Codex")
-        let peers = (mode == .single ? [preferred] : ["Codex", "Claude"]).compactMap { provider -> LocalPlanner? in
-            guard let source = planningProfiles(provider).first else { return nil }
-            return LocalPlanner(session: source, model: effectiveModel(source), tuning: tuning(source))
+    func newPlan(mode: PlanningMode = .single, location: String? = nil) {
+        guard !creatingPlan else { return }
+        executionDefaultsMessage = ""
+        guard executionDefaults.readable else { showExecutionDefaults(executionDefaults.error); return }
+        var defaults = executionDefaults.value(for: cloud.scope)
+        if let location { defaults.location = location }
+        if defaults.location == "Cloud" { newCloudPlan(mode: mode, defaults: defaults); return }
+        let available = Set(["Codex", "Claude"].filter { !planningProfiles($0).isEmpty })
+        let preferred = defaults.preferredProvider(selected: selected?.provider, localAvailable: available)
+        var peers: [LocalPlanner] = []
+        for provider in mode == .single ? [preferred] : ["Codex", "Claude"] {
+            let id = defaults.localProfiles[provider] ?? ""
+            let source = id.isEmpty ? planningProfiles(provider).first : planningProfiles(provider).first { $0.sourceID == id }
+            guard let source else { showExecutionDefaults("The default \(provider) profile has no available session. Review its profile before planning"); return }
+            peers.append(LocalPlanner(session: source, model: effectiveModel(source), tuning: tuning(source)))
         }
         if let id = planning.create(planners: peers, mode: mode), let plan = planning.ticket(id) {
             if projectFilter.hasPrefix("local:") { assignProject(plan.session,to:String(projectFilter.dropFirst(6))) }
             open(plan.session)
         }
         else { banner = planning.error }
+    }
+    func showExecutionDefaults(_ message: String) {
+        banner = message; executionDefaultsMessage = message; sourceTab = "Defaults"; sourceSheet = true
+    }
+    private func newCloudPlan(mode: PlanningMode, defaults: ExecutionPreferences) {
+        guard let scope = cloud.scope, sharedPlanning.ready else { showExecutionDefaults("Connect to your Camp before creating a cloud plan"); return }
+        let projectID = projectFilter.hasPrefix("cloud:") ? String(projectFilter.dropFirst(6)) : defaults.projectID
+        guard cloud.projects.contains(where: { $0.id == projectID && !$0.isArchived }) else { showExecutionDefaults("Choose a cloud project in execution defaults"); return }
+        let provider = defaults.preferredProvider(selected: selected?.provider, localAvailable: [])
+        let providers = mode == .single ? [provider] : ["Codex", "Claude"]
+        guard providers.allSatisfy({ !(defaults.cloudAccounts[$0] ?? "").isEmpty }) else { showExecutionDefaults("Choose a default cloud account for each planner"); return }
+        creatingPlan = true
+        Task {
+            defer { creatingPlan = false }
+            do {
+                var sources: [CloudPlanningSource] = []
+                for provider in providers {
+                    let choices = try await cloud.planningSources(projectID: projectID, accountID: defaults.cloudAccounts[provider]!)
+                    guard let source = choices.first(where: { $0.session.provider == provider }) else {
+                        throw CampError.message("The default \(provider) account has no available workspace in this project. Check its sign-in and prepare a session with Run on")
+                    }
+                    sources.append(source)
+                }
+                guard cloud.scope == scope, executionDefaults.value(for: scope) == defaults else { throw CampError.message("Execution defaults changed. Review them before creating the plan") }
+                try await cloud.installPlanningSources(sources, scope: scope)
+                let input = CloudPlanningInput(title: "New plan", projectId: projectID, brief: "", shared: false,
+                    planners: sources.map { CloudPlannerInput(sessionId: $0.session.id, model: $0.session.model, effort: "", speed: "standard", execution: CloudPlanningExecution(session: $0.session)) }, mode: mode)
+                let id = try await sharedPlanning.newDraft(input: input)
+                if let session = sessions.first(where: { $0.id == "camp-plan-draft:" + id }) { open(session) }
+            } catch is CancellationError {} catch { showExecutionDefaults(error.localizedDescription) }
+        }
     }
     func setPlanMode(_ id: String, mode: PlanningMode) {
         guard let version = planning.ticket(id)?.current, version.editable else { return }

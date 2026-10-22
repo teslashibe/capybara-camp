@@ -227,6 +227,7 @@ final class TranscriptWatch {
 
 @MainActor final class CampStore: ObservableObject {
     let onboarding: CampOnboarding
+    let executionDefaults: ExecutionDefaults
     let cloud: CampConnection
     let sharing: CampSharing
     let mentions: SessionMentions
@@ -302,6 +303,9 @@ final class TranscriptWatch {
     }
     @Published var banner = ""
     @Published var sourceSheet = false
+    @Published var sourceTab = "Local"
+    @Published var executionDefaultsMessage = ""
+    @Published var creatingPlan = false
     @Published var sourceError = ""
     @Published var projectSheet = false
     @Published var permissionSheet: CampSession?
@@ -410,6 +414,7 @@ final class TranscriptWatch {
     }
     init(stateDirectory: URL = Bridge.support, conversationProcess: @escaping () throws -> Process = { try Bridge.process("conversation") }) {
         onboarding = CampOnboarding(directory: stateDirectory)
+        executionDefaults = ExecutionDefaults(directory: stateDirectory)
         self.stateDirectory = stateDirectory
         self.mentions = SessionMentions(directory: stateDirectory)
         self.planning = LocalPlanning(directory: stateDirectory, makeProcess: conversationProcess)
@@ -1381,12 +1386,14 @@ struct RootView: View {
                 Spacer()
                 if store.view == "Chat", let selected=store.selected { ProjectAssignmentMenu(store:store,session:selected) }
                 Menu {
-                    Button("Plan on this Mac", systemImage: "lightbulb") { store.newPlan(mode: .single) }
+                    Button("Plan on this Mac", systemImage: "lightbulb") { store.newPlan(mode: .single, location: "Local") }
                     Button("Plan with comparison", systemImage: "bubble.left.and.bubble.right") { store.newPlan(mode: .comparison) }
                     Divider()
                     Button("Plan in shared Camp", systemImage: "person.2") { store.newSharedPlan(mode: .single) }.disabled(!store.sharedPlanning.ready || store.cloud.projects.isEmpty)
                     Button("Compare in shared Camp", systemImage: "person.2") { store.newSharedPlan(mode: .comparison) }.disabled(!store.sharedPlanning.ready || store.cloud.projects.isEmpty)
                 } label: { Text("Plan") } primaryAction: { store.newPlan(mode: .single) }
+                    .disabled(store.creatingPlan)
+                if store.creatingPlan { ProgressView().controlSize(.small).accessibilityLabel("Preparing planning defaults") }
                 CampConnectionButton(cloud: store.cloud) { showCamp = true }
                 CampNotificationButton(notices: store.notifications) { store.notificationSheet = true }.focusable().focused($notificationButtonFocused)
             }
@@ -1909,11 +1916,11 @@ struct MessageView: View {
 }
 struct SourcesView: View {
     @ObservedObject var store: CampStore
-    @State private var location = "Local"
+    private var location: String { store.sourceTab }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            HStack { Mascot(); VStack(alignment: .leading, spacing: 4) { Text("Bring your sessions to camp").font(.title2); Text(location == "Local" ? "Local folders only · Credentials stay with each CLI" : location == "GitHub" ? "Your GitHub account and repository access" : "Separate provider sign-ins on your Camp server").foregroundStyle(campMuted).font(.caption) } }
-            CampSegmentedControl(options: [("Local", "Local profiles"), ("Cloud", "Cloud accounts"), ("GitHub", "GitHub")], selection: $location).accessibilityLabel("Source location")
+            HStack { Mascot(); VStack(alignment: .leading, spacing: 4) { Text("Bring your sessions to camp").font(.title2); Text(location == "Local" ? "Local folders only · Credentials stay with each CLI" : location == "GitHub" ? "Your GitHub account and repository access" : location == "Defaults" ? "Where new plans run" : "Separate provider sign-ins on your Camp server").foregroundStyle(campMuted).font(.caption) } }
+            CampSegmentedControl(options: [("Local", "Local profiles"), ("Cloud", "Cloud accounts"), ("GitHub", "GitHub"), ("Defaults", "Defaults")], selection: $store.sourceTab).accessibilityLabel("Source location")
             ScrollView {
                 if location == "Local" {
                     VStack(alignment: .leading, spacing: 14) {
@@ -1921,7 +1928,8 @@ struct SourcesView: View {
                         Text("Add another account’s CODEX_HOME or CLAUDE_CONFIG_DIR folder. Cloud-only chats and unreadable macOS user folders are not imported. A saved chat’s author may differ from the account currently logged into that profile.").font(.system(size: 12)).foregroundStyle(campMuted)
                         if !store.sourceError.isEmpty { Text(store.sourceError).font(.system(size: 12)).foregroundStyle(.orange) }
                     }
-                } else if location == "Cloud" { CampProviderAccountsView(cloud: store.cloud) }
+                } else if location == "Defaults" { ExecutionDefaultsEditor(store: store) }
+                else if location == "Cloud" { CampProviderAccountsView(cloud: store.cloud) }
                 else { CampGitConnectionsView(cloud: store.cloud) }
             }.frame(maxHeight: .infinity)
             HStack { if location == "Local" { Button("Add profile folder") { store.addSource() } }; Spacer(); Button("Done") { store.sourceSheet = false }.keyboardShortcut(.defaultAction) }

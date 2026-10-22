@@ -93,7 +93,7 @@ Computer use on the isolated signed review app at 1370×860 verified:
 
 The completed view settled to a 0.1% CPU observation. This does not establish
 memory-leak or sustained-performance acceptance. The reference's per-planner
-Run on selectors are still part of the unfinished execution-default and
+Run on selectors are still part of the unfinished per-planner
 destination-selection flow; the current labels report the source's assignment.
 Minimum-window coverage remains open. A computer-use resize attempt did not
 change the window, so it provides no narrow-layout evidence.
@@ -103,6 +103,33 @@ Captures: `build/ui-audit/planning-location-review.png`,
 The before-fix CPU samples are `build/planning-locations-ui-sample.txt` and
 `build/planning-locations-result-sample.txt`. These use only synthetic accounts,
 sessions and responses. No provider model or real Git repository was used.
+
+## Execution defaults
+
+The native Defaults tab reuses the source-manager layout, provider icons and
+Local/Cloud segmented control. Onboarding uses the same form. A computer-use
+pass on the isolated review app verified saving Claude for local planning,
+opening a single Claude draft, and refusing to save Cloud defaults before
+connecting a Camp. With the local Go fixture connected, it saved a project and
+both provider accounts, opened a private comparison with two Cloud assignments,
+and completed its five synthetic turns. The completed plan reopened from the
+board with both transcripts intact.
+
+Selecting a project without a prepared workspace returned to Defaults with an
+explanation and created no substitute local plan. That explanation now appears
+above the form so it does not require scrolling. Full onboarding, minimum-size
+layout, real account expiry and two-Mac acceptance remain separate checks.
+After restarting the review app without a cached login, a new plan retained
+its Cloud preference, displayed the sign-in explanation at the top of the
+sheet and did not create a local draft. Command-Q from that sheet exited.
+
+The full Go race suite and vet passed with PostgreSQL 17. Native defaults,
+onboarding, local/shared planning and execution recovery suites passed. The
+defaults tests cover scoped persistence, unavailable profile refusal, keeping
+old plans unchanged and signed-out Cloud intent. Screenshots are in
+`build/ui-audit/execution-defaults-local.png`, `execution-defaults-cloud.png`,
+`execution-defaults-comparison.png` and `execution-defaults-unavailable.png`. These are development evidence, not
+the website's release recording.
 
 ## Full inventory still to pass
 

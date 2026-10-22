@@ -27,6 +27,8 @@ import Foundation
         resumed.next(); resumed.next()
         precondition(resumed.step == .git && resumed.step.rawValue == 5, "GitHub setup reuses its account screen before project selection")
         resumed.next(); resumed.next()
+        precondition(resumed.step == .defaults && resumed.step.rawValue == 6, "Defaults follow project setup without changing persisted values")
+        resumed.next()
         precondition(resumed.step == .ready)
         resumed.finish()
         let finished = CampOnboarding(directory: root)

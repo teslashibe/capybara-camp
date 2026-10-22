@@ -89,8 +89,8 @@ Every subsequent phase checks the saved assignment again. A changed location,
 expired cloud account or unavailable checkout stops the plan and retains its
 completed drafts; it never falls back to a Mac or another account. The whole
 next phase is checked before its requests are created. Restart creates a new
-revision with newly reviewed destinations. Changing execution defaults remains
-separate work and must not edit these saved revisions.
+revision with newly reviewed destinations. [Execution defaults](execution-locations.md#defaults-for-new-plans)
+apply only to newly created drafts and never edit these saved revisions.
 
 Shared results refresh when steps complete. Partial remote output and shared
 plan-to-implementation conversion remain unfinished; local plans already

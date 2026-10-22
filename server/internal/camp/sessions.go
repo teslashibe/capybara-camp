@@ -131,9 +131,10 @@ const sessionColumns = `s.id,s.camp_id,s.project_id,s.profile_id,p.provider,p.la
 
 type rowScanner interface{ Scan(...any) error }
 
-func scanSession(row rowScanner) (Session, error) {
+func scanSession(row rowScanner, extra ...any) (Session, error) {
 	var s Session
-	err := row.Scan(&s.ID, &s.CampID, &s.ProjectID, &s.ProfileID, &s.Provider, &s.ProfileLabel, &s.OwnerUserID, &s.OwnerDeviceID, &s.LocalSessionID, &s.Title, &s.Model, &s.State, &s.Stage, &s.Shared, &s.AllowRequests, &s.ExternalOwner, &s.Revision, &s.TranscriptRevision, &s.PermissionRevision, &s.UpdatedAt, &s.ExecutionLocation, &s.ExecutionEpoch, &s.ExecutionWorkspaceID, &s.ActivityRevision)
+	columns := []any{&s.ID, &s.CampID, &s.ProjectID, &s.ProfileID, &s.Provider, &s.ProfileLabel, &s.OwnerUserID, &s.OwnerDeviceID, &s.LocalSessionID, &s.Title, &s.Model, &s.State, &s.Stage, &s.Shared, &s.AllowRequests, &s.ExternalOwner, &s.Revision, &s.TranscriptRevision, &s.PermissionRevision, &s.UpdatedAt, &s.ExecutionLocation, &s.ExecutionEpoch, &s.ExecutionWorkspaceID, &s.ActivityRevision}
+	err := row.Scan(append(columns, extra...)...)
 	return s, err
 }
 func (s *Store) readSession(ctx context.Context, q interface {

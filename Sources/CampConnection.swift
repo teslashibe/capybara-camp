@@ -646,6 +646,18 @@ import SwiftUI
             await acceptPublishedSession(value,scope:scope,epoch:epoch)
         } catch { if self.scope == scope, self.credential?.token == credential.token, !Task.isCancelled { self.error=error.localizedDescription } }
     }
+    func installPlanningSources(_ values: [CloudPlanningSource], scope expected: CloudScope) async throws {
+        guard let scope, scope == expected, let cache, values.count <= 2,
+              values.allSatisfy({ $0.valid(scope: scope, projectID: $0.session.projectId, accountID: $0.accountId) }) else { throw CampCloudError.invalidResponse }
+        let token = generation, epoch = cacheEpoch
+        for source in values {
+            try await cache.ingest(scope: scope, session: source.session, expectedEpoch: epoch)
+            guard self.scope == scope, generation == token else { throw CancellationError() }
+            if accepts(source.session) { sessionIndex[source.session.id] = source.session }
+        }
+        sessions = sessionIndex.values.sorted { $0.updatedAt > $1.updatedAt }
+        sessionsChanged?(sessions, projects, scope)
+    }
     func cachedTranscript(session: CloudSession) async -> [CloudMessage] {
         guard let scope, let cache else { return [] }; return (try? await cache.transcript(scope, sessionId: session.id)) ?? []
     }

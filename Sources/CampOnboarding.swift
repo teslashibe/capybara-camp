@@ -2,8 +2,8 @@ import SwiftUI
 import AppKit
 
 enum CampSetupStep: Int, Codable, CaseIterable {
-    // Retain existing persisted values when inserting the optional account step.
-    case profiles = 0, camp = 1, accounts = 4, git = 5, project = 2, ready = 3
+    // Keep persisted values stable when adding optional setup steps.
+    case profiles = 0, camp = 1, accounts = 4, git = 5, project = 2, defaults = 6, ready = 3
     var number: Int { (Self.allCases.firstIndex(of: self) ?? 0) + 1 }
     var title: String {
         switch self {
@@ -12,11 +12,12 @@ enum CampSetupStep: Int, Codable, CaseIterable {
         case .accounts: return "Connect your cloud accounts"
         case .git: return "Connect your repositories"
         case .project: return "Make room for your work"
+        case .defaults: return "Choose where new plans run"
         case .ready: return "Your camp is ready"
         }
     }
     var shortTitle: String {
-        switch self { case .profiles: return "Sessions"; case .camp: return "Camp"; case .accounts: return "Accounts"; case .git: return "GitHub"; case .project: return "Project"; case .ready: return "Ready" }
+        switch self { case .profiles: return "Sessions"; case .camp: return "Camp"; case .accounts: return "Accounts"; case .git: return "GitHub"; case .project: return "Project"; case .defaults: return "Defaults"; case .ready: return "Ready" }
     }
 }
 
@@ -111,16 +112,23 @@ struct CampOnboardingView: View {
     @ObservedObject var git: CampGitConnections
     @ObservedObject var projects: LocalProjects
     @ObservedObject var notices: CampNotifications
+    @ObservedObject private var defaults: ExecutionDefaults
+    @State private var defaultsDraft = ExecutionPreferences()
     @State private var connectCamp = false
     private var projectID: String { setup.projectID }
     @State private var projectName = ""
     @State private var repositories = ""
     @State private var showProfileFallback = false
+    init(store: CampStore, setup: CampOnboarding, cloud: CampConnection, accounts: CampProviderAccounts, git: CampGitConnections, projects: LocalProjects, notices: CampNotifications) {
+        self.store = store; self.setup = setup; self.cloud = cloud; self.accounts = accounts
+        self.git = git; self.projects = projects; self.notices = notices; defaults = store.executionDefaults
+    }
     private var busy: Bool { setup.savingProject || cloud.busy || accounts.working || git.working }
     private var canContinue: Bool {
         if busy { return false }
         if setup.step == .camp && connectCamp { return cloud.scope != nil && cloud.status == "Connected to Camp" }
         if setup.step == .project && projectID == "new" { return projects.ready && !projectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        if setup.step == .defaults { return defaultsDraft.configured && (defaultsDraft.location != "Cloud" || cloud.scope != nil) }
         return true
     }
     var body: some View {
@@ -151,6 +159,9 @@ struct CampOnboardingView: View {
                     case .accounts: CampProviderAccountsView(cloud: cloud)
                     case .git: CampGitConnectionsView(cloud: cloud)
                     case .project: project
+                    case .defaults:
+                        ExecutionDefaultsForm(store: store, preferences: $defaultsDraft)
+                        if !defaults.error.isEmpty { Text(defaults.error).font(.system(size: 12)).foregroundStyle(.orange) }
                     case .ready: ready
                     }
                     if !setup.error.isEmpty { Label(setup.error, systemImage: "exclamationmark.circle").foregroundStyle(.orange).font(.system(size: 12)).textSelection(.enabled) }
@@ -162,7 +173,7 @@ struct CampOnboardingView: View {
                     Button { setup.back() } label: { Label("Back", systemImage: "chevron.left").frame(minHeight: 24) }.disabled(busy)
                 } else { Button("Finish later") { setup.pause() }.disabled(busy) }
                 Spacer()
-                if setup.step == .camp || setup.step == .accounts || setup.step == .git || setup.step == .project {
+                if [.camp, .accounts, .git, .project, .defaults].contains(setup.step) {
                     Button("Skip this step") { setup.next() }.disabled(busy)
                 }
                 Button(action: advance) {
@@ -176,6 +187,9 @@ struct CampOnboardingView: View {
         }.padding(28).frame(width: 650, height: 610).foregroundStyle(campInk).background(campCream)
             .interactiveDismissDisabled(busy)
             .onAppear { connectCamp = cloud.signedIn || cloud.codeRequested }
+            .task(id: "\(setup.step.rawValue):\(cloud.scope?.key ?? "local")") {
+                if setup.step == .defaults { defaultsDraft = defaults.value(for: cloud.scope) }
+            }
     }
     private var profiles: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -240,6 +254,7 @@ struct CampOnboardingView: View {
             Label("\(store.sources.count) local \(store.sources.count == 1 ? "profile" : "profiles") · \(count.formatted()) \(count == 1 ? "session" : "sessions")", systemImage: "rectangle.stack").font(.system(size: 14, weight: .medium))
             Label(cloud.signedIn ? cloud.status : "Working locally on this Mac", systemImage: cloud.signedIn ? "person.2" : "desktopcomputer").font(.system(size: 13))
             Label(projects.byID[projectID]?.name ?? "Inbox", systemImage: "folder").font(.system(size: 13))
+            Label("New plans run in \(defaults.value(for: cloud.scope).location)", systemImage: defaults.value(for: cloud.scope).location == "Cloud" ? "cloud" : "desktopcomputer").font(.system(size: 13))
             Text("Open a card to continue a chat. Choose Plan for one model, or Plan with comparison for two. New sessions appear automatically.").font(.system(size: 13)).foregroundStyle(campMuted)
             Toggle("Desktop notifications when work finishes", isOn: Binding(get: { notices.preferences.desktop }, set: { value in Task { await notices.enableDesktop(value) } }))
                 .toggleStyle(.checkbox).disabled(notices.permissionBusy)
@@ -251,6 +266,8 @@ struct CampOnboardingView: View {
         guard canContinue else { return }
         if setup.step == .ready {
             setup.finish()
+        } else if setup.step == .defaults {
+            if defaults.save(defaultsDraft, for: cloud.scope) { setup.next() }
         } else if setup.step == .project && projectID == "new" {
             Task {
                 if await setup.createProject(name: projectName, repositories: repositories, local: projects) != nil { setup.next() }

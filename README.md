@@ -122,6 +122,22 @@ requires review before Start. Once queued, a plan keeps those assignments; a
 changed or unavailable destination stops the next phase and preserves completed
 drafts. Start over creates a new revision with reviewed locations.
 
+### Default execution settings
+
+Open **Manage sources → Defaults**, or use the Defaults step during setup.
+Choose Local or Cloud, an optional provider for single-model plans, and a
+profile or account for each provider. Automatic provider selection uses the
+selected session when available, then an available provider. A Cloud default
+also needs a shared Camp project. These preferences are saved on this Mac,
+separately for each person, Camp and server.
+
+Prepare at least one session workspace in that project through **Run on**.
+New cloud plans use the most recently updated eligible source for the selected
+account and open a private draft for review. They do not start provider work
+until you choose Start. If the account, profile or workspace is unavailable,
+Camp asks you to fix that selection. Existing tickets keep their assignments.
+**Plan on this Mac** explicitly overrides the default location for a new plan.
+
 ### Permissions and notifications
 
 Open **Permissions** from a card's menu or the shield in chat. Imported sessions
@@ -185,8 +201,9 @@ the current app blocks that move. The local runner implementation retains a
 separate checkout and provider history for each ticket and schedules work
 serially per account. [Cloud controls](docs/cloud-controls.md) use the same
 steer, queue and stop actions as local chat, with durable delivery tracking.
-Defaults and other unfinished behavior are tracked in
-[execution locations](docs/execution-locations.md) and the delivery status.
+Default settings, the prepared-workspace requirement and unfinished transfer
+behavior are documented in [execution locations](docs/execution-locations.md)
+and the delivery status.
 
 For operators, start with [self-hosting](docs/self-hosting.md), then the
 [runner provisioning guide](docs/runner-provisioning.md). The repository includes
