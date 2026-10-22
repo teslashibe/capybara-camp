@@ -5,7 +5,23 @@ struct SharedImplementationSummary: Codable, Equatable, Identifiable, Sendable {
     var id: String; var approvalId: String; var planVersion: Int; var createdAt: Date
     var requestId: String; var sessionId: String; var ownerUserId: String
     var provider: String; var model: String; var effort: String; var speed: String; var state: String; var executionLocation: String
+    var stage: Stage { ["queued", "claimed", "started", "cancel_requested"].contains(state) ? .progress : .attention }
+    var statusLabel: String {
+        switch state {
+        case "pending_approval": return "Waiting for approval"
+        case "queued": return "Queued for implementation"
+        case "claimed": return "Starting implementation"
+        case "started": return "Implementing"
+        case "cancel_requested": return "Stopping implementation"
+        case "completed": return "Implementation ready to review"
+        case "outcome_unknown": return "Implementation needs review"
+        case "failed": return "Implementation failed"
+        case "cancelled": return "Implementation cancelled"
+        default: return "Implementation"
+        }
+    }
     var valid: Bool {
+
         [id, approvalId, requestId, sessionId, ownerUserId].allSatisfy { UUID(uuidString: $0) != nil } &&
         planVersion > 0 && ["Codex", "Claude"].contains(provider) && model.utf8.count <= 200 && effort.utf8.count <= 64 && speed.utf8.count <= 64 &&
         ["local", "cloud"].contains(executionLocation) && sharedImplementationStates.contains(state)
@@ -29,6 +45,15 @@ struct SharedImplementationRequests: Codable, Sendable {
     @Published private(set) var error = ""
     @Published private(set) var runsBefore: String?
     @Published private(set) var requestsBefore: String?
+    @Published private(set) var providerSessionID: String?
+    private var latestPage = true
+    private var requestRefreshPending = false
+    var currentPlan: CloudPlanningResult? { plan }
+    var canContinue: Bool {
+        guard let selected, let plan, selected.planVersion == plan.activeVersion else { return false }
+        return !(providerSessionID ?? requests.first(where: { !($0.providerSessionId ?? "").isEmpty })?.providerSessionId ?? "").isEmpty &&
+            !requests.contains { $0.state == "outcome_unknown" || $0.contentRestricted == true }
+    }
     var selectedRequest: CloudRequest? { requests.first { $0.id == selectedRequestID } }
     private let planning: CampPlanning
     private var plan: CloudPlanningResult?
@@ -39,6 +64,7 @@ struct SharedImplementationRequests: Codable, Sendable {
     deinit { task?.cancel() }
     func clear() {
         generation = UUID(); task?.cancel(); task = nil; plan = nil; loading = false; error = ""; refreshPending = false
+        providerSessionID = nil; latestPage = true; requestRefreshPending = false
         runs = []; selected = nil; requests = []; selectedRequestID = nil; runsBefore = nil; requestsBefore = nil
     }
     func bind(_ plan: CloudPlanningResult) { clear(); self.plan = plan; loadRuns() }
@@ -52,6 +78,15 @@ struct SharedImplementationRequests: Codable, Sendable {
         requests = requests.map { saved in relevant.first(where: { $0.id == saved.id }).map { $0.merging(saved) } ?? saved }
         for index in runs.indices {
             if let request = relevant.first(where: { $0.id == runs[index].requestId }) { runs[index].state = request.state }
+        }
+        if let selected, relevant.contains(where: { $0.implementationId == selected.id && !requests.contains($0) }) {
+            // Only follow new turns while reading the latest request page. Older
+            // history stays put until the user explicitly returns to Latest.
+            if latestPage && (selectedRequestID == requests.first?.id || requests.isEmpty),
+               relevant.contains(where: { update in update.implementationId == selected.id && !requests.contains { $0.id == update.id } }) {
+                requestRefreshPending = true
+                if !loading { refreshSelectedRequests() }
+            }
         }
         if relevant.contains(where: { value in !runs.contains { $0.id == value.implementationId } }) {
             refreshPending = true
@@ -67,7 +102,8 @@ struct SharedImplementationRequests: Codable, Sendable {
             defer {
                 if self.generation == token {
                     self.loading = false; self.task = nil
-                    if self.refreshPending { self.reloadRuns() }
+                    if self.requestRefreshPending { self.refreshSelectedRequests() }
+                    else if self.refreshPending { self.reloadRuns() }
                 }
             }
             do { try await operation(token, plan) }
@@ -97,11 +133,17 @@ struct SharedImplementationRequests: Codable, Sendable {
     }
     func select(_ run: SharedImplementationSummary) {
         guard runs.contains(run) else { return }
-        selected = run; requests = []; requestsBefore = nil; selectedRequestID = nil
+        selected = run; requests = []; requestsBefore = nil; selectedRequestID = nil; providerSessionID = nil; latestPage = true; requestRefreshPending = false
         start { [weak self] token, plan in try await self?.readRequests(run, token: token, plan: plan, before: nil) }
+    }
+    private func refreshSelectedRequests() {
+        requestRefreshPending = false
+        guard let selected else { return }
+        start { [weak self] token, plan in try await self?.readRequests(selected, token: token, plan: plan, before: nil) }
     }
     func loadEarlier() {
         guard !loading, let selected, let cursor = requestsBefore else { return }
+        latestPage = false; requestRefreshPending = false
         start { [weak self] token, plan in try await self?.readRequests(selected, token: token, plan: plan, before: cursor) }
     }
     private func readRequests(_ run: SharedImplementationSummary, token: UUID, plan: CloudPlanningResult, before: String?) async throws {
@@ -117,6 +159,7 @@ struct SharedImplementationRequests: Codable, Sendable {
                   (request.leaseToken == nil || request.leaseToken == "")
               }), page.requestsBefore == nil || page.requestsBefore == page.requests.last?.id && page.requestsBefore != before,
               Set(page.requests.map(\.id)).count == page.requests.count else { throw CampCloudError.invalidResponse }
+        providerSessionID = page.providerSessionId; latestPage = before == nil
         requests = page.requests; requestsBefore = page.requestsBefore
         selectedRequestID = requests.first?.id
     }

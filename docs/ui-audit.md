@@ -4,6 +4,34 @@ Reference: the approved [interactive design](http://127.0.0.1:8770/capybara-camp
 The native app has **not passed the full design audit**. This is the working
 discrepancy list, not a release approval.
 
+## Shared implementation follow-ups
+
+Two isolated native clients signed in as the creator and executor owner through
+the real local API and disposable PostgreSQL database on October 22. The creator
+opened the converted card, read its saved implementation and sent a follow-up.
+The second client displayed the owner's Approve action. Approval queued the
+request and synchronized to the creator without a manual refresh. API readback
+confirmed a single plan with the completed initial turn and queued follow-up,
+independent users and the same provider conversation identity.
+
+The walkthrough found three defects: a converted shared plan invoked the local
+transcript reader and displayed a false banner; the creator's chat header kept
+the old approval state; the compact queue row clipped text after approval. The
+first two have code fixes and native regression coverage. A rebuilt client passed
+the repeat walkthrough: approval and cancellation updated its chat header without
+a refresh, the false banner was absent, and a two-line queued prompt remained
+readable. The queue now reserves its row height and resets its scroll position
+when request state changes. Shared model controls use a compact header row with
+a stacked fallback. Captures:
+`build/ui-audit/shared-implementation-queue-oct22.png` and
+`build/ui-audit/shared-implementation-approved-oct22.png`.
+The fixture uses synthetic
+provider output and no personal sessions, credentials or repositories.
+
+Accessibility actions and native screenshots now work. Pointer input still
+reports no available window, and local browser control is disabled. Pointer-edge
+acceptance and comparison with the approved interactive design remain open.
+
 ## Shared executor review
 
 Executor selection and owner approval now live in the existing planning
@@ -17,8 +45,8 @@ saved prompt.
 
 Automated native checks cover independent owners, wrong-device refusal,
 inspection invalidation, lost responses and restart recovery. They are not
-visual acceptance. Computer use still reports a locked Mac and disabled
-browser control. Verify matching-size layout, all action/menu hit areas,
+visual acceptance. The latest access status is recorded above. Verify
+matching-size layout, all action/menu hit areas,
 keyboard order, minimum-width wrapping, remote-owner waiting, unavailable
 executors, pending offline writes, stale consent and the transition to the
 streamed implementation before closing this audit item.
@@ -40,7 +68,7 @@ view still needs matching-size comparison with the approved design,
 pointer-edge and keyboard checks, direct opening of the only run,
 version switching, empty/error/revoked states and stream-following checks. Its
 executor setup and owner approval are covered by the newer section above;
-follow-up controls remain unfinished. Do not
+follow-up controls are under native walkthrough review. Do not
 treat the compiled view or API tests as visual acceptance.
 The signed development candidate is `build/Capybara Camp Shared History.app`,
 with the isolated bundle ID `com.capybaracamp.shared-history-review`.

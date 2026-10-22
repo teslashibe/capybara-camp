@@ -118,3 +118,77 @@ func TestImplementationDiscoveryAndFullHistory(t *testing.T) {
 		t.Fatal("revoked empty page", err)
 	}
 }
+
+func TestImplementationBoardProjection(t *testing.T) {
+	s, actors, c, p, target, approval := approvedImplementationFixture(t, true)
+	r := dispatchImplementationFixture(t, s, actors[0], c, p, approval)
+	for _, actor := range actors[:2] {
+		list, err := s.ListPlanning(t.Context(), actor, c.ID)
+		if err != nil || len(list) != 1 || list[0].Implementation == nil || list[0].Implementation.ID != r.ImplementationID || list[0].Implementation.State != "queued" {
+			t.Fatal("board did not convert", err)
+		}
+		detail, err := s.Planning(t.Context(), actor, c.ID, p.ID, 0)
+		if err != nil || detail.Implementation == nil || detail.Implementation.RequestID != r.ID {
+			t.Fatal("detail did not retain implementation", err)
+		}
+	}
+	other, err := s.ListPlanning(t.Context(), actors[2], c.ID)
+	if err != nil || len(other) != 1 || other[0].Implementation != nil {
+		t.Fatal("executor metadata exposed to another member", err)
+	}
+	claimed, err := s.ClaimImplementationWork(t.Context(), actors[1], c.ID, uuid.NewString(), []string{target.ID})
+	if err != nil || claimed == nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ActOnRequest(t.Context(), actors[1], c.ID, r.ID, uuid.NewString(), RequestAction{Action: "start", LeaseToken: claimed.LeaseToken, ExecutionContext: approval.ExecutionContext}); err != nil {
+		t.Fatal(err)
+	}
+	if err = localImplementationEvent(t, s, actors[1], *claimed, 1, map[string]any{"type": "settings", "model": "reported-model", "effort": "ultra", "speed": "fast"}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.ListPlanning(t.Context(), actors[0], c.ID)
+	if err != nil || list[0].Implementation.State != "started" || list[0].Implementation.Model != "reported-model" || list[0].Implementation.Effort != "ultra" || list[0].Implementation.Speed != "fast" {
+		t.Fatal("reported settings lost", err)
+	}
+	var events int
+	if err = s.pool.QueryRow(t.Context(), `SELECT count(*) FROM events WHERE camp_id=$1 AND kind='request.settings'`, c.ID).Scan(&events); err != nil || events != 1 {
+		t.Fatal("settings did not notify board", err)
+	}
+	if err = localImplementationEvent(t, s, actors[1], *claimed, 1, map[string]any{"type": "settings", "model": "reported-model", "effort": "ultra", "speed": "fast"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(t.Context(), `SELECT count(*) FROM events WHERE camp_id=$1 AND kind='request.settings'`, c.ID).Scan(&events); err != nil || events != 1 {
+		t.Fatal("settings replay emitted another event", err)
+	}
+	// A later queued follow-up must not replace the executing model/status.
+	if _, err = s.pool.Exec(t.Context(), `INSERT INTO prompt_requests SELECT (jsonb_populate_record(NULL::prompt_requests,to_jsonb(r)||jsonb_build_object('id',gen_random_uuid(),'created_at',now()+interval '1 second','state','queued','model','next-model','lease_token',NULL,'lease_until',NULL))).* FROM prompt_requests r WHERE r.id=$1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	list, err = s.ListPlanning(t.Context(), actors[0], c.ID)
+	if err != nil || list[0].Implementation.RequestID != r.ID || list[0].Implementation.State != "started" || list[0].Implementation.Model != "reported-model" {
+		t.Fatal("queued follow-up hid active work", err)
+	}
+	if _, err = s.pool.Exec(t.Context(), `UPDATE prompt_requests SET state='completed' WHERE id=$1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	list, err = s.ListPlanning(t.Context(), actors[0], c.ID)
+	if err != nil || list[0].Implementation.RequestID == r.ID || list[0].Implementation.State != "queued" || list[0].Implementation.Model != "next-model" {
+		t.Fatal("finished turn hid next queued request", err)
+	}
+	if _, err = s.pool.Exec(t.Context(), `UPDATE sessions SET permission_revision=permission_revision+1 WHERE id=$1`, target.ID); err != nil {
+		t.Fatal(err)
+	}
+	list, err = s.ListPlanning(t.Context(), actors[0], c.ID)
+	if err != nil || list[0].Implementation != nil {
+		t.Fatal("revoked executor remained on board", err)
+	}
+}
+
+func TestImplementationSettingsMetadataBounds(t *testing.T) {
+	for key, limit := range map[string]int{"model": 200, "effort": 64, "speed": 64} {
+		raw, _ := json.Marshal(map[string]string{"type": "settings", key: strings.Repeat("a", limit+1)})
+		if _, _, err := validStreamEvent(raw); !errors.Is(err, ErrInput) {
+			t.Fatalf("oversized %s accepted: %v", key, err)
+		}
+	}
+}

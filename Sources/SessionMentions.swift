@@ -339,6 +339,7 @@ struct SessionContextPicker: View {
     @ObservedObject var store: CampStore
     let destination: CampSession
     @State var query: String
+    var attached: (() -> Void)? = nil
     var close: () -> Void
     @State private var selected: CampSession?
     @State private var preview: ContextPreview?
@@ -354,7 +355,7 @@ struct SessionContextPicker: View {
         var found: [CampSession] = []
         let members = Dictionary(uniqueKeysWithValues: store.cloud.members.map { ($0.userId, $0.name) })
         for source in store.visibleSessions {
-            if source.provider == "Planning" { continue }
+            if source.isPlan { continue }
             if destination.isCloud && !source.isCloud { continue }
             let remote = store.cloudSessions[source.id]
             let person = remote.flatMap { members[$0.ownerUserId] } ?? ""
@@ -407,7 +408,8 @@ struct SessionContextPicker: View {
                                 guard start <= end else { throw CampError.message("Choose a valid message range") }
                                 let reference = try store.makeReference(selected, preview: preview, range: start...end)
                                 try store.mentions.add(reference, to: destination.id)
-                                if let at = store.draft.lastIndex(of: "@"), !store.draft[store.draft.index(after: at)...].contains(where: \.isWhitespace) { store.draft = String(store.draft[..<at]) }
+                                if let attached { attached() }
+                                else if let at = store.draft.lastIndex(of: "@"), !store.draft[store.draft.index(after: at)...].contains(where: \.isWhitespace) { store.draft = String(store.draft[..<at]) }
                                 close()
                             } catch { self.error = error.localizedDescription }
                         }.buttonStyle(.borderedProminent).tint(campGreen).disabled(start > end || end - start >= 120)

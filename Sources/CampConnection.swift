@@ -527,9 +527,18 @@ import SwiftUI
             return value.control.type == kind && (providerID == nil || value.control.id == providerID)
         }
     }
-    func queueControl(session: CloudSession, head: CloudStreamHead, value: CloudControlEnvelope) async throws {
+    private func controlAllowed(session: CloudSession, head: CloudStreamHead, implementation: CloudRequest?, conversation: CloudLiveConversation) -> Bool {
+        guard let scope, let current = sessionIndex[session.id], current.permissionRevision == session.permissionRevision,
+              conversation.head == head else { return false }
+        if let implementation {
+            return implementation.sessionId == session.id && implementation.permissionRevision == session.permissionRevision &&
+                implementation.ownerUserId == credential?.actor.userId && conversation.watchesImplementation(implementation, scope: scope)
+        }
+        return session.executionLocation == "cloud" && conversation === live && live.sessionID == session.id && live.head?.id == head.id
+    }
+    func queueControl(session: CloudSession, head: CloudStreamHead, value: CloudControlEnvelope, implementation: CloudRequest? = nil, conversation: CloudLiveConversation? = nil) async throws {
         guard let scope, let cache, session.campId == scope.campId, session.ownerUserId == credential?.actor.userId,
-              session.executionLocation == "cloud", live.sessionID == session.id, live.head?.id == head.id,
+              controlAllowed(session: session, head: head, implementation: implementation, conversation: conversation ?? live),
               head.state == "started", value.valid, !pendingControl(requestID: head.id, kind: value.control.type) else { throw CampError.message("This session cannot accept another control yet") }
         let token = generation, epoch = cacheEpoch
         controlSending.insert(head.id)

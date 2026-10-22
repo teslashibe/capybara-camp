@@ -13,6 +13,7 @@ actor SharedImplementationFixture: CampPublishingTransport, CampAccountTransport
     func suspend() { hold = true }
     func waiting() -> Bool { gate != nil }
     func release() { gate?.resume(); gate = nil }
+    func replace(_ value: CloudRequest) { request = value }
     func restrict() { request = request.restrictingContent() }
     func deny() { reject = true }
     func empty(_ value: Bool) { emptyDiscovery = value }
@@ -80,6 +81,21 @@ actor SharedImplementationFixture: CampPublishingTransport, CampAccountTransport
         history.loadEarlier()
         try await until("Older requests not loaded") { !history.loading && history.selectedRequest?.prompt == "Earlier request" }
         precondition(history.requests.count == 1 && history.requestsBefore == nil, "Old pages accumulated instead of being replaced")
+        var nextRequest = request; nextRequest.id = UUID().uuidString; nextRequest.prompt = "Next turn"; nextRequest.providerSessionId = "persistent-provider-id"
+        await api.replace(nextRequest); history.synchronize([nextRequest])
+        try await Task.sleep(for: .milliseconds(30))
+        precondition(history.selectedRequest?.prompt == "Earlier request", "New turns displaced older history")
+        history.select(displayedRun)
+        try await until("Latest request did not open") { !history.loading && history.selectedRequestID == nextRequest.id }
+        precondition(history.canContinue)
+        nextRequest.id = UUID().uuidString; nextRequest.prompt = "Another turn"
+        await api.replace(nextRequest); history.synchronize([nextRequest])
+        try await until("New follow-up did not appear automatically") { !history.loading && history.selectedRequestID == nextRequest.id }
+        precondition(history.requests.count == 1, "Follow-up refresh accumulated history pages")
+        nextRequest.revision += 1; nextRequest.state = "queued"
+        history.synchronize([nextRequest])
+        precondition(history.selectedRequest?.state == "queued" && history.selectedRequest?.revision == nextRequest.revision, "Owner approval did not update the selected request")
+        await api.replace(request)
         // A permission revision changes without removing the source row. The
         // stale response must still be fenced, including an empty history page.
         await api.suspend()
@@ -99,6 +115,16 @@ actor SharedImplementationFixture: CampPublishingTransport, CampAccountTransport
         live.watchImplementation(request, scope: scope, client: api, credential: credential)
         try await until("Implementation did not stream") { live.messages.first?.text == "Live implementation output" }
         precondition(live.head?.effort == "ultra" && live.head?.model == "actual-model" && live.head?.speed == "fast")
+        precondition(live.watchesImplementation(request, scope: scope))
+        var wrong = request; wrong.implementationId = UUID().uuidString
+        precondition(!live.watchesImplementation(wrong, scope: scope))
+        wrong = request; wrong.planVersion = 2
+        precondition(!live.watchesImplementation(wrong, scope: scope))
+        wrong = request; wrong.contentRestricted = true
+        precondition(!live.watchesImplementation(wrong, scope: scope))
+        let otherScope = CloudScope(origin: scope.origin, userId: UUID().uuidString, campId: scope.campId)
+        precondition(!live.watchesImplementation(request, scope: otherScope))
+
         live.invalidate(source.id)
         try await Task.sleep(for: .milliseconds(30))
         precondition(live.head?.effort == "ultra" && live.head?.model == "actual-model", "Refresh replaced reported settings with defaults")

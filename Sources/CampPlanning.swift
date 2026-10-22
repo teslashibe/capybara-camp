@@ -5,11 +5,12 @@ struct CampPlanOperation: Codable, Identifiable, Sendable {
     var command: CampPublication
     var draftID: String?
     var planID: String?
+    var failure: String? = nil
     var id: String { command.key }
     // CampWire decodes snake case as planId/draftId, not Swift's ID acronym.
     // Explicit keys preserve bindings when a saved outbox is reopened.
     private enum CodingKeys: String, CodingKey {
-        case command
+        case command, failure
         case draftID = "draftId"
         case planID = "planId"
     }
@@ -26,6 +27,7 @@ struct CampPlanningState: Codable, Sendable {
     @Published private(set) var drafts: [CloudPlanDraft] = []
     @Published private(set) var tickets: [CloudPlanSummary] = []
     @Published private(set) var ready = false
+    @Published private(set) var failedImplementationPrompts: [CampPlanOperation] = []
     @Published private(set) var executionRevision: UInt64 = 0
     var implementationDispatched: ((CloudRequest) -> Void)?
     @Published private(set) var error = ""
@@ -90,7 +92,7 @@ struct CampPlanningState: Codable, Sendable {
             } catch { guard self?.context?.generation == generation else { return }; self?.error = error.localizedDescription; self?.task = nil }
         }
     }
-    private func publish() { drafts = state.drafts; tickets = state.tickets; changed?() }
+    private func publish() { drafts = state.drafts; tickets = state.tickets; failedImplementationPrompts = state.operations.filter { $0.command.kind == "implementation-request" && $0.failure != nil }; changed?() }
     private func check(_ c: Context) throws {
         guard context?.generation == c.generation, !Task.isCancelled else { throw CancellationError() }
     }
@@ -106,7 +108,7 @@ struct CampPlanningState: Codable, Sendable {
         let v = version == 0 ? state.tickets.first { $0.id == id }?.activeVersion ?? 1 : version
         return state.details["\(id):\(v)"]
     }
-    func pending(_ id: String) -> Bool { state.operations.contains { $0.draftID == id || $0.planID == id } }
+    func pending(_ id: String) -> Bool { state.operations.contains { $0.failure == nil && ($0.draftID == id || $0.planID == id) } }
     func newDraft(input: CloudPlanningInput) async throws -> String {
         guard ready else { throw CampError.message("Connect to Camp before starting a shared plan") }
         guard state.drafts.count < 50 else { throw CampError.message("Finish or remove a draft before adding another plan") }
@@ -289,6 +291,55 @@ struct CampPlanningState: Codable, Sendable {
         catch { state.operations.removeAll { $0.id == command.key }; publish(); throw error }
         wake()
     }
+    func queueImplementationPrompt(_ run: SharedImplementationSummary, plan: CloudPlanningResult, text: String,
+                                   model: String, tuning: ModelTuning, sources: [CloudSourceRef] = []) async throws {
+        guard let c = context, ready, !pending(plan.id), plan.valid, plan.campId == c.scope.campId,
+              plan.activeVersion == run.planVersion, plan.version.version == run.planVersion,
+              plan.referencedSessions.union([run.sessionId]).isSubset(of: visibleSessions), run.valid, sourceProviders[run.sessionId] == run.provider,
+              c.actor.userId == plan.creatorUserId || c.actor.userId == run.ownerUserId,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.utf8.count <= 65536,
+              !model.isEmpty, model.utf8.count <= 200,
+              ["", "low", "medium", "high", "xhigh", "max", "ultra"].contains(tuning.effort),
+              ["standard", "fast", "ultrafast"].contains(tuning.speed), run.provider != "Claude" || tuning.speed != "ultrafast",
+              sources.count + plan.version.sources.count <= 20,
+              sources.allSatisfy({ visibleSessions.contains($0.sessionId) && sourceGrants[$0.sessionId] == $0.permissionRevision }),
+              Set((sources + plan.version.sources).map(\.sessionId)).count == sources.count + plan.version.sources.count else {
+            throw CampError.message("Review this implementation and its attached sessions before sending")
+        }
+        let refs = try JSONSerialization.jsonObject(with: CampWire.encoder().encode(sources))
+        let body = try CampWire.body(["prompt": text, "model": model, "effort": tuning.effort, "speed": tuning.speed, "sources": refs])
+        let command = CampPublication(kind: "implementation-request", method: "POST",
+            path: "/v1/camps/\(c.scope.campId)/planning/\(plan.id)/implementation-runs/\(run.id)/requests", body: body)
+        state.operations.append(CampPlanOperation(command: command, planID: plan.id)); publish()
+        do { try await persist() }
+        catch { try check(c); state.operations.removeAll { $0.id == command.key }; publish(); throw error }
+        wake()
+    }
+    func recoverImplementationPrompt(_ id: String) async throws -> String {
+        guard let c = context, let operation = state.operations.first(where: { $0.id == id && $0.command.kind == "implementation-request" && $0.failure != nil }),
+              let body = try JSONSerialization.jsonObject(with: operation.command.body) as? [String: Any], let text = body["prompt"] as? String else { throw CampCloudError.invalidResponse }
+        _ = try implementationTarget(operation, context: c)
+        state.operations.removeAll { $0.id == id }
+        do { try await persist() }
+        catch { try check(c); state.operations.append(operation); publish(); throw error }
+        publish(); return text
+    }
+    private func implementationTarget(_ operation: CampPlanOperation, context c: Context) throws -> String {
+        guard let planID = operation.planID, UUID(uuidString: planID) != nil, operation.command.method == "POST" else { throw CampCloudError.invalidResponse }
+        let prefix = "/v1/camps/\(c.scope.campId)/planning/\(planID)/implementation-runs/"
+        guard operation.command.path.hasPrefix(prefix) else { throw CampCloudError.invalidResponse }
+        let pieces = operation.command.path.dropFirst(prefix.count).split(separator: "/")
+        guard pieces.count == 2, UUID(uuidString: String(pieces[0])) != nil, pieces[1] == "requests" else { throw CampCloudError.invalidResponse }
+        return String(pieces[0])
+    }
+    private func acceptImplementationRequest(_ data: Data, operation: CampPlanOperation, context c: Context) throws {
+        let id = try implementationTarget(operation, context: c)
+        let request = try CampWire.decoder().decode(CloudRequest.self, from: data)
+        guard request.isImplementation, request.campId == c.scope.campId, request.planId == operation.planID,
+              request.implementationId == id, UUID(uuidString: request.id) != nil,
+              request.requesterUserId == c.actor.userId, request.contentRestricted != true else { throw CampCloudError.invalidResponse }
+        implementationDispatched?(request)
+    }
     private func validateExecutionOperation(_ operation: CampPlanOperation, context c: Context) throws -> SharedExecutionAction {
         guard let planID = operation.planID, UUID(uuidString: planID) != nil,
               let action = SharedExecutionAction(rawValue: String(operation.command.kind.dropFirst("plan-execution-".count))),
@@ -347,17 +398,19 @@ struct CampPlanningState: Codable, Sendable {
             defer { if self?.context?.generation == c.generation { self?.task = nil } }
             while let self, self.context?.generation == c.generation, !Task.isCancelled {
                 do {
-                    while let op = self.state.operations.first {
+                    while let op = self.state.operations.first(where: { $0.failure == nil }) {
                         try self.check(c)
                         let savedDraft = op.draftID.flatMap { self.draft($0) }
                         do {
                             try await self.persist()
                             self.error = ""
                             if op.command.kind.hasPrefix("plan-execution-") { _ = try self.validateExecutionOperation(op, context: c) }
+                            if op.command.kind == "implementation-request" { _ = try self.implementationTarget(op, context: c) }
                             let data = try await c.transport.perform(op.command)
                             try self.check(c)
-                            if op.command.kind.hasPrefix("plan-execution-") {
-                                try self.acceptExecutionReceipt(data, operation: op, context: c)
+                            if op.command.kind.hasPrefix("plan-execution-") || op.command.kind == "implementation-request" {
+                                if op.command.kind == "implementation-request" { try self.acceptImplementationRequest(data, operation: op, context: c) }
+                                else { try self.acceptExecutionReceipt(data, operation: op, context: c) }
                                 self.state.operations.removeAll { $0.id == op.id }
                                 try await self.persist(); self.executionRevision &+= 1; self.dirty = true; self.publish()
                                 continue
@@ -377,8 +430,10 @@ struct CampPlanningState: Codable, Sendable {
                             self.publish()
                         } catch CampCloudError.server(let status, _) where [400, 403, 404, 409].contains(status) {
                             try self.check(c)
-                            self.state.operations.removeAll { $0.id == op.id }
                             self.error = status == 409 ? "This plan changed. Review its current version before trying again" : "This planning action is no longer available"
+                            if op.command.kind == "implementation-request", let index = self.state.operations.firstIndex(where: { $0.id == op.id }) {
+                                self.state.operations[index].failure = self.error
+                            } else { self.state.operations.removeAll { $0.id == op.id } }
                             try await self.persist(); self.publish()
                             if op.command.kind.hasPrefix("plan-execution-") { self.executionRevision &+= 1 }
                         } catch {
@@ -389,7 +444,7 @@ struct CampPlanningState: Codable, Sendable {
                         }
                     }
                     if self.dirty { self.dirty = false; try await self.synchronize(c); self.error = "" }
-                    if self.state.operations.isEmpty && !self.dirty { return }
+                    if self.state.operations.allSatisfy({ $0.failure != nil }) && !self.dirty { return }
                     delay = 0.5
                 } catch is CancellationError { return }
                 catch CampCloudError.server(401, _) { self.error = "Sign in to Camp again to sync planning"; return }

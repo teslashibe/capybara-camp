@@ -407,7 +407,7 @@ final class TranscriptWatch {
         for share in sharing.shares where running.contains(share.local.id) { running.insert("camp:" + share.id) }
         for share in sharing.shares where waiting.contains(share.local.id) { waiting.insert("camp:" + share.id) }
         return SessionStateSnapshot(running: running, waiting: waiting, activity: observed, remote: cloudSessions,
-            requests: Set(cloud.requests.filter { !$0.isPlanning && ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId)), stages: stages)
+            requests: Set(cloud.requests.filter { !$0.isIsolatedWork && ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId)), stages: stages)
     }
     func boardSessions(_ stage: Stage) -> [CampSession] {
         if cachedBoardRevision != filterRevision || cachedBoardSearch != search || cachedBoardSource != sourceFilter {
@@ -632,7 +632,7 @@ final class TranscriptWatch {
         let next = Dictionary(uniqueKeysWithValues: values.map { ("camp:" + $0.id, $0) })
         if let inspection=contextInspection, !inspection.remainsVisible(scope:cloud.scope?.key,permissionRevision:next[inspection.sourceID]?.permissionRevision, availablePermissions:next.mapValues(\.permissionRevision)) { contextInspection=nil }
         if cloudSessions != next { cloudSessions = next }
-        let active = Set(cloud.requests.filter { !$0.isPlanning && ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId))
+        let active = Set(cloud.requests.filter { !$0.isIsolatedWork && ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId))
         if activeRequestSessions != active { activeRequestSessions = active; filterRevision += 1; objectWillChange.send() }
         let names = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.name) })
         let imported = values.filter { !$0.isHistoryOnly }.map { value in
@@ -749,7 +749,7 @@ final class TranscriptWatch {
     deinit { backgroundPoll?.cancel();childrenTask?.cancel() }
     func observeHistory() {
         guard view == "Chat", let s = selected else { transcriptWatch.stop(); return }
-        guard !s.isCloud, s.provider != "Planning" else { transcriptWatch.stop(); return }
+        guard !s.isCloud, !s.isSharedPlan, s.provider != "Planning" else { transcriptWatch.stop(); return }
         let source = executionSource(s) ?? s
         var paths = Set<String>()
         if !source.path.isEmpty {
@@ -994,7 +994,7 @@ final class TranscriptWatch {
         if historyTotal != result.total { historyTotal = result.total }
     }
     func loadHistory(more: Bool = false, silent: Bool = false) {
-        guard let s = selected, s.provider != "Planning", runningID == nil else { return }
+        guard let s = selected, !s.isSharedPlan, s.provider != "Planning", runningID == nil else { return }
         if let execution = planning.ticket(s.id)?.implementation {
             if more { historyLimit += 120 }
             if !silent { messages = Array(execution.messages.suffix(historyLimit)); historyTotal = execution.messages.count }
@@ -1128,7 +1128,7 @@ final class TranscriptWatch {
         if let queuedID, let queued = queuedPrompts.first(where: { $0.id == queuedID }), queued.permissionRevision != permissionRevision(s) {
             banner = "Permissions changed after this prompt was queued. Review and queue it again."; return false
         }
-        guard !s.isCloud, s.provider != "Planning", conversations[s.id] == nil else { banner = "This session already has a running turn"; return false }
+        guard !s.isCloud, !s.isSharedPlan, s.provider != "Planning", conversations[s.id] == nil else { banner = "This session already has a running turn"; return false }
         guard conversations.count + planning.activeCount + cloud.worker.activePlanningCount < 4, !planning.uses(s.provider), !cloud.worker.usesPlanningProvider(s.provider), !conversations.values.contains(where: { $0.session.provider == s.provider && $0.session.root == s.root }) else {
             banner = "This profile is busy. Queue the prompt or wait for its current turn"; return false
         }
@@ -1540,7 +1540,7 @@ struct SessionCard: View {
                     ForEach(Stage.allCases, id: \.self) { dest in Button("Move to \(dest.rawValue)") { store.move(session.id, dest) } }
                     ProjectAssignmentMenu(store:store,session:session)
                     if store.planning.ticket(session.id) != nil { Button("Save to Camp", systemImage: "icloud.and.arrow.up") { store.planPromotionSheet = session } }
-                    if !session.isCloud && session.provider != "Planning" { Button("Permissions…") { store.permissionSheet = session } }
+                    if !session.isCloud && !session.isSharedPlan && session.provider != "Planning" { Button("Permissions…") { store.permissionSheet = session } }
                     if let local = store.shareSource(session) { Divider(); Button("Share with Camp…") { store.shareSheet = local } }
                 } label: { CampIconLabel(symbol: "ellipsis").foregroundStyle(campMuted) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Move \(session.title)")
@@ -1797,7 +1797,7 @@ struct ChatView: View {
                 Button { store.shareSheet = local } label: { CampIconLabel(symbol: "person.2") }
                     .buttonStyle(.plain).help("Share with Camp").accessibilityLabel("Share with Camp")
             }
-            if !session.isCloud && session.provider != "Planning" {
+            if !session.isCloud && !session.isSharedPlan && session.provider != "Planning" {
                 Button { store.permissionSheet = session } label: { CampIconLabel(symbol: "lock.shield") }
                     .buttonStyle(.plain).help("Permissions").accessibilityLabel("Permissions")
             }

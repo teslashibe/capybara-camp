@@ -47,8 +47,8 @@ extension CampStore {
                 root: "", title: value.input.title, cwd: names[value.input.projectId] ?? "Shared project", updated: value.updatedAt.timeIntervalSince1970, path: "", accountID: cloud.scope?.userId ?? "", archived: false)
         }
         values += sharedPlanning.tickets.filter { !replacing.contains($0.id) }.map { value in
-            CampSession(id: "camp-plan:" + value.id, sessionID: value.id, provider: "Planning", sourceID: "camp-planning", sourceLabel: "Shared Camp",
-                root: "", title: value.title, cwd: names[value.projectId] ?? "Shared project", updated: value.updatedAt.timeIntervalSince1970, path: "", accountID: value.creatorUserId, archived: false)
+            CampSession(id: "camp-plan:" + value.id, sessionID: value.id, provider: value.implementation?.provider ?? "Planning", sourceID: "camp-planning", sourceLabel: "Shared Camp",
+                root: "", title: value.title, cwd: names[value.projectId] ?? "Shared project", updated: value.updatedAt.timeIntervalSince1970, path: "", accountID: value.implementation?.ownerUserId ?? value.creatorUserId, archived: false, model: value.implementation?.model ?? "")
         }
         let prior = Set(sessions.filter(\.isSharedPlan).map(\.id)), current = Set(values.map(\.id))
         for id in prior.subtracting(current) { stages[id] = nil }
@@ -114,7 +114,7 @@ struct SharedPlanningCard: View {
         let mode = draft?.input.workflow ?? ticket?.workflow ?? .comparison
         CampTaskCard(store: store, session: session) {
             HStack {
-                CampCardProvider(provider: "Planning")
+                CampCardProvider(provider: ticket?.implementation?.provider ?? "Planning")
                 Spacer()
                 Image(systemName: "person.2").font(.system(size: 10)).foregroundStyle(campMuted).help("Shared Camp")
                 Menu { Button("Open plan") { store.open(session) };ProjectAssignmentMenu(store:store,session:session) } label: { Image(systemName: "ellipsis").foregroundStyle(campMuted).frame(width: 28, height: 28) }
@@ -129,6 +129,10 @@ struct SharedPlanningCard: View {
                             SharedPlanningModelMenu(store: store, planning: planning, id: id, slot: slot, cardRow: true)
                         }
                     }
+                } else if let execution = ticket?.implementation {
+                    ModelSettingsMenu(provider: execution.provider, title: "Implementation model", sessionModel: execution.model, modelLabel: execution.model,
+                        models: [], caps: ModelOption(id: execution.model, label: execution.model), choice: ModelTuning(effort: execution.effort, speed: execution.speed),
+                        locked: true, planningRow: true, selectModel: { _ in }, tune: { _, _ in })
                 } else if let ticket {
                     ForEach(ticket.planners, id: \.slot) { p in
                         PlanningCardModelRow(provider: p.provider, open: { store.openPlan(session, slot: p.slot) }) {
@@ -140,16 +144,16 @@ struct SharedPlanningCard: View {
             }
         } status: {
             HStack(spacing: 6) {
-                if ticket?.state == "running" || planning.pending(id) { ProgressView().controlSize(.mini).frame(width: 12, height: 12) }
+                if ticket?.stage == .progress || planning.pending(id) { ProgressView().controlSize(.mini).frame(width: 12, height: 12) }
                 else { Image(systemName: ticket?.state == "ready" ? "checkmark" : "circle").font(.system(size: 8)) }
-                Text(draft?.cancelRequested == true ? "Cancellation waiting to sync" : planning.pending(id) ? "Waiting to sync" : ticket?.state == "ready" ? "Plan ready to review" : "\(ticket?.completed ?? 0) of \(mode.turnLimit) · \(ticket?.state ?? "draft")")
+                Text(draft?.cancelRequested == true ? "Cancellation waiting to sync" : planning.pending(id) ? "Waiting to sync" : ticket?.implementation?.statusLabel ?? (ticket?.state == "ready" ? "Plan ready to review" : "\(ticket?.completed ?? 0) of \(mode.turnLimit) · \(ticket?.state ?? "draft")"))
                     .font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
             }
         } actions: {
             HStack {
                 Button { store.openPlan(session, section: "History") } label: { Label("History", systemImage: "clock.arrow.circlepath").frame(minHeight: 28).contentShape(Rectangle()) }.buttonStyle(.plain).disabled(draft != nil)
                 Spacer(minLength: 4)
-                CampCardOpenAction(title: "Open plan") { store.openPlan(session) }
+                CampCardOpenAction(title: ticket?.implementation == nil ? "Open plan" : "Open chat") { store.openPlan(session, section: ticket?.implementation == nil ? "Plans" : "Implementation") }
             }
         }
     }

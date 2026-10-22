@@ -95,6 +95,12 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
         textLimit = 16 << 20
         invalidate(request.sessionId)
     }
+    func watchesImplementation(_ request: CloudRequest, scope: CloudScope) -> Bool {
+        self.scope == scope && request.contentRestricted != true && request.isImplementation && request.campId == scope.campId &&
+        sessionID == request.sessionId && implementationRequest?.id == request.id &&
+        implementationRequest?.implementation == request.implementationId && implementationRequest?.plan == request.planId &&
+        implementationRequest?.version == request.planVersion && head?.id == request.id
+    }
     func stop() {
         generation = UUID(); task?.cancel(); task = nil; retryTask?.cancel(); retryTask = nil; dirty = false
         binding = nil; sessionID = nil; scope = nil; client = nil; credential = nil
@@ -237,13 +243,14 @@ struct CloudStreamApprovals: View {
     @ObservedObject var live: CloudLiveConversation
     @ObservedObject var cloud: CampConnection
     var session: CloudSession
+    var implementation: CloudRequest? = nil
     var body: some View {
         if live.head?.state == "started", let approval = live.approvals.first {
             if session.ownerUserId == cloud.credential?.actor.userId {
                 ProviderApprovalView(approval: approval, sending: live.head.map { cloud.pendingControl(requestID:$0.id,kind:"approval",providerID:approval.id) } ?? false, answer: { allow, decision, answers in
                     guard let head = live.head, let seq = live.approvalSequence(approval.id) else { return }
                     let value = CloudControlEnvelope(id:UUID().uuidString.lowercased(),approvalSeq:seq,control:.init(type:"approval",id:approval.id,allow:allow,decision:decision,answers:answers))
-                    Task { do { try await cloud.queueControl(session:session,head:head,value:value) } catch { cloud.error=error.localizedDescription } }
+                    Task { do { try await cloud.queueControl(session:session,head:head,value:value,implementation:implementation,conversation:live) } catch { cloud.error=error.localizedDescription } }
                 }).id(approval.id)
             } else {
                 Label("Waiting for the session owner to review", systemImage: "hand.raised").font(.system(size: 11)).foregroundStyle(campMuted)

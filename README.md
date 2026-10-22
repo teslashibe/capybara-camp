@@ -118,6 +118,14 @@ Opening Combined plan or Implementation reveals its result and next action.
 The implementation keeps its own model settings and permission choices, and
 the ticket retains planning revisions and implementation history.
 
+Shared plans use the same ticket for implementation. Select the executor,
+review its model/settings and prepared location, then ask its owner to approve
+before starting. The implementation chat supports follow-ups, `@` context and
+owner approvals. A teammate's follow-up waits for the executor owner's approval;
+the card shows executing work and its reported settings. Failed submissions keep
+their prompt for recovery. These flows are in local acceptance testing, not the
+published preview.
+
 [Projects](docs/projects.md) group tickets for a client or body of work across
 repositories. Assigning a project does not move a working directory or grant
 Git access. [Planning](docs/planning.md) documents budgets, cancellation,
@@ -381,6 +389,14 @@ The fixture starts disposable PostgreSQL and a loopback API; it writes synthetic
 email codes to that directory. Development builds allow a loopback HTTP origin.
 `CAMP_DEV_EPHEMERAL_CREDENTIALS=1` uses in-memory Camp credentials in those builds.
 Normal builds require HTTPS and use the Keychain.
+Set `CAMP_NATIVE_FIXTURE_IMPLEMENTATION=1` when starting the fixture to seed a
+completed shared plan and a separate executor's implementation. Sign in as
+`owner@example.com` and `k@example.com` in separate development app bundles with
+separate `CAPY_SUPPORT` directories to test follow-up approval and synchronization.
+Provider output is synthetic; the fixture never invokes a provider CLI. Point
+`CAMP_DEV_PROFILE_ROOT` at an owner-only fixture directory to keep automatic
+discovery away from personal profiles. Keep `CAMP_UI_AUDIT=1` set so a helper
+without fixture support refuses to scan.
 An explicit `CAMP_TEST_DATABASE_URL` also works with the native fixture. Use a
 dedicated disposable PostgreSQL 17 database; the fixture creates an isolated
 schema and removes it on exit. It must never point at production.

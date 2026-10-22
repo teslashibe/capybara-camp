@@ -281,6 +281,13 @@ func validStreamEvent(raw json.RawMessage) (map[string]any, []byte, error) {
 			}
 		}
 	}
+	if kind == "settings" {
+		for key, limit := range map[string]int{"model": 200, "effort": 64, "speed": 64} {
+			if len(strEvent(event, key)) > limit {
+				return nil, nil, ErrInput
+			}
+		}
+	}
 	for _, key := range []string{"inputTokens", "outputTokens"} {
 		if value, exists := event[key]; exists {
 			number, valid := value.(json.Number)
@@ -412,6 +419,11 @@ func (s *Store) appendRequestEvent(ctx context.Context, tx pgx.Tx, r Request, in
 	}
 	if err = s.emitCloudRequest(ctx, tx, r, "request.stream"); err != nil {
 		return 0, err
+	}
+	if kind == "settings" && r.Kind == "implementation" {
+		if err = s.emitCloudRequest(ctx, tx, r, "request.settings"); err != nil {
+			return 0, err
+		}
 	}
 	return input.Seq, nil
 }

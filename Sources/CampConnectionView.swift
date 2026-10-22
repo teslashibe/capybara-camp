@@ -159,10 +159,10 @@ struct CampMembershipForm: View {
 struct CloudRequestQueueView: View {
     @ObservedObject var cloud: CampConnection
     let session: CloudSession
-    var items: [CloudRequest] { cloud.requests.filter { $0.sessionId == session.id && !["completed", "failed", "cancelled"].contains($0.state) } }
+    var items: [CloudRequest] { cloud.requests.filter { !$0.isIsolatedWork && $0.sessionId == session.id && !["completed", "failed", "cancelled"].contains($0.state) } }
     var pending: [CloudOutboxItem] { cloud.pending.filter { $0.path.contains("/sessions/\(session.id)/") } }
     var body: some View {
-        CampWorkerStatusView(worker: cloud.worker, sessionID: session.id, showStatus: false)
+        CampWorkerStatusView(worker: cloud.worker, sessionID: session.id, ordinaryOnly: true, showStatus: false)
         CloudStreamApprovals(live: cloud.live, cloud: cloud, session: session)
         if !items.isEmpty || !pending.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
@@ -206,9 +206,11 @@ struct CloudRequestQueueView: View {
 struct CampWorkerStatusView: View {
     @ObservedObject var worker: CampLocalWorker
     var sessionID: String? = nil
+    var implementationID: String? = nil
+    var ordinaryOnly = false
     var showStatus = true
     @State private var reviewing: CloudAttempt?
-    var items: [CloudAttempt] { worker.issues.filter { sessionID == nil || $0.request.sessionId == sessionID } }
+    var items: [CloudAttempt] { worker.issues.filter { (sessionID == nil || $0.request.sessionId == sessionID) && (implementationID == nil || $0.request.implementationId == implementationID) && (!ordinaryOnly || !$0.request.isIsolatedWork) } }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if showStatus { Label(worker.status, systemImage: "desktopcomputer").font(.system(size: 11)).foregroundStyle(campMuted) }

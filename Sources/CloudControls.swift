@@ -46,8 +46,9 @@ extension CloudOutboxItem {
 struct CloudControlQueueView: View {
     @ObservedObject var cloud: CampConnection
     var sessionID: String
+    var requestID: String? = nil
     var restore: (String) -> Void
-    var items: [CloudOutboxItem] { cloud.pending.filter { $0.sessionID == sessionID && $0.cloudControl != nil } }
+    var items: [CloudOutboxItem] { cloud.pending.filter { item in item.sessionID == sessionID && item.cloudControl != nil && (requestID.map { item.controlRequestID == $0 } ?? !cloud.requests.contains { $0.isIsolatedWork && $0.id == item.controlRequestID }) } }
     var body: some View {
         if !items.isEmpty {
         ScrollView {

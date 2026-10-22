@@ -22,8 +22,7 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: finish shared implementation follow-up controls and board-card conversion
-in the native planning workspace, validate executor setup, owner approval and
+Next: validate executor setup, initial owner approval and
 the worker against the local API, then finish the remaining transfer cases,
 full-history migration and shared skills. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
@@ -43,6 +42,43 @@ explicit action. Stale reviews can be withdrawn without exposing their content.
 A narrow API read exposes the executor's prepared location/permissions to the
 creator or executor owner, with project, source and request-access checks.
 
+Shared implementation now has a durable follow-up composer, session mentions,
+owner approvals, steering and cancellation through the existing request/control
+paths. Failed submissions retain their prompt for explicit recovery. The original
+ticket converts to an executor card while retaining planning history; executing
+work takes precedence over a queued follow-up and displays reported settings.
+An October 22 computer-use walkthrough signed two isolated native clients into
+the real local Go API/PostgreSQL fixture with independent users and credentials.
+The creator sent a follow-up, the executor owner approved it, and both clients
+received the queue update. API readback confirmed one plan, two requests,
+different creator/executor identities and the retained provider conversation.
+Provider output was synthetic; no live CLI or personal profile was used.
+
+That walkthrough found and fixed a shared implementation entering the local
+transcript reader, a stale status in the creator's chat header, and clipped queue
+text after approval. The routing and direct connection observation fixes pass
+native regressions. The rebuilt native client shows no false banner, follows the
+teammate's approval and cancellation immediately, and keeps a two-line queue
+prompt readable. The original ticket moves to In progress while both account
+source sessions stay Ready. Model controls fit in a compact header row.
+Screenshots are recorded in `build/ui-audit/shared-implementation-queue-oct22.png`
+and `shared-implementation-approved-oct22.png`.
+Pointer actions still report no available window, although accessibility input
+and screenshots work. Browser control remains disabled, so the full matching-size
+design comparison is still open.
+
+The full Go race suite and vet passed (`build/shared-followup-backend.log`);
+focused Camp/HTTP/migration race suites and vet passed after the final settings
+and active-request ordering changes (`build/shared-followup-backend-final.log`).
+Linux command builds passed. The native module and follow-up, history, approval,
+planning, cloud, mentions and state suites passed; final routing, selected-request
+revision and permission regressions passed in
+`build/implementation-chat-routing-tests.log`. The optimized arm64 development
+build and strict deep signature verification passed with Ambient Local Development
+(`build/Capybara Camp Implementation Verified.app`). Staged secret scanning found
+no leaks. Live provider execution, pointer testing, full design acceptance and
+universal/notarized release validation remain open.
+
 Native restart testing reproduced cached planning commands losing their plan
 binding when decoding snake-case JSON. Explicit coding keys now preserve plan,
 draft, restart and publication session IDs. Prepare/approve/dispatch retain the
@@ -56,9 +92,9 @@ HTTP coverage; Linux command builds pass. The native module compiles and the
 approval, shared implementation/history, planning, planning-stream, execution
 and sharing suites pass (`build/shared-execution-native-tests.log`). Additional
 wrong-device/inspection checks pass (`build/shared-execution-focused.log`).
-These are synthetic transport checks. Live API/provider and computer-use
-acceptance remain open; computer use still reports a locked Mac and disabled
-browser control. The isolated arm64 development build succeeds and passes
+These are synthetic transport checks. Full live provider and computer-use
+acceptance remain open. Native accessibility access has since recovered for the
+local API walkthrough above. The isolated arm64 development build succeeds and passes
 strict deep signature verification (`build/Capybara Camp Shared Approval.app`,
 `build/shared-approval-build.log`) using Ambient Local Development and the
 separate `com.capybaracamp.shared-approval-review` bundle ID. The staged secret

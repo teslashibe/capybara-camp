@@ -191,11 +191,13 @@ struct CloudPlanningResult: Codable, Equatable, Sendable {
     }
     var id: String; var title: String; var projectId: String; var version: Version
     var campId: String? = nil; var creatorUserId: String? = nil; var shared: Bool? = nil; var revision: Int64? = nil; var activeVersion: Int? = nil; var updatedAt: Date? = nil
+    var implementation: SharedImplementationSummary? = nil
     var referencedSessions: Set<String> { Set(version.planners.map(\.sessionId) + version.sources.map(\.sessionId)) }
     var valid: Bool {
         UUID(uuidString: id) != nil && UUID(uuidString: projectId) != nil && title.utf8.count <= 2000 &&
         (campId == nil || UUID(uuidString: campId!) != nil) && (creatorUserId == nil || UUID(uuidString: creatorUserId!) != nil) &&
         (revision == nil || revision! > 0) && (activeVersion == nil || activeVersion! >= version.version) &&
+        (implementation == nil || implementation?.valid == true && implementation?.planVersion == version.version) &&
         version.version > 0 && version.brief.utf8.count <= 8192 && version.workflow.accepts(version.planners.map(\.provider)) &&
         Set(version.planners.map(\.slot)) == Set(0..<version.workflow.plannerCount) &&
         (0..<version.workflow.plannerCount).contains(version.mergeSlot) &&
@@ -234,13 +236,15 @@ struct CloudPlanDraft: Codable, Equatable, Identifiable, Sendable {
 struct CloudPlanSummary: Codable, Equatable, Identifiable, Sendable {
     var id: String; var projectId: String; var creatorUserId: String; var title: String; var shared: Bool
     var revision: Int64; var activeVersion: Int; var state: String; var planners: [CloudPlanningResult.Planner]; var updatedAt: Date; var completed: Int
+    var implementation: SharedImplementationSummary? = nil
     var mode: PlanningMode? = nil
     var workflow: PlanningMode { mode ?? .comparison }
-    var valid: Bool { UUID(uuidString: id) != nil && UUID(uuidString: projectId) != nil && UUID(uuidString: creatorUserId) != nil && revision > 0 && activeVersion > 0 && title.utf8.count <= 2000 && workflow.accepts(planners.map(\.provider)) && Set(planners.map(\.slot)) == Set(0..<workflow.plannerCount) && planners.allSatisfy { UUID(uuidString: $0.sessionId) != nil && ($0.execution?.valid ?? true) } && (0...workflow.turnLimit).contains(completed) }
-    var stage: Stage { state == "running" ? .progress : ["ready", "failed", "needs_review"].contains(state) ? .attention : .ready }
+    var valid: Bool { UUID(uuidString: id) != nil && UUID(uuidString: projectId) != nil && UUID(uuidString: creatorUserId) != nil && revision > 0 && activeVersion > 0 && title.utf8.count <= 2000 && workflow.accepts(planners.map(\.provider)) && Set(planners.map(\.slot)) == Set(0..<workflow.plannerCount) && planners.allSatisfy { UUID(uuidString: $0.sessionId) != nil && ($0.execution?.valid ?? true) } && (0...workflow.turnLimit).contains(completed) && (implementation == nil || implementation?.valid == true && implementation?.planVersion == activeVersion) }
+    var stage: Stage { implementation?.stage ?? (state == "running" ? .progress : ["ready", "failed", "needs_review"].contains(state) ? .attention : .ready) }
     init(_ result: CloudPlanningResult) throws {
         guard result.valid, let owner = result.creatorUserId, let revision = result.revision, let activeVersion = result.activeVersion, let date = result.updatedAt, let shared = result.shared else { throw CampCloudError.invalidResponse }
         id = result.id; projectId = result.projectId; creatorUserId = owner; title = result.title; self.shared = shared
+        self.implementation = result.version.version == activeVersion ? result.implementation : nil
         self.revision = revision; self.activeVersion = activeVersion; state = result.version.state; planners = result.version.planners; updatedAt = date; mode = result.version.mode
         completed = result.version.steps.filter { $0.state == "completed" }.count
         guard valid else { throw CampCloudError.invalidResponse }

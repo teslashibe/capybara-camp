@@ -28,26 +28,26 @@ struct SharedImplementationList: View {
 }
 
 struct SharedImplementationView: View {
+    @ObservedObject var store: CampStore
     @ObservedObject var history: SharedImplementationHistory
     @ObservedObject var cloud: CampConnection
     let sourceIDs: Set<String>
     var back: () -> Void
     @StateObject private var live = CloudLiveConversation()
+    @State private var model = ""
+    @State private var tuning = ModelTuning()
+    @State private var tuningByModel: [String: ModelTuning] = [:]
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Button(action: back) { CampIconLabel(symbol: "chevron.left") }.buttonStyle(.plain)
-                    .help("Back to planning history").accessibilityLabel("Back to planning history")
-                if let run = history.selected { ProviderMark(provider: run.provider, size: 18) }
-                Text("Implementation").font(.system(size: 13, weight: .medium))
-                Spacer()
-                if history.loading { ProgressView().controlSize(.small) }
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 16) {
+                    heading.fixedSize()
+                    Spacer(minLength: 8)
+                    settings.frame(width: 420)
+                }
+                VStack(alignment: .leading, spacing: 10) { heading; settings }
             }
             if let run = history.selected, let request = history.selectedRequest {
-                ModelSettingsMenu(provider: run.provider, title: "Request settings", sessionModel: live.head?.model ?? request.model,
-                    modelLabel: live.head?.model ?? request.model, models: [], caps: ModelOption(id: request.model, label: request.model),
-                    choice: ModelTuning(effort: live.head?.effort ?? request.effort, speed: live.head?.speed ?? request.speed),
-                    locked: true, expanded: true, selectModel: { _ in }, tune: { _, _ in })
                 HStack {
                     Menu {
                         ForEach(history.requests) { value in
@@ -66,7 +66,7 @@ struct SharedImplementationView: View {
                     CampTranscriptViewport(followBottom: { proxy.scrollTo("shared-implementation-bottom", anchor: .bottom) }) {
                         LazyVStack(alignment: .leading, spacing: 18) {
                             MessageView(message: Message(id: request.id, role: "user", text: request.prompt), provider: run.provider)
-                            ForEach(live.messages) { MessageView(message: $0, provider: run.provider) }
+                            ForEach(live.messages) { MessageView(message: $0, metadata: "\(live.head?.model ?? request.model) · \(ModelMenu.effortName(live.head?.effort ?? request.effort)) · \(ModelMenu.speedName(live.head?.speed ?? request.speed))", provider: run.provider) }
                             if !live.notice.isEmpty { Text(live.notice).font(.caption).foregroundStyle(campMuted) }
                             Color.clear.frame(height: 1).id("shared-implementation-bottom")
                         }
@@ -77,15 +77,38 @@ struct SharedImplementationView: View {
                 SharedImplementationList(history: history, open: {})
                 Spacer()
             }
+            if history.selected != nil {
+                SharedImplementationComposer(store: store, history: history, live: live, model: $model, tuning: $tuning).id(history.selected?.id)
+            }
             if !history.error.isEmpty { Text(history.error).font(.caption).foregroundStyle(campMuted) }
-        }.onAppear { openOnlyRun(); watch() }
+        }.onAppear { model = history.selected?.model ?? ""; tuning = ModelTuning(effort: history.selected?.effort ?? "", speed: history.selected?.speed ?? "standard"); openOnlyRun(); watch() }
             .onDisappear { live.stop() }
+            .onChange(of: history.selected?.id) { _, _ in model = history.selected?.model ?? ""; tuning = ModelTuning(effort: history.selected?.effort ?? "", speed: history.selected?.speed ?? "standard"); tuningByModel = [:] }
             .onChange(of: history.selectedRequestID) { _, _ in live.stop(); watch() }
             .onChange(of: history.loading) { _, loading in if !loading { openOnlyRun() } }
             .onChange(of: cloud.planningStreamRevision) { _, _ in if let id = live.sessionID { live.invalidate(id) } }
             .onChange(of: history.selectedRequest?.revision) { _, _ in if let id = live.sessionID { live.invalidate(id) } }
             .onChange(of: cloud.scope) { _, _ in live.stop() }
             .onChange(of: access) { _, _ in live.stop() }
+    }
+    private var heading: some View {
+        HStack(spacing: 10) {
+            Button(action: back) { CampIconLabel(symbol: "chevron.left") }.buttonStyle(.plain)
+                .help("Back to planning history").accessibilityLabel("Back to planning history")
+            if let run = history.selected { ProviderMark(provider: run.provider, size: 18) }
+            Text("Implementation").font(.system(size: 13, weight: .medium))
+            if history.loading { ProgressView().controlSize(.small) }
+        }
+    }
+    @ViewBuilder private var settings: some View {
+        if let run = history.selected, let request = history.selectedRequest {
+            let models = store.sessions.first(where: { $0.id == "camp:" + run.sessionId }).map(store.availableModels) ?? []
+            ModelSettingsMenu(provider: run.provider, title: "Next reply model", sessionModel: request.model,
+                modelLabel: model, models: models, caps: models.first { $0.id == model } ?? ModelOption(id: model, label: model),
+                choice: tuning, locked: !history.canContinue, expanded: true,
+                selectModel: { next in tuningByModel[model] = tuning; model = next.isEmpty ? request.model : next; tuning = tuningByModel[model] ?? ModelTuning() },
+                tune: { effort, speed in if let effort { tuning.effort = effort }; if let speed { tuning.speed = speed } })
+        }
     }
     private var access: [String] {
         cloud.sessions.filter { sourceIDs.contains($0.id) || $0.id == history.selected?.sessionId }

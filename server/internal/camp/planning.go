@@ -98,16 +98,17 @@ type PlanningVersion struct {
 	QuotedSources []ImportedPlanningSource `json:"quoted_sources,omitempty"`
 }
 type PlanningTicket struct {
-	ID            string          `json:"id"`
-	CampID        string          `json:"camp_id"`
-	ProjectID     string          `json:"project_id"`
-	CreatorUserID string          `json:"creator_user_id"`
-	Title         string          `json:"title"`
-	Shared        bool            `json:"shared"`
-	Revision      int64           `json:"revision"`
-	ActiveVersion int64           `json:"active_version"`
-	UpdatedAt     time.Time       `json:"updated_at"`
-	Version       PlanningVersion `json:"version"`
+	Implementation *PlanningImplementationSummary `json:"implementation,omitempty"`
+	ID             string                         `json:"id"`
+	CampID         string                         `json:"camp_id"`
+	ProjectID      string                         `json:"project_id"`
+	CreatorUserID  string                         `json:"creator_user_id"`
+	Title          string                         `json:"title"`
+	Shared         bool                           `json:"shared"`
+	Revision       int64                          `json:"revision"`
+	ActiveVersion  int64                          `json:"active_version"`
+	UpdatedAt      time.Time                      `json:"updated_at"`
+	Version        PlanningVersion                `json:"version"`
 }
 type PlanningAction struct {
 	Action           string         `json:"action"`
@@ -447,22 +448,28 @@ func (s *Store) planningOnce(ctx context.Context, a auth.Actor, campID, id strin
 	if err = s.checkPlanningSources(ctx, tx, a, p); err != nil {
 		return PlanningTicket{}, err
 	}
+	implementations, err := s.latestPlanningImplementations(ctx, tx, a, campID, []string{id}, p.Version.Version)
+	if err != nil {
+		return PlanningTicket{}, err
+	}
+	p.Implementation = implementations[id]
 	return p, tx.Commit(ctx)
 }
 
 type PlanningSummary struct {
-	Mode          string    `json:"mode"`
-	ID            string    `json:"id"`
-	ProjectID     string    `json:"project_id"`
-	CreatorUserID string    `json:"creator_user_id"`
-	Title         string    `json:"title"`
-	Shared        bool      `json:"shared"`
-	Revision      int64     `json:"revision"`
-	ActiveVersion int64     `json:"active_version"`
-	State         string    `json:"state"`
-	Planners      []Planner `json:"planners"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	Completed     int       `json:"completed"`
+	Implementation *PlanningImplementationSummary `json:"implementation,omitempty"`
+	Mode           string                         `json:"mode"`
+	ID             string                         `json:"id"`
+	ProjectID      string                         `json:"project_id"`
+	CreatorUserID  string                         `json:"creator_user_id"`
+	Title          string                         `json:"title"`
+	Shared         bool                           `json:"shared"`
+	Revision       int64                          `json:"revision"`
+	ActiveVersion  int64                          `json:"active_version"`
+	State          string                         `json:"state"`
+	Planners       []Planner                      `json:"planners"`
+	UpdatedAt      time.Time                      `json:"updated_at"`
+	Completed      int                            `json:"completed"`
 }
 
 func (s *Store) ListPlanning(ctx context.Context, a auth.Actor, campID string) ([]PlanningSummary, error) {
@@ -534,6 +541,15 @@ func (s *Store) listPlanningOnce(ctx context.Context, a auth.Actor, campID strin
 		rows.Close()
 		if err != nil {
 			return nil, err
+		}
+	}
+	if len(ids) > 0 {
+		implementations, err := s.latestPlanningImplementations(ctx, tx, a, campID, ids, 0)
+		if err != nil {
+			return nil, err
+		}
+		for i := range out {
+			out[i].Implementation = implementations[out[i].ID]
 		}
 	}
 	return out, tx.Commit(ctx)

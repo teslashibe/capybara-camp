@@ -166,9 +166,26 @@ bounded pages and the selected request reuses the chat renderer, stream reader
 and model controls. Opening an implementation never subscribes to the account
 source chat. Provider-reported model, effort and speed remain visible when a
 state refresh returns the original request settings. Executor setup and owner
-approval are implemented in this workspace; their live API/provider and
-computer-use acceptance remains open. The follow-up composer and controls still
-need their native flow before release.
+approval are implemented in this workspace. The follow-up composer uses the
+same model controls, session-context picker, provider approval panels and durable
+control outbox as ordinary chat. The next reply's settings remain separate from
+the provider-reported settings on earlier messages.
+
+Follow-ups are saved before sending, retain their idempotency key across restart
+or a lost response, and need owner approval when submitted by another person.
+Terminal validation failures preserve the prompt for explicit restoration and
+review rather than silently retrying it. Restore prompt recovers the text;
+context attachments and settings must be reviewed before resubmission. Unknown
+execution outcomes block continuation until reconciled. Owner steering targets
+the selected running request, while queued prompts retain the implementation's
+provider conversation identity. Only the latest request page follows new turns;
+reading older history keeps that page open.
+
+The original board ticket becomes the implementation card without changing its
+identity, project or saved planning history. It shows the executing request ahead
+of later queued prompts, including actual reported model, effort and speed. When
+the running request finishes, the next queued request becomes the card's current
+work. Grant revocation removes inaccessible implementation metadata.
 
 The Mac worker persists each bounded stream event before sending it and retries
 the same sequence after a lost response. Cumulative text is sent as small deltas;
@@ -238,9 +255,8 @@ text and reported model settings. Duplicate sequence numbers must have the
 same content. Slow connections retain one in-flight snapshot and the latest
 replacement rather than buffering every text update.
 
-Shared plan-to-implementation conversion remains unfinished; local plans
-already support approved implementation on the same ticket. Live two-Mac and
-native visual validation remain release gates for shared streaming.
+Local and shared plans support approved implementation on the same ticket.
+Live two-Mac, provider and final native visual validation remain release gates.
 
 At most one planning step per provider can be leased to a device, including
 across different tickets and profiles. The two providers may run concurrently.

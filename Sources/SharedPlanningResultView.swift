@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SharedPlanningResultView: View {
     @ObservedObject var store: CampStore
+    @ObservedObject private var cloud: CampConnection
     @ObservedObject private var sharedPlanning: CampPlanning
     let result: CloudPlanningResult
     @State private var section = "Plans"
@@ -12,7 +13,7 @@ struct SharedPlanningResultView: View {
     @StateObject private var executionReview: SharedExecutionReview
     @State private var showingExecutionSetup = false
     init(store: CampStore, result: CloudPlanningResult) {
-        self.store = store; self.result = result; self.sharedPlanning = store.sharedPlanning
+        self.store = store; self.cloud = store.cloud; self.result = result; self.sharedPlanning = store.sharedPlanning
         _implementationHistory = StateObject(wrappedValue: ImportedImplementationHistory(planning: store.sharedPlanning))
         _sharedHistory = StateObject(wrappedValue: SharedImplementationHistory(planning: store.sharedPlanning))
         _executionReview = StateObject(wrappedValue: SharedExecutionReview(planning: store.sharedPlanning))
@@ -73,7 +74,7 @@ struct SharedPlanningResultView: View {
                     if executionReview.status != nil || canConfigureImplementation && (showingExecutionSetup || !hasImplementation) {
                         SharedExecutionSetupView(store: store, review: executionReview, plan: result).id("\(result.id):\(result.version.version)")
                     } else if showingSharedImplementation || implementationHistory.implementations.isEmpty {
-                        SharedImplementationView(history: sharedHistory, cloud: store.cloud, sourceIDs: result.referencedSessions) { section = "History" }
+                        SharedImplementationView(store: store, history: sharedHistory, cloud: store.cloud, sourceIDs: result.referencedSessions) { section = "History" }
                     } else { ImportedImplementationView(history: implementationHistory) { section = "History" } }
                 } else if section == "History" || section == "Combined plan" {
                     ScrollViewReader { proxy in ScrollView {
@@ -107,6 +108,7 @@ struct SharedPlanningResultView: View {
     private var boundWorkspace: some View {
         workspace.onAppear {
             if store.notificationPlanVersion != nil && result.version.workflow == .comparison { section = "Combined plan" }
+            else if result.implementation != nil { section = "Implementation" }
             applyCardNavigation()
         }
             .task(id: "\(result.id):\(result.version.version)") { implementationHistory.bind(result); sharedHistory.bind(result); executionReview.bind(result); showingExecutionSetup = false }
@@ -117,7 +119,7 @@ struct SharedPlanningResultView: View {
         boundWorkspace
             .onChange(of: sharedPlanning.executionRevision) { _, _ in executionReview.refresh() }
             .onChange(of: result.revision) { _, _ in executionReview.bind(result) }
-            .onChange(of: store.cloud.requests.filter { $0.planId == result.id }) { _, values in
+            .onChange(of: cloud.requests.filter { $0.planId == result.id }) { _, values in
                 sharedHistory.synchronize(values)
                 if values.contains(where: { $0.isImplementation && ["queued", "claimed", "started"].contains($0.state) }) { showingExecutionSetup = false }
             }
@@ -134,12 +136,12 @@ struct SharedPlanningResultView: View {
             .onChange(of: result.version.workflow) { _, _ in section = "Plans"; focusedSlot = nil }
             .onChange(of: result.version.version) { _, _ in section = "Plans"; focusedSlot = nil }
             .onChange(of: result.id) { _, _ in
-                section = store.notificationPlanVersion != nil && result.version.workflow == .comparison ? "Combined plan" : "Plans"
+                section = store.notificationPlanVersion != nil && result.version.workflow == .comparison ? "Combined plan" : result.implementation != nil ? "Implementation" : "Plans"
                 focusedSlot = nil
                 applyCardNavigation()
             }
     }
-    private var hasImplementation: Bool { !implementationHistory.implementations.isEmpty || !sharedHistory.runs.isEmpty }
+    private var hasImplementation: Bool { result.implementation != nil || !implementationHistory.implementations.isEmpty || !sharedHistory.runs.isEmpty }
     private var canConfigureImplementation: Bool { result.version.state == "ready" && result.version.imported == nil && result.activeVersion == result.version.version }
     private var canOpenImplementation: Bool { hasImplementation || canConfigureImplementation || executionReview.status != nil }
     private var plannerPanes: some View {
@@ -172,6 +174,7 @@ struct SharedPlanningResultView: View {
     }
     private var completedStages: Set<String> {
         var result = Set<String>()
+        if self.result.implementation?.state == "completed" { result.insert("Implementation") }
         for (section, phase) in [("Plans", "draft"), ("Reviews", "review"), ("Combined plan", "merge")] {
             let steps = self.result.version.steps.filter { $0.phase == phase }
             if !steps.isEmpty && steps.allSatisfy({ $0.state == "completed" }) { result.insert(section) }

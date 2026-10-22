@@ -118,6 +118,18 @@ func TestNativeFixtureServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	grants := seedNativeAccounts(t, store, actors[0])
+	if os.Getenv("CAMP_NATIVE_FIXTURE_IMPLEMENTATION") == "1" {
+		// The synthetic executor owns a real fixture device row. Native sign-in
+		// still creates an independent device with its own credential.
+		deviceToken, tokenErr := auth.Token()
+		if tokenErr != nil {
+			t.Fatal(tokenErr)
+		}
+		if _, err = pool.Exec(ctx, `INSERT INTO devices(id,user_id,name,token_hash,expires_at) VALUES($1,$2,'Synthetic executor',$3,now()+interval '1 hour')`, actors[1].DeviceID, actors[1].UserID, auth.HashToken(deviceToken)); err != nil {
+			t.Fatal(err)
+		}
+		seedNativeImplementation(t, store, actors, c.ID, project.ID)
+	}
 	handler := api.Handler()
 	if os.Getenv("CAMP_NATIVE_FIXTURE_CONTROLS") == "1" {
 		next := handler

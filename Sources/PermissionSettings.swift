@@ -109,7 +109,7 @@ extension CampStore {
         return result
     }
     func applyPermissions(_ settings: PermissionSettings, session: CampSession, preview: Bool) async throws {
-        guard !session.isCloud, session.provider != "Planning", sessionPermissions.error.isEmpty else { throw CampError.message("Restore the local session before changing permissions") }
+        guard !session.isCloud, !session.isSharedPlan, session.provider != "Planning", sessionPermissions.error.isEmpty else { throw CampError.message("Restore the local session before changing permissions") }
         guard settings.valid(for: session.provider) else { throw CampError.message("Invalid provider permission settings") }
         let initialRevision = permissionRevision(session)
         let context = preview ? nil : try await inspectExecution(session, permissions: settings)
