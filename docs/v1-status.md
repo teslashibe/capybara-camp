@@ -8,7 +8,7 @@ and acceptance are separate milestones.
 
 | Area | Implemented locally | Still required for V1 |
 | --- | --- | --- |
-| Local sessions | Automatic multi-profile import, board/chat, model/effort/speed controls, sub-agents, streaming, dictation, steering and queues | Finish live provider/recovery and performance validation after the Go migration |
+| Local sessions | Automatic multi-profile import, board/chat, model/effort/speed controls, sub-agents, streaming, dictation, steering and queues | Finish live provider/recovery and performance validation after the Go migration; complete the final design comparison below |
 | Planning and projects | Single-model plan, provider comparison, saved versions, same-ticket local implementation, project assignment across repositories | Shared implementation and owner-routed approval completion; cross-device validation |
 | Shared Camps | Go/PostgreSQL auth, membership, sessions, events, requests, native cache/outbox and owner-Mac worker | Real independent users on two Macs, remaining permission/recovery cases, production deployment |
 | Onboarding | Automatic profile discovery before full import, optional Camp sign-in, projects, notifications, skip/resume | Integrate verified cloud account, default execution target and Git connection steps as those services land |
@@ -32,3 +32,23 @@ user directory remains visible as a limitation instead of being guessed.
 The existing release exclusions remain: no automatic account rotation or quota
 bypass, no guaranteed never-expiring login, and no silent execution fallback.
 Normal provider sign-in and renewal remain provider-controlled.
+
+## Final design acceptance
+
+After implementation, compare the running native app with the approved
+interactive design at `http://127.0.0.1:8770/capybara-camp-interactive.html`.
+Review every screen and its empty, active, waiting, error and completed states,
+including the board, chat, planning, account setup, projects, memory, skills
+and notifications. Check wording, icons, shared controls, card dimensions,
+click areas, keyboard navigation, scrolling and streaming behavior. Record
+differences, fix them, and repeat the affected computer-use flows before release.
+Passing unit tests alone does not satisfy this gate.
+
+Known difference reported by the owner: an in-progress chat currently places
+sub-agents beneath Recent sessions. That layout is wrong. Match the approved
+design's separation of the main conversation and its sub-agents, and verify
+switching between them without mixing their transcripts or losing position.
+
+This review belongs at the end of implementation, alongside the two clean
+code-review cycles, native acceptance tests and performance checks. Preserve
+the owner's existing wording and clean, uniform card layout throughout.
