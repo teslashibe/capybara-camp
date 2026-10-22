@@ -15,9 +15,7 @@ struct CampConnectionButton: View {
 struct CampConnectionView: View {
     @ObservedObject var cloud: CampConnection
     @Environment(\.dismiss) private var dismiss
-    @State private var campName = ""
     @State private var projectName = ""
-    @State private var invitation = ""
     @State private var inviteEmail = ""
     @State private var inviteRole = "editor"
     @State private var generatedInvitation = ""
@@ -35,7 +33,7 @@ struct CampConnectionView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    if cloud.signedIn { connected } else { signIn }
+                    if cloud.signedIn { connected } else { CampSignInForm(cloud: cloud) }
                     if !cloud.error.isEmpty {
                         Label(cloud.error, systemImage: "exclamationmark.circle")
                             .font(.system(size: 12)).foregroundStyle(Color.orange).textSelection(.enabled)
@@ -43,30 +41,6 @@ struct CampConnectionView: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
         }.padding(26).frame(width: 620, height: 640).background(campCream)
-    }
-
-    var signIn: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Connect to your shared Camp").font(.headline)
-            Text("Sign in to your team's server to share selected sessions. Your Codex and Claude logins stay on this Mac.")
-                .font(.system(size: 12)).foregroundStyle(campMuted)
-            TextField("Camp server", text: $cloud.server).textContentType(.URL)
-                .accessibilityLabel("Camp server address").disabled(cloud.codeRequested)
-            TextField("Email address", text: $cloud.email).textContentType(.emailAddress)
-                .accessibilityLabel("Camp email address").disabled(cloud.codeRequested)
-            if cloud.codeRequested {
-                SecureField("Email code", text: $cloud.code).accessibilityLabel("Email verification code")
-                HStack {
-                    Button("Use a different address") { cloud.codeRequested = false; cloud.code = "" }
-                    Spacer()
-                    Button("Sign in") { run { await cloud.verifyCode() } }
-                        .buttonStyle(.borderedProminent).tint(campGreen).disabled(cloud.busy || cloud.code.isEmpty)
-                }
-            } else {
-                Button("Send sign-in code") { run { await cloud.sendCode() } }
-                    .buttonStyle(.borderedProminent).tint(campGreen).disabled(cloud.busy || cloud.email.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-        }.textFieldStyle(.roundedBorder)
     }
 
     var connected: some View {
@@ -77,21 +51,7 @@ struct CampConnectionView: View {
                 Text(cloud.server).font(.system(size: 11)).foregroundStyle(campMuted).textSelection(.enabled)
             }
             CampWorkerStatusView(worker: cloud.worker)
-            if !cloud.camps.isEmpty {
-                Picker("Camp", selection: Binding(get: { cloud.selectedCampId }, set: { id in run { await cloud.selectCamp(id) } })) {
-                    ForEach(cloud.camps) { camp in Text(camp.name).tag(camp.id) }
-                }
-            }
-            HStack {
-                TextField("New Camp name", text: $campName)
-                Button("Create Camp") { let name = campName; run { await cloud.createCamp(name: name); campName = "" } }
-                    .disabled(working || campName.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            HStack {
-                SecureField("Invitation token", text: $invitation)
-                Button("Join Camp") { let token = invitation; run { await cloud.join(token: token); invitation = "" } }
-                    .disabled(working || invitation.isEmpty)
-            }
+            CampMembershipForm(cloud: cloud)
             if let current {
                 Divider()
                 Text("Projects").font(.headline)
@@ -132,6 +92,66 @@ struct CampConnectionView: View {
     }
     private func run(_ operation: @escaping @MainActor () async -> Void) {
         guard !working else { return }; working = true
+        Task { await operation(); working = false }
+    }
+}
+
+// The same controls power first-run setup and Camp settings. Neither form
+// grants access to provider accounts or publishes any local sessions.
+struct CampSignInForm: View {
+    @ObservedObject var cloud: CampConnection
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Connect to your shared Camp").font(.headline)
+            Text("Sign in to your team's server to share selected sessions. Your Codex and Claude logins stay on this Mac.")
+                .font(.system(size: 12)).foregroundStyle(campMuted)
+            TextField("Camp server", text: $cloud.server).textContentType(.URL)
+                .accessibilityLabel("Camp server address").disabled(cloud.codeRequested || cloud.busy)
+            TextField("Email address", text: $cloud.email).textContentType(.emailAddress)
+                .accessibilityLabel("Camp email address").disabled(cloud.codeRequested || cloud.busy)
+            if cloud.codeRequested {
+                SecureField("Email code", text: $cloud.code).accessibilityLabel("Email verification code").disabled(cloud.busy)
+                HStack {
+                    Button("Use a different address") { cloud.codeRequested = false; cloud.code = ""; cloud.error = "" }.disabled(cloud.busy)
+                    Spacer()
+                    Button("Sign in") { Task { await cloud.verifyCode() } }
+                        .buttonStyle(.borderedProminent).tint(campGreen).disabled(cloud.busy || cloud.code.isEmpty)
+                }
+            } else {
+                Button("Send sign-in code") { Task { await cloud.sendCode() } }
+                    .buttonStyle(.borderedProminent).tint(campGreen).disabled(cloud.busy || cloud.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }.textFieldStyle(.roundedBorder)
+    }
+}
+
+struct CampMembershipForm: View {
+    @ObservedObject var cloud: CampConnection
+    @State private var campName = ""
+    @State private var invitation = ""
+    @State private var working = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if !cloud.camps.isEmpty {
+                Picker("Camp", selection: Binding(get: { cloud.selectedCampId }, set: { id in run { await cloud.selectCamp(id) } })) {
+                    ForEach(cloud.camps) { camp in Text(camp.name).tag(camp.id) }
+                }
+            }
+            HStack {
+                TextField("New Camp name", text: $campName)
+                Button("Create Camp") { let name = campName; run { await cloud.createCamp(name: name); if cloud.error.isEmpty { campName = "" } } }
+                    .disabled(campName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            HStack {
+                SecureField("Invitation token", text: $invitation)
+                Button("Join Camp") { let token = invitation; run { await cloud.join(token: token); if cloud.error.isEmpty { invitation = "" } } }
+                    .disabled(invitation.isEmpty)
+            }
+            if working { ProgressView().controlSize(.small) }
+        }.textFieldStyle(.roundedBorder).disabled(working || cloud.busy)
+    }
+    private func run(_ operation: @escaping @MainActor () async -> Void) {
+        guard !working else { return }; working = true; cloud.error = ""
         Task { await operation(); working = false }
     }
 }

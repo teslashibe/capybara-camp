@@ -27,7 +27,11 @@ local transcripts. Cloud execution is the next runtime extension.
 
 ## Identities and authentication
 
-The first-run flow is Connect Camp → Add accounts → Choose defaults. Connecting
+The complete cloud first-run flow will extend the native [setup sheet](onboarding.md)
+with Add accounts and Choose defaults once those services are implemented.
+Today's sheet supports local profile import, optional Camp sign-in, projects and
+notifications; it does not claim to provision provider accounts or cloud runners.
+Connecting
 Camp uses the person's verified email and saved server address. Add accounts
 offers Codex or Claude, an optional name, and the official provider sign-in.
 After one account connects, Add another returns to the same flow. People may

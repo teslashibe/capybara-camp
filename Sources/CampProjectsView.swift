@@ -88,10 +88,7 @@ struct CampProjectsView: View {
                     }.frame(width:200,height:270)
                 }
                 VStack(alignment:.leading,spacing:10) {
-                    TextField("Project name",text:$name).accessibilityLabel("Project name")
-                    Text("Repository links").font(.system(size:12,weight:.medium))
-                    TextEditor(text:$repositories).font(.system(size:12,design:.monospaced)).frame(height:115).padding(6).background(.white).clipShape(RoundedRectangle(cornerRadius:7)).accessibilityLabel("Repository links")
-                    Text("Optional GitHub URLs, one per line. Linking organizes work; Git access is connected separately.").font(.system(size:11)).foregroundStyle(campMuted)
+                    CampProjectFields(name:$name,repositories:$repositories)
                     if project != nil { Toggle("Archived",isOn:$archived).toggleStyle(.checkbox) }
                     HStack {
                         if let project { Button("Show tickets") { store.projectFilter=(shared ? "cloud:":"local:")+project.id;dismiss() } }
@@ -131,6 +128,19 @@ struct CampProjectsView: View {
                     if let saved=local.projects.first(where:{$0.id==value.id}) { select(saved) }
                 }
             } catch { self.error=error.localizedDescription }
+        }
+    }
+}
+
+struct CampProjectFields: View {
+    @Binding var name: String
+    @Binding var repositories: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Project name", text: $name).textFieldStyle(.roundedBorder).accessibilityLabel("Project name")
+            Text("Repository links").font(.system(size: 12, weight: .medium))
+            TextEditor(text: $repositories).font(.system(size: 12, design: .monospaced)).frame(height: 115).padding(6).background(.white).clipShape(RoundedRectangle(cornerRadius: 7)).accessibilityLabel("Repository links")
+            Text("Optional GitHub URLs, one per line. Linking organizes work; Git access is connected separately.").font(.system(size: 11)).foregroundStyle(campMuted)
         }
     }
 }

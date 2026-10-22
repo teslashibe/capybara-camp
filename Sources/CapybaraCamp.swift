@@ -217,6 +217,7 @@ final class TranscriptWatch {
 }
 
 @MainActor final class CampStore: ObservableObject {
+    let onboarding: CampOnboarding
     let cloud: CampConnection
     let sharing: CampSharing
     let mentions: SessionMentions
@@ -269,6 +270,7 @@ final class TranscriptWatch {
     var steering: Bool { selected.flatMap { conversation($0)?.steering } ?? false }
     @Published var banner = ""
     @Published var sourceSheet = false
+    @Published var sourceError = ""
     @Published var projectSheet = false
     @Published var permissionSheet: CampSession?
     let sessionPermissions: LocalPermissions
@@ -375,6 +377,7 @@ final class TranscriptWatch {
         return cachedBoard[stage] ?? []
     }
     init(stateDirectory: URL = Bridge.support, conversationProcess: @escaping () throws -> Process = { try Bridge.process("conversation") }) {
+        onboarding = CampOnboarding(directory: stateDirectory)
         self.stateDirectory = stateDirectory
         self.mentions = SessionMentions(directory: stateDirectory)
         self.planning = LocalPlanning(directory: stateDirectory, makeProcess: conversationProcess)
@@ -1151,7 +1154,9 @@ final class TranscriptWatch {
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.showsHiddenFiles = true
         panel.message = "Choose a Codex home or Claude config folder containing saved sessions"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task { do { _ = try await Bridge.call("add-source", input: Data(url.path.utf8)); refresh() } catch { banner = error.localizedDescription } }
+        if banner == sourceError { banner = "" }
+        sourceError = ""
+        Task { do { _ = try await Bridge.call("add-source", input: Data(url.path.utf8)); refresh() } catch { sourceError = error.localizedDescription; banner = error.localizedDescription } }
     }
 }
 
@@ -1165,8 +1170,10 @@ struct Mascot: View {
 }
 struct RootView: View {
     @ObservedObject var store: CampStore
+    @ObservedObject var onboarding: CampOnboarding
     @Environment(\.openWindow) private var openWindow
     @State private var showCamp = false
+    init(store: CampStore) { self.store = store; self.onboarding = store.onboarding }
     var body: some View {
         HStack(spacing: 0) {
             sidebar
@@ -1194,6 +1201,10 @@ struct RootView: View {
         .overlay(alignment: .topTrailing) { CampNotificationToast(store: store, notices: store.notifications).padding(22) }
         .onChange(of: store.view) { _, value in store.observeHistory(); if value == "Chat" { store.loadHistory() } }
         .sheet(isPresented: $store.sourceSheet) { SourcesView(store: store) }
+        .sheet(isPresented: Binding(get: { onboarding.presented }, set: { if !$0 { onboarding.pause() } })) {
+            CampOnboardingView(store: store, setup: onboarding, cloud: store.cloud, projects: store.projects, notices: store.notifications)
+        }
+        .onChange(of: onboarding.presented) { _, showing in if !showing && !onboarding.error.isEmpty { store.banner = onboarding.error } }
         .sheet(isPresented: $store.projectSheet) { CampProjectsView(store: store, local: store.projects, cloud: store.cloud) }
         .sheet(item: $store.permissionSheet) { SessionPermissionsView(store: store, session: $0) }
         .sheet(isPresented: $showCamp) { CampConnectionView(cloud: store.cloud) }
@@ -1633,8 +1644,9 @@ struct SourcesView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack { Mascot(); VStack(alignment: .leading, spacing: 4) { Text("Bring your sessions to camp").font(.title2); Text("Local folders only · Credentials stay with each CLI").foregroundStyle(campMuted).font(.caption) } }
-            ScrollView { VStack(spacing: 10) { ForEach(store.sources) { s in VStack(alignment: .leading, spacing: 5) { HStack { Text(s.provider + " · " + s.label).fontWeight(.medium); Spacer(); Text(s.count.formatted()).foregroundStyle(campMuted) }; Text(s.root).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).foregroundStyle(campMuted) }.padding(13).background(campCream).clipShape(RoundedRectangle(cornerRadius: 10)) } } }.frame(maxHeight: 280)
+            ScrollView { LocalProfileList(sources: store.sources) }.frame(maxHeight: 280)
             Text("Add another account’s CODEX_HOME or CLAUDE_CONFIG_DIR folder. Cloud-only chats and unreadable macOS user folders are not imported. A saved chat’s author may differ from the account currently logged into that profile.").font(.system(size: 12)).foregroundStyle(campMuted)
+            if !store.sourceError.isEmpty { Text(store.sourceError).font(.system(size: 12)).foregroundStyle(.orange) }
             HStack { Button("Add profile folder") { store.addSource() }; Spacer(); Button("Done") { store.sourceSheet = false }.keyboardShortcut(.defaultAction) }
         }.padding(28).frame(width: 600)
     }
@@ -1665,6 +1677,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var body: some Scene {
         Window("Capybara Camp", id: "camp") { RootView(store: store).preferredColorScheme(.light) }
             .windowStyle(.hiddenTitleBar).defaultSize(width: 1370, height: 860)
+            .commands {
+                CommandGroup(after: .appSettings) {
+                    Button("Set up Capybara Camp…") { AppDelegate.reopen?(); store.onboarding.open() }
+                }
+            }
     }
 }
 #endif

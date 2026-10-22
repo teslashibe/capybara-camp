@@ -75,6 +75,7 @@ continue into implementation with a separate executor choice on the same ticket.
 Completion notifications include a native inbox, foreground toasts, optional
 macOS alerts and server-owned read receipts across a person's devices.
 Client projects group tickets across repositories without changing their working directories. The sidebar and card menus support assignment, rename and archive, with private SQLite storage and shared Go/PostgreSQL state. See [projects](docs/projects.md) for the current contract.
+New installations open a four-step [setup flow](docs/onboarding.md) for local profiles, optional shared Camp connection, a project and desktop notifications. Existing users can open **Capybara Camp → Set up Capybara Camp**. Optional steps can be skipped, and setup can be resumed later.
 See [notifications](docs/notifications.md) for the current delivery
 and cross-device boundaries.
 Shared implementation, streamed partial shared-plan output, cloud runners,
