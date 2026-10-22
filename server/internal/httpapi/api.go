@@ -17,16 +17,19 @@ import (
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
 	"github.com/teslashibe/capybara-camp/server/internal/camp"
 	"github.com/teslashibe/capybara-camp/server/internal/database"
+	"github.com/teslashibe/capybara-camp/server/internal/gitprovider"
 )
 
 type API struct {
-	Pool        *pgxpool.Pool
-	Auth        *auth.Service
-	Camps       *camp.Store
-	Origin      string
-	streamMu    sync.Mutex
-	streams     map[string]int
-	streamCount int
+	Pool             *pgxpool.Pool
+	Auth             *auth.Service
+	Camps            *camp.Store
+	Git              *camp.GitStore
+	GitWebhookSecret string
+	Origin           string
+	streamMu         sync.Mutex
+	streams          map[string]int
+	streamCount      int
 }
 type authorizedHandler func(http.ResponseWriter, *http.Request, auth.Actor)
 
@@ -86,6 +89,7 @@ func (a *API) Handler() http.Handler {
 	a.planningRoutes(mux)
 	a.notificationRoutes(mux)
 	a.accountRoutes(mux)
+	a.gitRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -128,6 +132,14 @@ func fail(w http.ResponseWriter, err error) bool {
 		return false
 	}
 	switch {
+	case errors.Is(err, gitprovider.ErrAuthorization):
+		problem(w, 409, "git_sign_in_required")
+	case errors.Is(err, gitprovider.ErrAccess):
+		problem(w, 403, "git_access_unavailable")
+	case errors.Is(err, gitprovider.ErrUnavailable):
+		problem(w, 503, "git_unavailable")
+	case errors.Is(err, gitprovider.ErrResponse):
+		problem(w, 502, "git_response_invalid")
 	case errors.Is(err, camp.ErrCloudUnavailable):
 		problem(w, 503, "cloud_accounts_unavailable")
 	case errors.Is(err, auth.ErrUnauthorized):

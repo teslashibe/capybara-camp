@@ -1,6 +1,6 @@
 # First-run setup
 
-V1 development adds a five-step native setup sheet. It opens for a new local
+V1 development adds a six-step native setup sheet. It opens for a new local
 installation. Existing installations keep their board; anyone can reopen setup
 from **Capybara Camp → Set up Capybara Camp**.
 
@@ -22,18 +22,22 @@ from **Capybara Camp → Set up Capybara Camp**.
    cancellation and reconnect. The server must enable cloud accounts and prepare
    an isolated runner. Until then, the form shows unavailable or waiting state.
    Local profiles stay independent; the form never copies their credentials.
-4. **Project** starts in Inbox, selects an existing local project or creates one.
+4. **GitHub** optionally connects the person's GitHub App authorization. It uses
+   the same screen as Manage sources, with cancel/reconnect, signed-in identity
+   and installation/repository browsing. A missing server configuration is
+   visible and can be skipped. Connecting does not clone or push a repository.
+5. **Project** starts in Inbox, selects an existing local project or creates one.
    It uses the existing project fields, validation and SQLite store. Repository
    links are optional and do not grant Git access. Creation saves before moving
    forward; an invalid name, unsafe URL or failed write leaves the inputs intact.
    Shared projects remain available in Camp settings.
-5. **Ready** shows the current import, connection and project state, offers
+6. **Ready** shows the current import, connection and project state, offers
    optional desktop notifications through the existing macOS permission flow,
    and opens the board. New projects appear in the sidebar; setup keeps imported
    sessions visible and does not assign historical sessions automatically.
 
 Back preserves local project fields while the sheet is open. Skip this step advances past
-optional Camp/account/project setup. Finish later closes the sheet and saves its current
+optional Camp/account/GitHub/project setup. Finish later closes the sheet and saves its current
 step and chosen local project. It does not reappear on every launch; the menu resumes it. A completed flow
 can be revisited from the beginning. Relaunch restores the step, not unsaved form
 text, email codes or invitation tokens. Successfully added sources and projects
@@ -69,7 +73,7 @@ folder picker cancellation, optional connection failures, project creation,
 notification choice, restart and the setup menu. A real second-user cloud test
 and provider account provisioning remain part of the overall V1 release gates.
 
-Local/Cloud execution defaults, Git grants and skill installation will extend
+Local/Cloud execution defaults, repository execution grants and skill installation will extend
 this flow when their underlying V1 services are implemented. They must show
 verified outcomes from those services; importing a
 folder or completing the sheet must never fabricate a connected account.
@@ -125,3 +129,13 @@ truncated provider picker was widened and rechecked with both provider names.
 This used an arm64 development build signed with the existing Apple Development
 identity, not a notarized V1 release. The normal app and its profiles were not
 used for the synthetic sign-in checks.
+
+### GitHub integration checks
+
+The GitHub and onboarding suites cover the inserted sixth step, recovery of a
+lost authorization-start response, cancellation, private setup persistence and
+late replies after sign-out. A native computer-use walkthrough verified the
+same GitHub screen in onboarding and Manage sources, repository browsing,
+read-only labels, scroll overflow, cancelling a disconnect, and confirming a
+disconnect. It used a seeded local fixture and did not authorize a real GitHub
+account. The final design audit and live GitHub App validation remain pending.

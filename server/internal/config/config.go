@@ -14,6 +14,7 @@ import (
 type Config struct {
 	Address, DatabaseURL, PublicURL, AuthSecret, ResendKey, EmailFrom string
 	ProviderEncryptionKey                                             string
+	GitHub                                                            GitHub
 }
 
 func Load(migrateOnly bool) (Config, error) {
@@ -21,6 +22,7 @@ func Load(migrateOnly bool) (Config, error) {
 		PublicURL: os.Getenv("CAMP_PUBLIC_URL"), AuthSecret: os.Getenv("CAMP_AUTH_SECRET"),
 		ResendKey: os.Getenv("CAMP_RESEND_API_KEY"), EmailFrom: os.Getenv("CAMP_EMAIL_FROM")}
 	c.ProviderEncryptionKey = os.Getenv("CAMP_PROVIDER_ENCRYPTION_KEY")
+	c.GitHub = loadGitHub()
 	if value := os.Getenv("CAMP_ADDRESS"); value != "" {
 		c.Address = value
 	}
@@ -34,6 +36,9 @@ func (c Config) Validate(migrateOnly bool) error {
 	}
 	if migrateOnly {
 		return nil
+	}
+	if err := c.GitHub.Validate(); err != nil {
+		return err
 	}
 	if c.ProviderEncryptionKey != "" {
 		key, err := base64.StdEncoding.Strict().DecodeString(c.ProviderEncryptionKey)

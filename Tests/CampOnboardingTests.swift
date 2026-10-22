@@ -24,7 +24,9 @@ import Foundation
         precondition(resumed.step == .accounts && resumed.step.number == 3 && resumed.step.rawValue == 4,
                      "Cloud accounts fit between Camp and Project without changing saved step values")
         resumed.back()
-        resumed.next(); resumed.next(); resumed.next()
+        resumed.next(); resumed.next()
+        precondition(resumed.step == .git && resumed.step.rawValue == 5, "GitHub setup reuses its account screen before project selection")
+        resumed.next(); resumed.next()
         precondition(resumed.step == .ready)
         resumed.finish()
         let finished = CampOnboarding(directory: root)

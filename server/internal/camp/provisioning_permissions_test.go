@@ -59,7 +59,7 @@ func TestControllerRoleCanProvisionWithoutReadingHumanOrProviderSecrets(t *testi
 	if _, err = controller.EnsureControllerGrant(ctx, a, 4); err != nil {
 		t.Fatal("controller cannot provision", err)
 	}
-	for _, query := range []string{`SELECT encrypted_credentials FROM provider_installations`, `SELECT encrypted_challenge FROM provider_login_attempts`, `SELECT email FROM users`, `SELECT token_hash FROM devices`} {
+	for _, query := range []string{`SELECT encrypted_credentials FROM provider_installations`, `SELECT encrypted_challenge FROM provider_login_attempts`, `SELECT encrypted_credentials FROM git_connections`, `SELECT encrypted_context FROM git_logins`, `SELECT email FROM users`, `SELECT token_hash FROM devices`} {
 		if _, err = limited.Exec(ctx, query); err == nil {
 			t.Fatal("controller read a prohibited column")
 		}

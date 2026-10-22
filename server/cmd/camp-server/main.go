@@ -15,6 +15,7 @@ import (
 	"github.com/teslashibe/capybara-camp/server/internal/camp"
 	"github.com/teslashibe/capybara-camp/server/internal/config"
 	"github.com/teslashibe/capybara-camp/server/internal/database"
+	"github.com/teslashibe/capybara-camp/server/internal/gitprovider"
 	"github.com/teslashibe/capybara-camp/server/internal/httpapi"
 	"github.com/teslashibe/magiclink-auth-go/resend"
 )
@@ -53,6 +54,39 @@ func run() error {
 		}
 	}
 	a := &httpapi.API{Pool: pool, Auth: auth.New(pool, cfg.AuthSecret, cfg.PublicURL, resend.New(cfg.ResendKey, cfg.EmailFrom)), Camps: camps, Origin: cfg.PublicURL}
+	gitDone := make(chan struct{})
+	if cfg.GitHub.Enabled() {
+		a.GitWebhookSecret = cfg.GitHub.WebhookSecret
+		provider, e := gitprovider.New(cfg.GitHub, cfg.PublicURL, nil)
+		if e != nil {
+			return e
+		}
+		key, _ := base64.StdEncoding.Strict().DecodeString(cfg.GitHub.EncryptionKey)
+		a.Git, e = camp.NewGitStore(camps, provider, key)
+		if e != nil {
+			return e
+		}
+		go func() {
+			defer close(gitDone)
+			tick := time.NewTicker(30 * time.Second)
+			defer tick.Stop()
+			for {
+				work, stop := context.WithTimeout(ctx, 15*time.Second)
+				if err := a.Git.Reap(work); err != nil && ctx.Err() == nil {
+					log.Print("Git authorization cleanup will retry")
+				}
+				stop()
+				select {
+				case <-ctx.Done():
+					return
+				case <-tick.C:
+				}
+			}
+		}()
+	} else {
+		close(gitDone)
+	}
+	defer func() { cancel(); <-gitDone }()
 	maintenanceDone := make(chan struct{})
 	go func() {
 		defer close(maintenanceDone)

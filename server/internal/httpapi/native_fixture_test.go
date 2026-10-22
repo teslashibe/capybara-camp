@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -94,6 +95,22 @@ func TestNativeFixtureServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := &API{Pool: pool, Auth: auth.New(pool, strings.Repeat("fixture", 8), "https://fixture.example", fixtureMail{directory}), Camps: store, Origin: "https://fixture.example"}
+	api.Git, err = camp.NewGitStore(store, gitHTTPProvider{}, bytes.Repeat([]byte{41}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitLogin, err := api.Git.Begin(ctx, actors[0], uuid.NewString(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitURL, _ := url.Parse(gitLogin.URL)
+	gitClaim, err := api.Git.Claim(ctx, gitURL.Query().Get("state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = api.Git.Exchange(ctx, gitClaim, "native-fixture-code"); err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(api.Handler())
 	defer server.Close()
 	data, err := json.Marshal(map[string]any{"url": server.URL, "camp_id": c.ID, "project_id": project.ID, "pid": os.Getpid(), "owner": actors[0].Email, "teammate": actors[1].Email})

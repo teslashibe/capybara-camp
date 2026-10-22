@@ -54,6 +54,21 @@ spec:
             - name: CAMP_PROVIDER_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef: {name: camp-secrets, key: CAMP_PROVIDER_ENCRYPTION_KEY, optional: true}
+            - name: CAMP_GITHUB_CLIENT_ID
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_GITHUB_CLIENT_ID, optional: true}
+            - name: CAMP_GITHUB_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_GITHUB_CLIENT_SECRET, optional: true}
+            - name: CAMP_GITHUB_APP_SLUG
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_GITHUB_APP_SLUG, optional: true}
+            - name: CAMP_GITHUB_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_GITHUB_ENCRYPTION_KEY, optional: true}
+            - name: CAMP_GITHUB_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_GITHUB_WEBHOOK_SECRET, optional: true}
           ports:
             - name: http
               containerPort: 8096
