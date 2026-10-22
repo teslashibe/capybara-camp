@@ -355,3 +355,20 @@ func TestWorkspaceRevocationDuringGitReadCannotPublish(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkspaceListIsBoundToOwnerAndSession(t *testing.T) {
+	g, _, actors, c, session, input := workspaceFixture(t)
+	workspace, err := g.CreateWorkspace(t.Context(), actors[0], c.ID, session.ID, uuid.NewString(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := g.SessionWorkspaces(t.Context(), actors[0], c.ID, session.ID)
+	if err != nil || len(values) != 1 || values[0].ID != workspace.ID {
+		t.Fatal(values, err)
+	}
+	for _, actor := range actors[1:] {
+		if _, err = g.SessionWorkspaces(t.Context(), actor, c.ID, session.ID); err == nil {
+			t.Fatal("workspace account identity exposed to another member")
+		}
+	}
+}

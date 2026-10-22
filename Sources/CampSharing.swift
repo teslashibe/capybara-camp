@@ -49,12 +49,13 @@ struct LocalShareStatus {
         guard let value = shares.first(where: { "camp:" + $0.id == id }) else { return nil }
         return localSession?(value.local.id) ?? value.local
     }
-    func configure(local: CampSession, projectId: String, shared: Bool, allowRequests: Bool, adopt: Bool = false) async throws {
+    func configure(local: CampSession, projectId: String, shared: Bool, allowRequests: Bool, adopt: Bool = false, syncToCloud: Bool? = nil) async throws {
         guard let scope, let actor, let cache, transport != nil, UUID(uuidString: projectId) != nil, !local.isCloud else { throw CampCloudError.cacheUnavailable }
         task?.cancel(); task = nil; generation = UUID()
         let token = generation
         var value = binding(for: local) ?? LocalShare(id: UUID().uuidString.lowercased(), local: local, projectId: projectId, shared: shared, allowRequests: allowRequests)
         value.local = local; value.projectId = projectId; value.shared = shared; value.allowRequests = allowRequests
+        if let syncToCloud { value.syncToCloud = syncToCloud }
         value.projectChangeRequested = true
         value.adoptRequested = adopt
         value.deviceId = actor.deviceId
@@ -76,7 +77,7 @@ struct LocalShareStatus {
     }
     private func observe() {
         var paths = Set<String>()
-        for value in shares where value.shared {
+        for value in shares where value.shared || value.syncToCloud == true {
             let local = localSession?(value.local.id) ?? value.local
             if !local.path.isEmpty {
                 paths.insert(local.path); paths.insert(URL(fileURLWithPath: local.path).deletingLastPathComponent().path)
@@ -185,8 +186,8 @@ struct LocalShareStatus {
             await state(id, "Local session unavailable", generation: token); return
         }
         value.local = local
-        let title = local.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !value.shared && value.remote == nil && value.needsWithdrawalFence != true { await state(id, "Private", generation: token); return }
+        let localTitle = local.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !value.shared && value.syncToCloud != true && value.remote == nil && value.needsWithdrawalFence != true { await state(id, "Private", generation: token); return }
         if value.profile == nil {
             value.pending = CampPublication(kind: "profile", method: "POST", path: "/v1/profiles", body: try CampWire.body([
                 "local_id": PublishMessage.hash(Data(local.sourceID.utf8)), "provider": local.provider, "label": String(local.sourceLabel.prefix(120))]))
@@ -208,7 +209,15 @@ struct LocalShareStatus {
             value.pending = CampPublication(kind: "ownership", method: "POST", path: get.path + "/ownership", body: try CampWire.body(["profile_id": profile.id, "expected_revision": remote.revision]))
             try await commit(value, generation: token); value = try await perform(value, generation: token)
         }
-        let status = localStatus?(local) ?? LocalShareStatus(model: local.model, state: "idle", stage: value.remote?.stage ?? "Ready", externalOwner: false)
+        let status: LocalShareStatus
+        let title: String
+        if let remote=value.remote,remote.executionLocation=="cloud" {
+            status=LocalShareStatus(model:remote.model,state:remote.state,stage:remote.stage,externalOwner:remote.externalOwner)
+            title = remote.title
+        } else {
+            status = localStatus?(local) ?? LocalShareStatus(model: local.model, state: "idle", stage: value.remote?.stage ?? "Ready", externalOwner: false)
+            title = localTitle
+        }
         let remote = value.remote
         if remote == nil || remote?.title != title || remote?.model != status.model || remote?.state != status.state || remote?.externalOwner != status.externalOwner || remote?.projectId != value.projectId || remote?.shared != value.shared || remote?.allowRequests != value.allowRequests {
             value.pending = CampPublication(kind: "session", method: "PUT", path: get.path, body: try CampWire.body([
@@ -218,7 +227,18 @@ struct LocalShareStatus {
                 "expected_revision": remote?.revision ?? 0]))
             try await commit(value, generation: token); value = try await perform(value, generation: token)
         }
-        guard value.shared else { await state(id, "Private", generation: token); return }
+        if value.remote?.executionLocation == "cloud" {
+            value.state = "Runs in Cloud"
+            if shares.first(where: { $0.id == id })?.remote != value.remote || shares.first(where: { $0.id == id })?.state != value.state {
+                try await commit(value, generation: token)
+                if let remote = value.remote {
+                    try await cache.ingest(scope: scope, session: remote, expectedEpoch: cacheEpoch)
+                    try check(token); await published?(remote, scope, cacheEpoch)
+                }
+            }
+            return
+        }
+        guard value.shared || value.syncToCloud == true else { await state(id, "Private", generation: token); return }
         await state(id, "Syncing transcript", generation: token)
         var after: Int64 = -1
         for _ in 0..<1000 {
@@ -234,7 +254,7 @@ struct LocalShareStatus {
                     hashes: messages.map { PublishedDigest(id: $0.id, digest: $0.digest) })
                 try await commit(value, generation: token); value = try await perform(value, generation: token)
             }
-            if !page.hasMore { await state(id, "Shared", generation: token); return }
+            if !page.hasMore { await state(id, value.shared ? "Shared" : "Saved to Camp", generation: token); return }
             after = page.after
         }
         await state(id, "Transcript exceeds 200,000 messages", generation: token)

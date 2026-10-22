@@ -17,6 +17,7 @@ actor PublishingFixture: CampPublishingTransport {
     func holdNextSession() { holdSession = true; lostResponse = false }
     func isSessionHeld() -> Bool { sessionHeld }
     func moveProject(_ id:String) { remote?.projectId=id;remote?.revision += 1 }
+    func moveToCloud() { remote?.executionLocation = "cloud"; remote?.state = "running"; remote?.model = "cloud-actual"; remote?.stage = "In progress"; remote?.title = "Cloud title" }
     func releaseSession() { releaseGate?.resume(); releaseGate = nil; holdSession = false }
     func perform(_ operation: CampPublication) async throws -> Data {
         if operation.method == "GET" {
@@ -39,7 +40,7 @@ actor PublishingFixture: CampPublishingTransport {
         case "session":
             let expected = (object["expected_revision"] as! NSNumber).int64Value
             guard expected == remote?.revision ?? 0 else { throw CampCloudError.server(409, "revision_conflict") }
-            let value = CloudSession(id: object["id"] as! String, campId: scope.campId, projectId: object["project_id"] as! String, profileId: object["profile_id"] as! String, provider: profile!.provider, profileLabel: profile!.label, ownerUserId: actor.userId, ownerDeviceId: actor.deviceId, localSessionId: object["local_session_id"] as! String, title: (object["title"] as! String).trimmingCharacters(in: .whitespacesAndNewlines), model: object["model"] as! String, state: object["state"] as! String, stage: object["stage"] as! String, shared: object["shared"] as! Bool, allowRequests: object["allow_requests"] as! Bool, externalOwner: object["external_owner"] as! Bool, revision: expected + 1, transcriptRevision: remote?.transcriptRevision ?? 0, permissionRevision: 1, updatedAt: Date())
+            let value = CloudSession(id: object["id"] as! String, campId: scope.campId, projectId: object["project_id"] as! String, profileId: object["profile_id"] as! String, provider: profile!.provider, profileLabel: profile!.label, ownerUserId: actor.userId, ownerDeviceId: actor.deviceId, localSessionId: object["local_session_id"] as! String, title: (object["title"] as! String).trimmingCharacters(in: .whitespacesAndNewlines), model: object["model"] as! String, state: object["state"] as! String, stage: object["stage"] as! String, shared: object["shared"] as! Bool, allowRequests: object["allow_requests"] as! Bool, externalOwner: object["external_owner"] as! Bool, revision: expected + 1, transcriptRevision: remote?.transcriptRevision ?? 0, permissionRevision: 1, updatedAt: Date(), executionLocation: remote?.executionLocation)
             remote = value; result = try CampWire.encoder().encode(value)
         case "transcript":
             let expected = (object["expected_revision"] as! NSNumber).int64Value
@@ -127,6 +128,20 @@ actor PublishingFixture: CampPublishingTransport {
         let raceResult = await racingServer.snapshot()
         precondition(raceResult.0?.shared == false, "late publication reopened withdrawn sharing")
         racing.attach(scope: nil, actor: nil, transport: nil)
+        let privateServer = PublishingFixture(scope: scope, actor: actor)
+        let privateSharing = CampSharing(cache: try CampCache(directory: root.appendingPathComponent("private")), export: export)
+        privateSharing.localSession = { _ in native }
+        privateSharing.attach(scope: scope, actor: actor, transport: privateServer)
+        try await privateSharing.configure(local: native, projectId: project, shared: false, allowRequests: false, syncToCloud: true)
+        await eventually("private cloud copy did not finish") { privateSharing.shares.first?.state == "Saved to Camp" }
+        let privateResult = await privateServer.snapshot()
+        precondition(privateResult.0?.shared == false && privateResult.0?.allowRequests == false && privateResult.3.count == 2, "Private copy changed sharing permissions or omitted transcript")
+        await privateServer.moveToCloud(); privateSharing.retry()
+        await eventually("cloud-owned session kept uploading local history") { privateSharing.shares.first?.state == "Runs in Cloud" }
+        let cloudResult = await privateServer.snapshot()
+        precondition(cloudResult.0?.state == "running" && cloudResult.0?.model == "cloud-actual" && cloudResult.0?.title == "Cloud title" && cloudResult.1 == privateResult.1, "Local publisher overwrote cloud state or transcript")
+        precondition(privateSharing.shares.first?.remote?.executionLocation == "cloud", "Cloud ownership was not persisted on the local binding")
+        privateSharing.attach(scope: nil, actor: nil, transport: nil)
         let epoch = try await cache.epoch(scope)
         try await cache.clear(scope)
         do {

@@ -120,6 +120,18 @@ func TestRunnerStreamReplayControlsAndTranscript(t *testing.T) {
 			t.Fatal(values)
 		}
 	}
+	target, err := s.Execution(t.Context(), owner, w.CampID, w.SessionID)
+	if err != nil || !target.RequiresTransfer {
+		t.Fatal("cloud history must be reviewed before moving", target, err)
+	}
+	session, err := s.Session(t.Context(), owner, w.CampID, w.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.AssignExecution(t.Context(), owner, w.CampID, w.SessionID, uuid.NewString(), ExecutionInput{Location: "local", ExpectedEpoch: target.Epoch, ExpectedSessionRevision: session.Revision, ExpectedTranscriptRevision: session.TranscriptRevision})
+	if !errors.Is(err, ErrTransition) {
+		t.Fatal("cloud history was abandoned", err)
+	}
 	if _, err = s.RequestStream(context.Background(), auth.Actor{UserID: uuid.NewString()}, w.CampID, r.ID, 0); err == nil {
 		t.Fatal("foreign stream access")
 	}

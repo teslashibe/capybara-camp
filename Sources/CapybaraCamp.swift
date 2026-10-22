@@ -244,6 +244,7 @@ final class TranscriptWatch {
     private var externalRuns: [String: String] = [:]
     private var backgroundPoll: Task<Void, Never>?
     @Published var shareSheet: CampSession?
+    @Published var executionSheet: CampSession?
     @Published var contextInspection: ContextInspection?
     @Published var reviewingPlan: String?
     @Published var planNavigation: PlanNavigationRequest?
@@ -339,9 +340,9 @@ final class TranscriptWatch {
     var selected: CampSession? { sessions.first { $0.id == selectedID } }
     var visibleSessions: [CampSession] {
         if cachedVisibleRevision == filterRevision { return cachedVisible }
-        let locals = Set(sharing.shares.filter { $0.shared && cloudSessions["camp:" + $0.id] != nil }.map { $0.local.id })
+        let locals = Set(sharing.shares.filter { ($0.shared || $0.syncToCloud == true && cloudSessions["camp:" + $0.id]?.executionLocation == "cloud") && cloudSessions["camp:" + $0.id] != nil }.map { $0.local.id })
         let localIDs = Set(sessions.filter { !$0.isCloud }.map(\.id))
-        let privateMirrors = Set(sharing.shares.filter { !$0.shared && localIDs.contains($0.local.id) }.map { "camp:" + $0.id })
+        let privateMirrors = Set(sharing.shares.filter { !$0.shared && !($0.syncToCloud == true && cloudSessions["camp:" + $0.id]?.executionLocation == "cloud") && localIDs.contains($0.local.id) }.map { "camp:" + $0.id })
         let implementations = Set(planning.tickets.compactMap(\.implementation).filter(\.providerSessionCreated).map { $0.executor.session.provider + "\0" + $0.context.profile + "\0" + $0.providerSessionID })
         cachedVisible = sessions.filter { s in
             !locals.contains(s.id) && !privateMirrors.contains(s.id) && (s.isPlan || !implementations.contains(s.provider + "\0" + s.root + "\0" + s.sessionID))
@@ -402,7 +403,7 @@ final class TranscriptWatch {
         #if CAMP_DEVELOPMENT
         cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"), vault: ProcessInfo.processInfo.environment["CAMP_DEV_EPHEMERAL_CREDENTIALS"] == "1" ? MemoryCampCredentials() : CampKeychain(), allowLoopback: true)
         #elseif CAMP_TESTING
-        cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"), allowLoopback: true)
+        cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"), vault: MemoryCampCredentials(), allowLoopback: true)
         #else
         cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"))
         #endif
@@ -509,6 +510,13 @@ final class TranscriptWatch {
             guard let self, self.selectedID == "camp:" + id else { return }
             self.loadHistory(silent: true)
         }
+        cloud.execution.changed = { [weak self] id in Task {
+            guard let self else{return}
+            await self.cloud.refreshSession(id)
+            guard self.view == "Chat",let local=self.sharing.shares.first(where:{$0.id==id})?.local,
+                  self.selectedID==local.id || self.selectedID=="camp:"+id else{return}
+            if let remote=self.sessions.first(where:{$0.id=="camp:"+id}),self.cloudSessions[remote.id]?.executionLocation=="cloud" {self.open(remote)}
+        } }
         cloud.live.changed = { [weak self] in
             guard let self, self.selectedID == self.cloud.live.sessionID.map({ "camp:" + $0 }) else { return }
             self.objectWillChange.send()
@@ -1275,6 +1283,7 @@ struct RootView: View {
         .sheet(item: $store.permissionSheet) { SessionPermissionsView(store: store, session: $0).campWindowBehavior() }
         .sheet(isPresented: $showCamp) { CampConnectionView(cloud: store.cloud).campWindowBehavior() }
         .sheet(item: $store.shareSheet) { session in CampShareView(store: store, cloud: store.cloud, sharing: store.sharing, session: session).campWindowBehavior() }
+        .sheet(item: $store.executionSheet) { session in RunLocationView(store:store,session:session).campWindowBehavior() }
         .sheet(item: $store.contextInspection) { value in ContextInspectionView(store: store, inspection: value).campWindowBehavior() }
         .onOpenURL { store.openContextLink($0) }
         .environment(\.openURL, OpenURLAction { url in
@@ -1401,8 +1410,8 @@ struct SessionCard: View {
     var running: Bool { store.isBusy(session) }
     var waiting: Bool { store.conversation(session)?.approvals.isEmpty == false || store.cloudSessions[session.id]?.state == "waiting" || live?.state == "waiting" }
     var statusText: String {
-        if waiting { return session.isCloud ? "Waiting for the owner" : "Waiting for your approval" }
-        guard let live else { return "Running in Camp" }
+        if waiting { return session.isCloud && store.cloudSessions[session.id]?.ownerUserId != store.cloud.credential?.actor.userId ? "Waiting for the owner" : "Waiting for your approval" }
+        guard let live else { return store.executionSession(session)?.executionLocation == "cloud" ? "Running in Cloud" : "Running in Camp" }
         return live.state == "running" ? "Running in \(live.owner)" : live.state == "idle" ? "Open in \(live.owner)" : "\(live.owner) · \(live.state)"
     }
     var body: some View {
@@ -1438,9 +1447,11 @@ struct SessionCard: View {
                 if !store.queued(session).isEmpty { Text("\(store.queued(session).count) queued").font(.system(size: 9)).foregroundStyle(campMuted) }
             }
         } actions: {
-            Button { store.open(session) } label: {
+            HStack { Button { store.open(session) } label: {
                 HStack { Label("Subagents", systemImage: "person.2"); Spacer() }.frame(minHeight: 28).contentShape(Rectangle())
             }.buttonStyle(.plain).font(.system(size: 10)).foregroundStyle(campMuted).help("Show subagents")
+                ExecutionLocationButton(store:store,session:session)
+            }
         }
             .contextMenu { ForEach(Stage.allCases, id: \.self) { dest in Button("Move to \(dest.rawValue)") { store.move(session.id, dest) } } }
     }
@@ -1570,7 +1581,7 @@ struct ChatView: View {
                     }.padding(.horizontal, 22).padding(.vertical, 8)
                     if store.planning.ticket(s.id)?.implementation != nil { ImplementationStatusView(store: store, planning: store.planning, id: s.id) }
                     if let live = store.activityFor(s) { Text("\(live.owner) · \(live.state) · Model choice applies to the next Camp reply").font(.system(size: 11)).foregroundStyle(campGreen).padding(.bottom, 8) }
-                    HStack { Text(s.sourceLabel).font(.system(size: 10, weight: .medium)); if !s.accountID.isEmpty { Text("· author \(s.accountID.prefix(8))").font(.system(size: 10)).foregroundStyle(campMuted) }; Spacer(); Menu(store.stage(s).rawValue) { ForEach(Stage.allCases, id: \.self) { stage in Button(stage.rawValue) { store.move(s.id, stage) } } }.fixedSize() }.padding(.horizontal, 22).padding(.vertical, 10)
+                    HStack { Text(s.sourceLabel).font(.system(size: 10, weight: .medium)); if !s.accountID.isEmpty { Text("· author \(s.accountID.prefix(8))").font(.system(size: 10)).foregroundStyle(campMuted) }; ExecutionLocationButton(store:store,session:s); Spacer(); Menu(store.stage(s).rawValue) { ForEach(Stage.allCases, id: \.self) { stage in Button(stage.rawValue) { store.move(s.id, stage) } } }.fixedSize() }.padding(.horizontal, 22).padding(.vertical, 10)
                     SessionContextChips(store: store, mentions: store.mentions, destination: s, transcriptStrip: true)
                       ScrollViewReader { proxy in
                         CampTranscriptViewport(padding: 25, followBottom: { proxy.scrollTo("bottom", anchor: .bottom) }) {
@@ -1602,7 +1613,7 @@ struct ChatView: View {
                         else { PromptQueueView(store: store, session: s) }
                         TextEditor(text: $store.draft).font(.system(size: 13)).scrollContentBackground(.hidden).frame(minHeight: 64, maxHeight: 84).padding(8).background(.white).clipShape(RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(campInk.opacity(0.13)))
                         HStack(spacing: 10) {
-                            Text(s.isCloud ? "Saved to Camp · Runs on the session owner's Mac after approval" : store.runningID == s.id ? "Steer now or queue for after this turn" : store.activityFor(s) != nil ? "Open in \(s.provider) · Camp queue waits until it is closed" : s.isPlan || store.sessionPermissions.grants[s.id] != nil ? "Uses \(s.sourceLabel) login · \(store.permissionSettings(s).summary)" : "Uses \(s.sourceLabel) login · Chat-only local preview")
+                            Text(s.isCloud ? (store.executionSession(s)?.executionLocation == "cloud" ? "Saved to Camp · Runs in Cloud with the selected account" : "Saved to Camp · Runs on the session owner's Mac after approval") : store.runningID == s.id ? "Steer now or queue for after this turn" : store.activityFor(s) != nil ? "Open in \(s.provider) · Camp queue waits until it is closed" : s.isPlan || store.sessionPermissions.grants[s.id] != nil ? "Uses \(s.sourceLabel) login · \(store.permissionSettings(s).summary)" : "Uses \(s.sourceLabel) login · Chat-only local preview")
                                 .font(.system(size: 10)).foregroundStyle(campMuted).fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 8)
                             Button("@ Context") { contextQuery = ""; contextPicking = true }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(campGreen)

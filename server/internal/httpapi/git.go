@@ -141,6 +141,12 @@ func (a *API) gitRoutes(mux *http.ServeMux) {
 			}
 		}))
 	}
+	mux.HandleFunc("GET /v1/camps/{camp}/sessions/{session}/workspaces", a.gitAuthorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		out, err := a.Git.SessionWorkspaces(r.Context(), u, r.PathValue("camp"), r.PathValue("session"))
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
 	mux.HandleFunc("POST /v1/camps/{camp}/sessions/{session}/workspaces", a.gitAuthorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		var input camp.WorkspaceInput
 		if !decode(w, r, &input) {

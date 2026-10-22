@@ -273,3 +273,28 @@ This check validates the local rendering used by the new cloud projection; it
 is not a live cloud or two-Mac acceptance run. The cloud projection and shared
 approval format also have native regression checks. Full parity, minimum-width
 cloud controls and long-running memory/CPU measurements remain open.
+
+## Execution location review — October 21
+
+The same isolated native build now opens **Run on** from both the card footer
+and main chat. Computer use verified Local/Cloud switching, the disconnected
+Camp entry point, opening and closing nested sign-in, and returning to the
+original session. The first screenshot exposed a full-width selector without
+the reference icons. The shared segmented control now supports icons, and the
+sheet uses its compact presentation. The rebuilt sheet passed pointer and
+left/right keyboard switching. The final capture is
+`build/ui-audit/execution-location.png`.
+Command-Q from this sheet also exited the app and its local helper, verified
+by process inspection without reopening the app.
+
+Native execution, sharing, cloud, Git connection and worker suites passed.
+They cover lost prepare/assignment replies, restart with the same command key,
+stale-review rejection, foreign workspace rejection, sign-out races, revoked
+cache writes and private transcript copying. Local publication preserves the
+cloud title, model, activity and transcript after assignment. The full Go race
+and vet run passed, including owner-only workspace discovery and the guard
+against moving away from published cloud history without a reviewed transfer.
+
+This pass does not accept the signed-in setup flow, actual provider execution,
+two-Mac behavior, transfer flow or the full final design audit. Those remain in
+the V1 checklist.

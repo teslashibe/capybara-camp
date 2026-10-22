@@ -302,6 +302,53 @@ func (g *GitStore) Workspace(ctx context.Context, a auth.Actor, campID, id strin
 	return readWorkspace(ctx, tx, a, campID, id)
 }
 
+// SessionWorkspaces lets the owner resume preparation from another Mac without
+// exposing account or repository identities to other Camp members.
+func (g *GitStore) SessionWorkspaces(ctx context.Context, a auth.Actor, campID, sessionID string) ([]Workspace, error) {
+	tx, err := g.store.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = g.store.lock(ctx, tx, a, campID, false); err != nil {
+		return nil, err
+	}
+	session, err := g.store.readSession(ctx, tx, a, campID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if session.OwnerUserID != a.UserID {
+		return nil, ErrDenied
+	}
+	rows, err := tx.Query(ctx, `SELECT id FROM ticket_workspaces WHERE camp_id=$1 AND session_id=$2 AND owner_user_id=$3 ORDER BY updated_at DESC,id DESC LIMIT 25`, campID, sessionID, a.UserID)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	out := []Workspace{}
+	for _, id := range ids {
+		w, err := readWorkspace(ctx, tx, a, campID, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, nil
+}
+
 func (g *GitStore) CancelWorkspace(ctx context.Context, a auth.Actor, campID, id, requestID string, input WorkspaceCancel) (Workspace, error) {
 	if input.ExpectedRevision < 1 {
 		return Workspace{}, ErrInput

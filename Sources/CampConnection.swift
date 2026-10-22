@@ -31,6 +31,7 @@ import SwiftUI
     lazy var worker = CampLocalWorker(cache: cache)
     lazy var providerAccounts = CampProviderAccounts(cache: cache)
     lazy var gitConnections = CampGitConnections(cache: cache)
+    lazy var execution = CampExecution(cache: cache)
     private let vault: any CampCredentialStore
     private let allowLoopback: Bool
     private var generation = UUID()
@@ -133,6 +134,7 @@ import SwiftUI
         }
     }
     private func loadCached(scope: CloudScope) async {
+        execution.attach(scope:scope,credential:credential,transport:client)
         guard let cache else { return }
         do {
             let token = generation
@@ -292,6 +294,7 @@ import SwiftUI
         }
     }
     private func clearVisible() {
+        execution.attach(scope:nil,credential:nil,transport:nil)
         live.stop()
         sessions = []; projects = []; members = []; requests = []; pending = []
         sessionIndex = [:]; requestIndex = [:]; sessionsChanged?([], [], nil)
@@ -516,6 +519,15 @@ import SwiftUI
         let value = try await client.get(CloudTranscript.self, path: "/v1/camps/\(scope.campId)/sessions/\(session.id)/transcript?limit=120&before=\(before)&revision=\(revision)", token: credential.token)
         guard self.scope == scope, self.credential?.token == credential.token else { throw CancellationError() }
         try await cache.saveTranscript(value, scope: scope, sessionId: session.id, before: before, expectedPermissionRevision: session.permissionRevision, expectedEpoch: epoch); return value
+    }
+    func refreshSession(_ id:String) async {
+        guard let scope,let client,let credential else{return}
+        let epoch=cacheEpoch
+        do {
+            let value=try await client.get(CloudSession.self,path:"/v1/camps/\(scope.campId)/sessions/\(id)",token:credential.token)
+            guard self.scope == scope, self.credential?.token == credential.token, !Task.isCancelled else { return }
+            await acceptPublishedSession(value,scope:scope,epoch:epoch)
+        } catch { if self.scope == scope, self.credential?.token == credential.token, !Task.isCancelled { self.error=error.localizedDescription } }
     }
     func cachedTranscript(session: CloudSession) async -> [CloudMessage] {
         guard let scope, let cache else { return [] }; return (try? await cache.transcript(scope, sessionId: session.id)) ?? []

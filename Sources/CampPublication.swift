@@ -33,6 +33,7 @@ struct LocalShare: Codable, Identifiable, Sendable {
     var deviceId: String?
     var needsWithdrawalFence: Bool?
     var projectChangeRequested: Bool?
+    var syncToCloud: Bool?
     var state: String = "Waiting to sync"
 }
 protocol CampPublishingTransport: Sendable {

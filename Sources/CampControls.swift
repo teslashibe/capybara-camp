@@ -116,6 +116,7 @@ extension View {
 struct CampSegmentedControl<Value: Hashable>: View {
     let options: [(value: Value, title: String)]
     @Binding var selection: Value
+    var icons: [Value: String] = [:]
     @FocusState private var focused: Value?
     @Environment(\.isEnabled) private var isEnabled
 
@@ -123,7 +124,10 @@ struct CampSegmentedControl<Value: Hashable>: View {
         HStack(spacing: 0) {
             ForEach(Array(options.enumerated()), id: \.offset) { _, option in
                 Button { selection = option.value } label: {
-                    Text(option.title).font(.system(size: 12)).lineLimit(1)
+                    HStack(spacing: 4) {
+                        if let icon = icons[option.value] { Image(systemName: icon).font(.system(size: 11)).accessibilityHidden(true) }
+                        Text(option.title)
+                    }.font(.system(size: 12)).lineLimit(1)
                         .frame(maxWidth: .infinity).frame(minHeight: 26)
                         .background(selection == option.value ? Color(hex: 0xCDCCC6) : .clear)
                         .clipShape(RoundedRectangle(cornerRadius: 7))

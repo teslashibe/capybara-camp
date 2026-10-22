@@ -11,12 +11,13 @@ import (
 )
 
 type ExecutionTarget struct {
-	Location    string                      `json:"location"`
-	Epoch       int64                       `json:"epoch"`
-	WorkspaceID string                      `json:"workspace_id,omitempty"`
-	Mode        string                      `json:"mode"`
-	Permissions localcli.PermissionSettings `json:"permissions"`
-	Available   bool                        `json:"available"`
+	Location         string                      `json:"location"`
+	Epoch            int64                       `json:"epoch"`
+	WorkspaceID      string                      `json:"workspace_id,omitempty"`
+	Mode             string                      `json:"mode"`
+	Permissions      localcli.PermissionSettings `json:"permissions"`
+	Available        bool                        `json:"available"`
+	RequiresTransfer bool                        `json:"requires_transfer,omitempty"`
 }
 
 type ExecutionInput struct {
@@ -131,6 +132,13 @@ func (s *Store) Execution(ctx context.Context, a auth.Actor, campID, id string) 
 		return ExecutionTarget{}, ErrDenied
 	}
 	out, err := s.executionTarget(ctx, tx, session)
+	if err == nil || errors.Is(err, ErrTransition) {
+		required, failure := requiresExecutionTransfer(ctx, tx, session)
+		if failure != nil {
+			return out, failure
+		}
+		out.RequiresTransfer = required
+	}
 	if errors.Is(err, ErrTransition) {
 		var raw []byte
 		var purpose string
@@ -146,6 +154,15 @@ func (s *Store) Execution(ctx context.Context, a auth.Actor, campID, id string) 
 		return out, nil
 	}
 	return out, err
+}
+
+func requiresExecutionTransfer(ctx context.Context, tx pgx.Tx, session Session) (bool, error) {
+	if session.ExecutionLocation != "cloud" {
+		return false, nil
+	}
+	var required bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM prompt_requests r JOIN ticket_workspaces w ON w.id=r.execution_workspace_id WHERE r.session_id=$1 AND r.execution_workspace_id=$2 AND ((w.purpose='implementation' AND r.started_at IS NOT NULL) OR (r.stream_published AND r.stream_seq>0)))`, session.ID, session.ExecutionWorkspaceID).Scan(&required)
+	return required, err
 }
 
 // AssignExecution only changes ownership of future work. The caller must
@@ -197,9 +214,9 @@ func (s *Store) AssignExecution(ctx context.Context, a auth.Actor, campID, id, k
 		return out, ErrTransition
 	}
 	if session.ExecutionLocation == "cloud" && (in.Location == "local" || in.WorkspaceID != session.ExecutionWorkspaceID) {
-		var needsTransfer bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM prompt_requests r JOIN ticket_workspaces w ON w.id=r.execution_workspace_id WHERE r.session_id=$1 AND r.execution_workspace_id=$2 AND w.purpose='implementation' AND r.started_at IS NOT NULL)`, session.ID, session.ExecutionWorkspaceID).Scan(&needsTransfer); err != nil {
-			return out, err
+		needsTransfer, transferErr := requiresExecutionTransfer(ctx, tx, session)
+		if transferErr != nil {
+			return out, transferErr
 		}
 		// A destination change must not strand edits from an implementation.
 		// The reviewed transfer protocol will supply this release condition.
