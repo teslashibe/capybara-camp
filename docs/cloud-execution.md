@@ -168,7 +168,7 @@ deploy/kubernetes/runner/
    contract and downloads the approved file changes. Conflicts require review;
    never overwrite a diverged local worktree automatically
 
-Planning and memory consolidation use the same target/account selector. Each
+Planning and implementation use the same target/account selector. Each
 planner can have its own target; implementation selects its target independently.
 Skills install into the chosen profile with the existing revision rules. Cloud
 execution does not depend on a Mac remaining online.

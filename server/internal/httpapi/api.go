@@ -39,7 +39,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		if database.Ready(ctx, a.Pool) != nil || a.Camps != nil && a.Camps.MemoryReady(ctx) != nil {
+		if database.Ready(ctx, a.Pool) != nil {
 			problem(w, 503, "not_ready")
 			return
 		}
@@ -89,7 +89,6 @@ func (a *API) Handler() http.Handler {
 	a.handoffRoutes(mux)
 	a.requestRoutes(mux)
 	a.planningRoutes(mux)
-	a.memoryRoutes(mux)
 	a.notificationRoutes(mux)
 	a.accountRoutes(mux)
 	a.gitRoutes(mux)

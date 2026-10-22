@@ -74,23 +74,14 @@ Migration credentials and the PostgreSQL administrator password are separate.
 Apply your rendered overlay explicitly to the chosen context. The API refuses
 traffic until the exact schema is available. Check the PostgreSQL rollout,
 `camp-migrate` Job completion, API readiness and HTTPS certificate before allowing
-users to connect. `/health` checks the process; `/ready` checks both database
-schemas.
+users to connect. `/health` checks the process; `/ready` checks the Camp database.
 
-Schema 30 introduces memory observation metadata. The migration command also
-applies the pinned Cortex migrations in a private schema, `camp_memory` for the
-default public Camp schema. Custom Camp schemas use a separate derived schema
-name. The API opens this store without running migrations and refuses startup
-when it is missing or incomplete. Retrying the migration command completes a
-partially finished setup. Keep the complete database in backups so Cortex and
-Camp metadata are restored together. The embedded library needs no separate
-listener, deployment or provider credentials. Its license is included at
-`licenses/cortex.txt` and in the container images.
-
-Schema 31 adds saved consolidation jobs and source references. It retains
-cancelled jobs and refuses a downgrade while any job exists. Restore the complete
-Camp/Cortex database together when returning to an older schema. The current
-job API saves metadata; provider dispatch is still in development.
+Cortex and memory consolidation are deferred from V1. The migration command and
+server no longer initialize or require a Cortex schema. Historical Camp migrations
+30 and 31 remain to preserve schema compatibility and any records created by
+development builds. Their tables are unused by V1; old memory events are excluded
+from replay. Keep complete database backups, including any existing Cortex schema.
+Do not drop retained records or downgrade to remove the feature.
 
 The database bootstrap SQL runs only on a new data volume. Changing a password
 in a Kubernetes Secret does not change an existing PostgreSQL role password.

@@ -40,8 +40,6 @@ github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UV
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/teslashibe/cortex v1.4.1-0.20261022090629-c97a5ac7b2bd h1:D7XMJstrtK8KOk4O6QPb1VZkg0nn7yH3DbNHShaEW2w=
-github.com/teslashibe/cortex v1.4.1-0.20261022090629-c97a5ac7b2bd/go.mod h1:0hVjcpCbs9MKruwaYhe6lRa96f6Gukv/a1KLDS9y1hI=
 github.com/teslashibe/magiclink-auth-go v0.2.1 h1:kj1ULTZ0qP3lMnTF6hgApHYXnHK04JqysEkQ5M1rOiI=
 github.com/teslashibe/magiclink-auth-go v0.2.1/go.mod h1:R4DYGfbuFd7R3BRHOyre+TRIRQdCHGeK4j1Be4Odxao=
 go.uber.org/multierr v1.11.0 h1:blXXJkSxSSfBVBlC76pxqeO+LN3aDfLQo+309xJstO0=

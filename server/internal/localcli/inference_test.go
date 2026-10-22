@@ -1,11 +1,9 @@
 package localcli
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -102,12 +100,6 @@ func TestInferenceRejectsToolsAndBoundsOutput(t *testing.T) {
 	if err := emitConversationText(conversationRequest{Mode: "inference"}, func(map[string]any) error { return nil }, strings.Repeat("x", maxInferenceText+1)); err == nil {
 		t.Fatal("oversized output accepted")
 	}
-	a := providerFixture(t, "conversation-codex")
-	for _, body := range []string{`{"unexpected":true}`, `{} {}`} {
-		if _, err := a.Run(t.Context(), "memory-inference", strings.NewReader(body)); err == nil {
-			t.Fatal("invalid helper input accepted")
-		}
-	}
 }
 
 func TestInferenceUsesIsolatedProviderTurnAndCleansPrivateFiles(t *testing.T) {
@@ -131,12 +123,7 @@ func TestInferenceUsesIsolatedProviderTurnAndCleansPrivateFiles(t *testing.T) {
 			in := InferenceRequest{Session: Session{Provider: provider, Root: a.Config.Home, CWD: original, SessionID: "original"}, System: "Synthetic memory system", Prompt: prompt, Model: model, Effort: "high", Speed: "standard"}
 			ctx, stop := context.WithTimeout(t.Context(), 10*time.Second)
 			defer stop()
-			wire, err := json.Marshal(in)
-			if err != nil {
-				t.Fatal(err)
-			}
-			value, err := a.Run(ctx, "memory-inference", bytes.NewReader(wire))
-			out, _ := value.(InferenceResult)
+			out, err := a.Infer(ctx, in)
 			if err != nil || out.Text != inferenceFixtureReply() || out.InputTokens == nil || *out.InputTokens != 12 || out.OutputTokens == nil || *out.OutputTokens != 9 || out.Model != model {
 				t.Fatalf("inference: model=%q bytes=%d err=%v", out.Model, len(out.Text), err)
 			}

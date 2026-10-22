@@ -17,7 +17,6 @@ import (
 	"github.com/teslashibe/capybara-camp/server/internal/database"
 	"github.com/teslashibe/capybara-camp/server/internal/gitprovider"
 	"github.com/teslashibe/capybara-camp/server/internal/httpapi"
-	"github.com/teslashibe/capybara-camp/server/internal/memory"
 	"github.com/teslashibe/magiclink-auth-go/resend"
 )
 
@@ -54,14 +53,6 @@ func run() error {
 			return err
 		}
 	}
-	memoryStartup, finishMemoryStartup := context.WithTimeout(ctx, 10*time.Second)
-	memories, err := memory.Open(memoryStartup, pool)
-	finishMemoryStartup()
-	if err != nil {
-		return err
-	}
-	defer memories.Close()
-	camps.SetMemoryStore(memories)
 	a := &httpapi.API{Pool: pool, Auth: auth.New(pool, cfg.AuthSecret, cfg.PublicURL, resend.New(cfg.ResendKey, cfg.EmailFrom)), Camps: camps, Origin: cfg.PublicURL}
 	gitDone := make(chan struct{})
 	if cfg.GitHub.Enabled() {

@@ -16,7 +16,6 @@ RUN npm ci --omit=dev --ignore-scripts && \
     ln -s /opt/camp/providers/node_modules/.bin/claude /usr/local/bin/claude && \
     codex --version && claude --version && npm cache clean --force
 COPY --from=build /out/camp-runner /camp-runner
-COPY licenses/cortex.txt /usr/share/licenses/capybara-camp/cortex.txt
 RUN groupadd --gid 10001 camp && useradd --uid 10001 --gid 10001 --create-home camp
 USER 10001:10001
 WORKDIR /tmp

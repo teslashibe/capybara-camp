@@ -7,7 +7,6 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/pressly/goose/v3 v3.27.3
-	github.com/teslashibe/cortex v1.4.1-0.20261022090629-c97a5ac7b2bd
 	github.com/teslashibe/magiclink-auth-go v0.2.1
 	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.41.0

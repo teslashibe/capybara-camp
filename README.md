@@ -136,14 +136,9 @@ model settings. Reopening the plan replays its saved stream; access changes
 hide the affected output. Native visual and live cloud validation are still
 required before V1 release.
 
-Memory consolidation is still being integrated. The Go API now saves and
-reads source-bound observations in private or project scopes, using an
-embedded Cortex store. The [project memory contract](docs/memory.md) covers
-those endpoints and the remaining selected-CLI consolidation work. Its native
-screen and consolidation job routing are not available yet.
-The source includes saved consolidation jobs, source-checked memory reads and a
-bounded, isolated CLI inference adapter. Provider dispatch and the native
-consolidation action are not connected yet.
+Memory and Cortex consolidation are deferred until Cortex is ready. V1 has no
+memory API, consolidation action or Cortex service dependency. Shared Markdown
+skills remain in scope. See the [deferral record](docs/memory.md).
 
 In the development build, choose **Save to Camp** from a local planning or
 implementation card's menu, or the cloud icon in the plan window. Review the
@@ -454,7 +449,7 @@ The tooling's synthetic tests are not evidence of a notarized public V1 build.
 
 ## Scope and remaining work
 
-V1 still needs the unfinished cloud, shared implementation, Cortex memory,
+V1 still needs the unfinished cloud, shared implementation,
 shared skills, Git publication and validation work listed in the delivery
 status. Automatic account rotation to evade limits, guaranteed perpetual login
 and silent execution fallback are excluded. macOS Dictation is the chosen input

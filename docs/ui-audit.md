@@ -372,8 +372,8 @@ local-plan promotion remains open.
   GitHub, projects, empty/loading/error/connected states, skip/resume and sign-out
 - Multiplayer/execution: shared sessions, invitations, permissions, offline
   requests, Local/Cloud defaults/transfers, Git selection and publication
-- Memory and skills: all tabs, scope/provider/account/model controls, provenance,
-  consolidation and sync states, editing and conflicts
+- Shared skills: personal/project scope, editing, revisions, sync states and conflicts
+  Memory and consolidation are deferred from V1 by the owner
 - Notifications: foreground toast, history/unread state, settings, native desktop
   notification and navigation to its result
 

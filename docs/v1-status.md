@@ -6,6 +6,10 @@ V1 is not released. The public app and website still describe v0.0.1. Local
 development builds contain more functionality, but implementation, deployment
 and acceptance are separate milestones.
 
+Owner scope change, October 22: memory and Cortex consolidation are deferred
+until Cortex is ready. They are not V1 acceptance gates. Shared Markdown skills
+remain in scope. The historical goal text is superseded by this explicit change.
+
 | Area | Implemented locally | Still required for V1 |
 | --- | --- | --- |
 | Local sessions | Automatic multi-profile import, board/chat, model/effort/speed controls, sub-agents, streaming, dictation, steering and queues | Finish live provider/recovery and performance validation after the Go migration; complete the final design comparison below |
@@ -15,15 +19,19 @@ and acceptance are separate milestones.
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
 | Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments and new-plan defaults, native Run on controls, reviewed Local-to-Cloud file capture and private transcript copy, multi-ticket per-account scheduling, native steering/queue/stop controls, durable approval/control delivery, a shared request queue, provider subprocess consumption, event streaming and credential revision fencing, mandatory Linux child-process isolation | Native plan-import acceptance, remaining signed-in recovery states, target-runtime isolation validation, complete history/attachment and reverse transfers, complete reported runtime settings and usage states, live sandbox/network/login/control validation and disconnected-Mac execution |
 | Git | Project repository links, local CLI project execution, owner-bound GitHub App authorization, native repository browsing, encrypted tokens, signed revocation, exact-commit and scoped read-token adapters, workspace records, exclusive claims and isolated runner checkouts with restart/cancellation recovery | Execution grants, Git actor attribution in execution, branch/push/PR recovery and live two-user GitHub validation |
-| Memory and skills | Merged Cortex exact-selection and transactional guard API; embedded store, private/project observation API, saved job metadata, derived-memory source checks, replay and migration protection; isolated CLI inference, Cortex model adapter and durable coordinator with guarded atomic commit and saved-response recovery | Runtime dispatch transport/admission, native provider/model selection and memory inspection, skill editing/version rollout and live permission tests |
-| Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
+| Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
+| Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: finish the remaining transfer cases and full-history migration, then memory/skills
+Next: finish the remaining transfer cases and full-history migration, then shared skills
 and shared execution. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
 the two-Mac acceptance run follow that deployment. Hardware has not been bought
-or provisioned for this goal.
+or provisioned for this goal. The owner reconfirmed that provisioning happens
+together after local end-to-end acceptance. Use independent test users, device
+credentials and isolated native client state against the local API for
+collaboration, permissions, replay and ownership tests. Those checks supplement
+the final two-Mac/cloud acceptance; they do not replace it.
 
 October 22 native Save to Camp review now passes its focused local API
 walkthrough. The actual Go/PostgreSQL API received three synthetic planning
@@ -70,75 +78,21 @@ The invalidated/expired/released hold regressions and packaged-helper checks
 pass. This closes those focused component walkthroughs, not the signed-in
 full-app or two-Mac transfer acceptance gates.
 
-The memory coordinator now runs the actual Cortex engine against an approved
-saved job, binds inference to its claim and exact prompt, persists responses and
-commits job completion with the memory changes. PostgreSQL race tests cover
-concurrent runs, cancellation, revoked sources, cloud installation changes,
-malformed output and recovery across repeated coordinator restarts without
-another provider call. The log is `build/memory-coordinator-final-tests.log`;
-focused model-adapter tests and Go vet also pass. This remains an internal
-coordinator: runtime dispatch/admission, native controls and live provider
-acceptance are not connected by this change.
-
-The memory dependency is merged in
-[Cortex PR #1](https://github.com/teslashibe/cortex/pull/1): exact input selection,
-one provider call, a required permission guard inside the memory commit and a
-saved-outcome lookup. Its Go race suite, vet, build and upstream CI pass,
-including concurrent revocation and cancellation recovery. Camp now embeds
-that store in a private PostgreSQL schema and provides authenticated observation
-saves, metadata pages and source inspection. Schema 30 retains the original
-source grant and refuses a downgrade that would discard observations. API
-startup and readiness require both schema sets.
-
-The complete Go race suite and vet pass with disposable PostgreSQL 17. The
-memory tests pass again after correcting a policy-lock hold during Cortex
-copies. They cover private/project separation, concurrent duplicate saves,
-response-loss recovery, revocation during a delayed copy and filtered event
-replay. The Linux commands build; native worker, cloud and state regressions
-pass with the updated Go helper. These are local and synthetic checks.
-The actual migration command and API also pass a fresh-database smoke test with
-the restricted `camp_runtime` role: both stores are readable, schema-ledger
-writes are denied and an incomplete Cortex schema returns HTTP 503 readiness.
-[Project memory](memory.md) records the API and remaining integration. Dedicated
-CLI consolidation jobs, native memory screens and live two-Mac acceptance are
-still required; this does not complete memory or skills.
-
-The memory inference primitive now uses the existing Go CLI transports with a
-new ephemeral conversation and private temporary working directory. It preserves
-the selected profile/model/settings and sends Cortex's system and user messages
-without starting project tools. The model adapter passes the exact prompt hash
-to its dispatcher and does not retry. Focused tests use both provider protocols
-with large Unicode replies and verify cleanup, cancellation, profile exclusion,
-tool rejection and missing usage metadata. The complete Go race suite and vet
-pass, followed by focused tests of the final validation changes. Linux builds
-and native worker, cloud and state regressions pass. A synthetic prompt also
-completed through the real Codex CLI 0.163.0, with reported model and token
-counts. Successful real Claude inference remains an open acceptance check.
-Durable job dispatch and the native memory UI remain open; no real provider
-consolidation through the full Cortex workflow has been run.
-
-October 22 CI caught cancellation racing with a startup acknowledgement: pipe
-closure could replace `context.Canceled` with a CLI connection error. Inference
-now preserves the cancelled context after the provider has been reaped. The
-regression covers cancellation before initialization as well as during startup,
-profile-lock release and temporary-file cleanup. Thirty race-test repetitions
-and the complete local helper suite pass.
-
-Schema 31 now saves the reviewed namespace, observations, existing-memory
-digests and local profile or cloud installation in a job. Creation, reads,
-cancellation and events check the full source set. This includes inherited
-memory sources and prevents a later re-share from reviving an older grant.
-The creator can cancel a revoked job without reading its old input references.
-The new memory API returns current source-linked memories and their review
-digests. Jobs remain queued until the dispatcher is connected; no provider work
-starts through these metadata endpoints yet.
-The full Go race suite and vet pass at schema 31 against disposable PostgreSQL
-17. Tests cover concurrent replay, private and project access, source lineage,
-revocation/re-share, cancellation after revocation, local/cloud target binding,
-bounded provenance reads and retained-data downgrade refusal. HTTP tests cover
-creation, listing, inspection and cancellation. Linux commands build; native
-worker, cloud and state regressions pass. Execution and native memory acceptance
-remain open.
+Cortex has been removed from the server startup/readiness path, migration
+command, HTTP routes and module dependencies. The memory coordinator and store
+are retained in Git history at `c6dedd2`; no memory inference command is exposed.
+Historical schema migrations remain so existing development data is preserved.
+Old memory events are excluded from replay. See [the deferral record](memory.md).
+The full PostgreSQL race run passed the database, Camp, API and runner packages.
+Its only failure was a new CLI test expecting the wrong unsupported-action text;
+after correcting that assertion, the full local CLI race suite passed. Go vet,
+Linux command builds and the staged secret scan pass. The real migration and API
+start on a fresh database without a Cortex schema, readiness succeeds and the
+former memory route returns 404. Evidence: `build/memory-deferral-tests.log`,
+`build/memory-deferral-localcli-final.log`, `build/memory-deferral-startup.log`.
+The release epic and deferred issue #5 were updated and read back. GitHub will
+not detach the older Cortex issue from its archived repository; the epic
+explicitly excludes that historical child from release acceptance.
 
 Shared planning now streams each active step into its existing provider pane.
 The owner-Mac worker sends bounded snapshots through the same event store as
@@ -648,8 +602,7 @@ recorded implementation and acceptance evidence, not just an updated spec.
    streaming, approval transport, Linux child isolation and native location
    controls and durable cloud steering are implemented; remaining signed-in setup validation,
    recovery, native plan-import acceptance and complete reviewed session transfers remain.
-3. **Pending — shared project capabilities**: Cortex consolidation and memory
-   inspection, shared Markdown skills, Git publication and actor attribution,
+3. **Pending — shared project capabilities**: shared Markdown skills, Git publication and actor attribution,
    owner-routed shared implementation and permissions.
 4. **Pending — local acceptance**: independent users, two Macs, reconnect and
    revocation cases, full provider flows, performance/leak/soak validation, then
@@ -685,7 +638,7 @@ cloud, collaboration, validation and release requirement in the checklist above.
 After implementation, compare the running native app with the approved
 interactive design at `http://127.0.0.1:8770/capybara-camp-interactive.html`.
 Review every screen and its empty, active, waiting, error and completed states,
-including the board, chat, planning, account setup, projects, memory, skills
+including the board, chat, planning, account setup, projects, skills
 and notifications. Check wording, icons, shared controls, card dimensions,
 click areas, keyboard navigation, scrolling and streaming behavior. Record
 differences, fix them, and repeat the affected computer-use flows before release.
