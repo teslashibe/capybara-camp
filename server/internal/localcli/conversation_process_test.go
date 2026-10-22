@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,6 +61,12 @@ func runConversationCodexFixture() {
 		case "configRequirements/read":
 			result["requirements"] = map[string]any{}
 		case "thread/start", "thread/resume":
+			if flow == "inference" && (method != "thread/start" || params["ephemeral"] != true || params["threadId"] != nil || str(params["baseInstructions"]) != "Synthetic memory system" || str(params["developerInstructions"]) != "" || params["config"].(map[string]any)["project_doc_max_bytes"] != json.Number("0")) {
+				os.Exit(5)
+			}
+			if flow == "inference" {
+				result["model"] = "gpt-5.4"
+			}
 			id := str(params["threadId"])
 			if id == "" {
 				id = "created"
@@ -77,6 +84,14 @@ func runConversationCodexFixture() {
 				result["activePermissionProfile"] = map[string]any{"id": params["permissions"]}
 			}
 		case "turn/start":
+			if flow == "inference" {
+				checkInferencePrompt(str(object(array(params["input"])[0])["text"]))
+				out(map[string]any{"id": message["id"], "result": map[string]any{"turn": map[string]any{"id": "active"}}})
+				out(codexEvent("item/completed", map[string]any{"item": map[string]any{"id": "memory", "type": "agentMessage", "text": inferenceFixtureReply()}}))
+				out(codexEvent("thread/tokenUsage/updated", map[string]any{"tokenUsage": map[string]any{"total": map[string]any{"inputTokens": 12, "outputTokens": 9}}}))
+				out(codexCompleted())
+				continue
+			}
 			if flow == "approval" {
 				// Collision with the outgoing RPC ID must stay a server request.
 				out(map[string]any{"id": message["id"], "method": "item/commandExecution/requestApproval", "params": map[string]any{"threadId": params["threadId"], "turnId": "active", "itemId": "cmd", "command": "echo synthetic"}})
@@ -120,6 +135,25 @@ func runConversationClaudeFixture() {
 	}
 	if message["type"] != "user" {
 		os.Exit(4)
+	}
+	if os.Getenv("CAMP_LOCAL_TEST_FLOW") == "inference" {
+		if slices.Contains(os.Args, "--resume") || !slices.Contains(os.Args, "--no-session-persistence") || !slices.Contains(os.Args, "--safe-mode") || !slices.Contains(os.Args, "--strict-mcp-config") {
+			os.Exit(5)
+		}
+		index := slices.Index(os.Args, "--system-prompt-file")
+		if index < 0 || index+1 >= len(os.Args) {
+			os.Exit(5)
+		}
+		system, err := os.ReadFile(os.Args[index+1])
+		if err != nil || string(system) != "Synthetic memory system" {
+			os.Exit(5)
+		}
+		checkInferencePrompt(str(object(message["message"])["content"]))
+		out(map[string]any{"type": "system", "subtype": "init", "model": "claude-opus-4-6", "effort": "high", "fast_mode_state": "off"})
+		out(map[string]any{"type": "result", "is_error": false, "result": inferenceFixtureReply(), "usage": map[string]any{"input_tokens": 12, "output_tokens": 9}})
+		for {
+			read()
+		}
 	}
 	mode := "default"
 	for index, arg := range os.Args {

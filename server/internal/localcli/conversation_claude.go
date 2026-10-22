@@ -62,7 +62,9 @@ func claudeTurn(connection turnConnection, request conversationRequest, controls
 			case "steer":
 				id, value := str(control["id"]), str(control["text"])
 				message := ""
-				if request.Mode == "planning" {
+				if request.Mode == "inference" {
+					message = "An inference job cannot be steered"
+				} else if request.Mode == "planning" {
 					message = "Restart the plan to change its frozen brief"
 				} else if pending != nil || !ready {
 					message = "Wait until the current steering request finishes"
@@ -103,6 +105,9 @@ func claudeTurn(connection turnConnection, request conversationRequest, controls
 		}
 		kind := str(event["type"])
 		if relay == nil && kind == "control_request" {
+			if request.Mode == "inference" {
+				return errors.New("Inference cannot request tools")
+			}
 			if err := connection.Write(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": event["request_id"], "response": map[string]any{"behavior": "deny", "message": "Project tools are disabled in Camp's chat preview"}}}); err != nil {
 				return err
 			}
@@ -220,7 +225,7 @@ func claudeTurn(connection turnConnection, request conversationRequest, controls
 			case "stream_event":
 				delta := object(object(event["event"])["delta"])
 				if str(delta["type"]) == "text_delta" {
-					if len(text)+len(str(delta["text"])) > maxConversationText {
+					if len(text)+len(str(delta["text"])) > conversationTextLimit(request) {
 						return errors.New("The conversation response exceeded 2 MB")
 					}
 					text += str(delta["text"])

@@ -78,6 +78,19 @@ type request struct {
 }
 
 func (a *App) Run(ctx context.Context, action string, input io.Reader) (any, error) {
+	if action == "memory-inference" {
+		data, err := io.ReadAll(io.LimitReader(input, 2<<20+1))
+		if err != nil || len(data) > 2<<20 {
+			return nil, errors.New("Invalid memory inference request")
+		}
+		var request InferenceRequest
+		decoder := json.NewDecoder(strings.NewReader(string(data)))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF {
+			return nil, errors.New("Invalid memory inference request")
+		}
+		return a.Infer(ctx, request)
+	}
 	if action == "child-history-catalog" || action == "child-export-page" {
 		return a.childHistoryRequest(ctx, action, input)
 	}

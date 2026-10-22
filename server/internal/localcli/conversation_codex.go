@@ -72,13 +72,19 @@ func codexTurn(connection turnConnection, request conversationRequest, controls 
 		params["model"] = request.Model
 	}
 	method := "thread/resume"
-	if request.NewSession || request.Mode == "planning" {
+	if request.NewSession || request.Mode == "planning" || request.Mode == "inference" {
 		method = "thread/start"
 		delete(params, "threadId")
 	}
 	if request.Mode == "planning" {
 		params["ephemeral"] = true
 		params["developerInstructions"] = str(params["developerInstructions"]) + " This is one bounded planning step. Do not execute the plan or change project files."
+	}
+	if request.Mode == "inference" {
+		params["ephemeral"] = true
+		params["baseInstructions"] = request.inferenceSystem
+		params["developerInstructions"] = ""
+		params["config"].(map[string]any)["project_doc_max_bytes"] = 0
 	}
 	response, err := connection.RPC(method, params, 0)
 	if err != nil {
@@ -138,7 +144,7 @@ func codexTurn(connection turnConnection, request conversationRequest, controls 
 	if !validSessionID(turnID) {
 		return errors.New("Codex did not return a valid turn identity")
 	}
-	if request.Model != "" {
+	if request.Model != "" && request.Mode != "inference" {
 		reported.Model = request.Model
 	}
 	if request.Effort != "" {
@@ -172,7 +178,9 @@ func codexTurn(connection turnConnection, request conversationRequest, controls 
 				id, text := str(control["id"]), str(control["text"])
 				var failure error
 				attempted := false
-				if request.Mode == "planning" {
+				if request.Mode == "inference" {
+					failure = errors.New("An inference job cannot be steered")
+				} else if request.Mode == "planning" {
 					failure = errors.New("Restart the plan to change its frozen brief")
 				} else if !validSessionID(id) || strings.TrimSpace(text) == "" || len(text) > 65536 {
 					failure = errors.New("Write a steering message under 64 KB")
@@ -210,7 +218,10 @@ func codexTurn(connection turnConnection, request conversationRequest, controls 
 		if event == nil {
 			continue
 		}
-		if _, request := event["id"]; request && str(event["method"]) != "" {
+		if _, hasID := event["id"]; hasID && str(event["method"]) != "" {
+			if request.Mode == "inference" {
+				return errors.New("Inference cannot request tools")
+			}
 			if relay != nil {
 				err = relay.Request(event)
 			} else {
@@ -261,7 +272,7 @@ func codexTurn(connection turnConnection, request conversationRequest, controls 
 			id, text, update = str(object(params["item"])["id"]), str(object(params["item"])["text"]), true
 		}
 		if update {
-			if !validSessionID(id) || len(text) > maxConversationText || total-len(texts[id])+len(text) > maxConversationText {
+			if !validSessionID(id) || len(text) > conversationTextLimit(request) || total-len(texts[id])+len(text) > conversationTextLimit(request) {
 				return errors.New("Codex response exceeded its item or text limit")
 			}
 			if _, known := texts[id]; !known {

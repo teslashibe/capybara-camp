@@ -2,7 +2,9 @@
 
 Memory remains in development. The Camp observation API and embedded Cortex
 adapter are implemented; consolidation job routing and the native memory
-interface are not. [Cortex PR #1](https://github.com/teslashibe/cortex/pull/1)
+interface are not. The CLI inference primitive and Cortex model adapter are
+implemented, but no user-facing consolidation command queues them yet.
+[Cortex PR #1](https://github.com/teslashibe/cortex/pull/1)
 is merged and supplies the exact-selection and permission-guard API needed by
 [the memory issue](https://github.com/teslashibe/capybara-camp/issues/5).
 
@@ -94,6 +96,30 @@ attempt automatically. Provider usage may be unavailable and must remain
 labelled as such.
 
 ## Native interface and verification
+
+### Inference adapter
+
+`internal/memory.CLIModel` preserves Cortex's system and user messages and
+supplies their model-bound hash to its dispatcher. The dispatcher still needs
+to bind that hash to a durable, authorized job before calling the selected
+installation. It receives no credential or local profile path from Cortex.
+
+`camp-local memory-inference` accepts the selected profile, model, effort,
+speed, system message and prompt through JSON on stdin. It makes one call
+through the existing CLI adapters, in a new temporary working directory and
+an ephemeral conversation. It rejects project permissions, tools and steering.
+Codex receives explicit base instructions with project-document loading
+disabled. Claude keeps safe mode, disables session persistence and receives
+the system prompt through a private file. Neither path resumes the supplied
+session ID or runs in its original working directory.
+
+The system/prompt JSON is limited to 1 MiB; output is limited to 4 MiB and the
+call to two minutes. Missing model or usage reporting remains missing. A
+failure returns no successful result and never triggers a retry. Cancellation
+joins the child process and removes the temporary directory. This adapter
+does not authenticate Camp users or persist jobs by itself.
+
+### Memory screens
 
 Follow Shared memory in the approved interactive design. Reuse the existing
 model catalogue and Model/Effort/Speed component, source inspector, execution

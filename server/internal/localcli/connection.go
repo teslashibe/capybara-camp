@@ -40,9 +40,14 @@ type nativeConnection struct {
 	readers       sync.WaitGroup
 	waitDone      chan struct{}
 	closeOnce     sync.Once
+	eventLimit    int
 }
 
 func (a *App) connect(ctx context.Context, s Session, args []string, allowRequests bool, env []string) (*nativeConnection, error) {
+	return a.connectWithLimit(ctx, s, args, allowRequests, env, maxNativeEvent)
+}
+
+func (a *App) connectWithLimit(ctx context.Context, s Session, args []string, allowRequests bool, env []string, limit int) (*nativeConnection, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -66,7 +71,11 @@ func (a *App) connect(ctx context.Context, s Session, args []string, allowReques
 		cancel()
 		return nil, err
 	}
-	c := &nativeConnection{ctx: ctx, cancel: cancel, events: make(chan nativeEvent, 16), allowRequests: allowRequests, waitDone: make(chan struct{})}
+	buffered := 16
+	if limit == maxInferenceWire {
+		buffered = 2
+	}
+	c := &nativeConnection{ctx: ctx, cancel: cancel, events: make(chan nativeEvent, buffered), allowRequests: allowRequests, waitDone: make(chan struct{}), eventLimit: limit}
 	c.command = exec.Command(path, commandArgs...)
 	c.command.Env, c.command.Dir = env, s.CWD
 	c.command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -126,9 +135,9 @@ func (c *nativeConnection) readEvents() {
 	defer c.readers.Done()
 	defer close(c.events)
 	scanner := bufio.NewScanner(c.stdout)
-	scanner.Buffer(make([]byte, 64<<10), maxNativeEvent+2)
+	scanner.Buffer(make([]byte, 64<<10), c.wireLimit()+2)
 	for scanner.Scan() {
-		if len(scanner.Bytes()) > maxNativeEvent {
+		if len(scanner.Bytes()) > c.wireLimit() {
 			c.publish(nativeEvent{err: errors.New("The native CLI exceeded the event size limit")})
 			return
 		}
@@ -162,8 +171,8 @@ func (c *nativeConnection) writeBefore(event map[string]any, deadline time.Time)
 	if err != nil {
 		return err
 	}
-	if len(encoded) > maxNativeEvent {
-		return errors.New("The native CLI request exceeds 1 MiB")
+	if len(encoded) > c.wireLimit() {
+		return fmt.Errorf("The native CLI request exceeds %d MiB", c.wireLimit()>>20)
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -184,6 +193,13 @@ func (c *nativeConnection) writeBefore(event map[string]any, deadline time.Time)
 		return errors.New("The native CLI closed its input")
 	}
 	return nil
+}
+
+func (c *nativeConnection) wireLimit() int {
+	if c.eventLimit == maxInferenceWire {
+		return maxInferenceWire
+	}
+	return maxNativeEvent
 }
 
 func sameID(a, b any) bool {
@@ -246,12 +262,19 @@ func (c *nativeConnection) RPC(method string, params map[string]any, timeout tim
 			}
 			_, hasID := event["id"]
 			if isRequest && hasID && !c.allowRequests {
+				if c.eventLimit == maxInferenceWire {
+					return nil, errors.New("Inference cannot request tools")
+				}
 				if err := c.RejectTool(event); err != nil {
 					return nil, err
 				}
 				continue
 			}
-			if len(c.backlog) >= 32 {
+			backlogLimit := 32
+			if c.eventLimit == maxInferenceWire {
+				backlogLimit = 4
+			}
+			if len(c.backlog) >= backlogLimit {
 				return nil, errors.New("The native CLI sent too many events before acknowledging the request")
 			}
 			c.backlog = append(c.backlog, event)

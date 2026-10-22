@@ -15,7 +15,7 @@ and acceptance are separate milestones.
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
 | Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments and new-plan defaults, native Run on controls, reviewed Local-to-Cloud file capture and private transcript copy, multi-ticket per-account scheduling, native steering/queue/stop controls, durable approval/control delivery, a shared request queue, provider subprocess consumption, event streaming and credential revision fencing, mandatory Linux child-process isolation | Native plan-import acceptance, remaining signed-in recovery states, target-runtime isolation validation, complete history/attachment and reverse transfers, complete reported runtime settings and usage states, live sandbox/network/login/control validation and disconnected-Mac execution |
 | Git | Project repository links, local CLI project execution, owner-bound GitHub App authorization, native repository browsing, encrypted tokens, signed revocation, exact-commit and scoped read-token adapters, workspace records, exclusive claims and isolated runner checkouts with restart/cancellation recovery | Execution grants, Git actor attribution in execution, branch/push/PR recovery and live two-user GitHub validation |
-| Memory and skills | Merged Cortex exact-selection and transactional guard API; embedded store, private/project observation API, source access checks, replay and migration protection | Consolidation job routing, provider/model selection, native memory inspection, skill editing/version rollout and live permission tests |
+| Memory and skills | Merged Cortex exact-selection and transactional guard API; embedded store, private/project observation API, source access checks, replay and migration protection; isolated CLI inference and Cortex model adapter | Consolidation job routing, native provider/model selection and memory inspection, skill editing/version rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
 Next: validate the native transfer and plan-import reviews, finish full-history migration, then memory/skills
@@ -47,6 +47,20 @@ writes are denied and an incomplete Cortex schema returns HTTP 503 readiness.
 [Project memory](memory.md) records the API and remaining integration. Dedicated
 CLI consolidation jobs, native memory screens and live two-Mac acceptance are
 still required; this does not complete memory or skills.
+
+The memory inference primitive now uses the existing Go CLI transports with a
+new ephemeral conversation and private temporary working directory. It preserves
+the selected profile/model/settings and sends Cortex's system and user messages
+without starting project tools. The model adapter passes the exact prompt hash
+to its dispatcher and does not retry. Focused tests use both provider protocols
+with large Unicode replies and verify cleanup, cancellation, profile exclusion,
+tool rejection and missing usage metadata. The complete Go race suite and vet
+pass, followed by focused tests of the final validation changes. Linux builds
+and native worker, cloud and state regressions pass. A synthetic prompt also
+completed through the real Codex CLI 0.163.0, with reported model and token
+counts. Successful real Claude inference remains an open acceptance check.
+Durable job dispatch and the native memory UI remain open; no real provider
+consolidation through the full Cortex workflow has been run.
 
 Shared planning now streams each active step into its existing provider pane.
 The owner-Mac worker sends bounded snapshots through the same event store as

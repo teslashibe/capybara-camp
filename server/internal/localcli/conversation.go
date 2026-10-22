@@ -18,20 +18,22 @@ import (
 const maxConversationText = 2 << 20
 
 type conversationRequest struct {
-	Session           Session            `json:"session"`
-	Prompt            string             `json:"prompt"`
-	Model             string             `json:"model"`
-	Effort            string             `json:"effort"`
-	Speed             string             `json:"speed"`
-	Mode              string             `json:"mode"`
-	ExecutionApproved bool               `json:"executionApproved"`
-	NewSession        bool               `json:"newSession"`
-	ExecutionContext  string             `json:"executionContext"`
-	Permissions       PermissionSettings `json:"permissions"`
-	Context           json.RawMessage    `json:"context"`
-	History           []HistorySource    `json:"-"`
-	ReadHistory       HistoryReader      `json:"-"`
-	grant             *contextGrant
+	Session             Session            `json:"session"`
+	Prompt              string             `json:"prompt"`
+	Model               string             `json:"model"`
+	Effort              string             `json:"effort"`
+	Speed               string             `json:"speed"`
+	Mode                string             `json:"mode"`
+	ExecutionApproved   bool               `json:"executionApproved"`
+	NewSession          bool               `json:"newSession"`
+	ExecutionContext    string             `json:"executionContext"`
+	Permissions         PermissionSettings `json:"permissions"`
+	Context             json.RawMessage    `json:"context"`
+	History             []HistorySource    `json:"-"`
+	ReadHistory         HistoryReader      `json:"-"`
+	grant               *contextGrant
+	inferenceSystem     string
+	inferenceSystemFile string
 }
 
 // ConversationRequest is shared by the desktop stream and installation runner.
@@ -145,10 +147,14 @@ func (a *App) runConversation(ctx context.Context, request conversationRequest, 
 	if request.Mode == "" {
 		request.Mode = "chat"
 	}
-	if request.Mode != "chat" && request.Mode != "planning" && request.Mode != "implementation" {
+	if request.Mode != "chat" && request.Mode != "planning" && request.Mode != "implementation" && request.Mode != "inference" {
 		return errors.New("Unknown conversation mode")
 	}
 	implementation, planning := request.Mode == "implementation", request.Mode == "planning"
+	inference := request.Mode == "inference"
+	if inference && (request.inferenceSystem == "" || request.inferenceSystemFile == "" || request.NewSession || len(request.Context) > 0 || len(request.History) > 0) {
+		return errors.New("Inference requires its dedicated entry point")
+	}
 	if implementation && !request.ExecutionApproved {
 		return errors.New("Approve the implementation before enabling project tools")
 	}
@@ -156,7 +162,11 @@ func (a *App) runConversation(ctx context.Context, request conversationRequest, 
 		return errors.New("Project permissions require explicit execution approval")
 	}
 	session := request.Session
-	if session.Provider != "Codex" && session.Provider != "Claude" || strings.TrimSpace(request.Prompt) == "" || len(request.Prompt) > 65536 || !validSessionID(session.SessionID) {
+	promptLimit := 65536
+	if inference {
+		promptLimit = 1 << 20
+	}
+	if session.Provider != "Codex" && session.Provider != "Claude" || strings.TrimSpace(request.Prompt) == "" || len(request.Prompt) > promptLimit || !validSessionID(session.SessionID) {
 		return errors.New("Choose a session and write a prompt under 64 KB")
 	}
 	if !filepath.IsAbs(session.Root) || !filepath.IsAbs(session.CWD) {
@@ -187,7 +197,7 @@ func (a *App) runConversation(ctx context.Context, request conversationRequest, 
 			return errors.New("The project or CLI settings changed. Review the implementation approval again")
 		}
 	}
-	if planning && session.Provider == "Claude" {
+	if (planning || inference) && session.Provider == "Claude" {
 		session.SessionID = uuid.NewString()
 	}
 	command, err := runtimeCommand(session, request.Model, request.Effort, request.Speed)
@@ -204,10 +214,13 @@ func (a *App) runConversation(ctx context.Context, request conversationRequest, 
 	if planning {
 		key = "planning:" + session.Provider
 	}
+	if inference {
+		key = "inference:" + session.Provider + ":" + session.Root
+	}
 	if err := acquire(key); err != nil {
 		return err
 	}
-	if !planning && !request.NewSession && !a.isolated {
+	if !planning && !inference && !request.NewSession && !a.isolated {
 		if err := a.assertAvailable(ctx, session); err != nil {
 			return err
 		}
@@ -248,7 +261,11 @@ func (a *App) runConversation(ctx context.Context, request conversationRequest, 
 		}
 		env = filtered
 	}
-	connection, err := a.connect(ctx, session, command, implementation, env)
+	limit := maxNativeEvent
+	if inference {
+		limit = maxInferenceWire
+	}
+	connection, err := a.connectWithLimit(ctx, session, command, implementation, env, limit)
 	if err != nil {
 		return err
 	}
@@ -284,19 +301,26 @@ func (a *App) conversationCommand(ctx context.Context, session Session, request 
 		return command, nil
 	}
 	if session.Provider == "Codex" {
-		return codexChatCommand(ctx, session, request.grant)
+		command, err := codexChatCommand(ctx, session, request.grant)
+		if err == nil && request.Mode == "inference" {
+			command = append(command, "-c", "project_doc_max_bytes=0")
+		}
+		return command, err
 	}
 	command := append(validated, "--input-format", "stream-json", "--replay-user-messages")
-	if request.Mode == "planning" || request.NewSession {
+	if request.Mode == "planning" || request.Mode == "inference" || request.NewSession {
 		var err error
 		command, err = removeCommandFlag(command, "--resume", true)
 		if err != nil {
 			return nil, err
 		}
 		command = append(command, "--session-id", session.SessionID)
-		if request.Mode == "planning" {
+		if request.Mode == "planning" || request.Mode == "inference" {
 			command = append(command, "--no-session-persistence")
 		}
+	}
+	if request.Mode == "inference" {
+		command = append(command, "--system-prompt-file", request.inferenceSystemFile, "--system-prompt-snapshot", "off", "--setting-sources", "", "--disable-slash-commands")
 	}
 	if request.grant != nil {
 		var err error
@@ -328,10 +352,20 @@ func emitConversationText(request conversationRequest, emit func(map[string]any)
 	if request.Mode == "planning" && len(text) > 8192 {
 		return errors.New("The planning response exceeded 8 KB. This call used its allowance; restart with a shorter brief to try again")
 	}
-	if len(text) > maxConversationText {
+	if len(text) > conversationTextLimit(request) {
+		if request.Mode == "inference" {
+			return errors.New("The inference response exceeded 4 MiB")
+		}
 		return errors.New("The conversation response exceeded 2 MB")
 	}
 	return emit(map[string]any{"type": "text", "text": text})
+}
+
+func conversationTextLimit(request conversationRequest) int {
+	if request.Mode == "inference" {
+		return maxInferenceText
+	}
+	return maxConversationText
 }
 
 func emitUsage(emit func(map[string]any) error, usage map[string]any, codex bool) error {
