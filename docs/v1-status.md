@@ -62,6 +62,13 @@ counts. Successful real Claude inference remains an open acceptance check.
 Durable job dispatch and the native memory UI remain open; no real provider
 consolidation through the full Cortex workflow has been run.
 
+October 22 CI caught cancellation racing with a startup acknowledgement: pipe
+closure could replace `context.Canceled` with a CLI connection error. Inference
+now preserves the cancelled context after the provider has been reaped. The
+regression covers cancellation before initialization as well as during startup,
+profile-lock release and temporary-file cleanup. Thirty race-test repetitions
+and the complete local helper suite pass.
+
 Schema 31 now saves the reviewed namespace, observations, existing-memory
 digests and local profile or cloud installation in a job. Creation, reads,
 cancellation and events check the full source set. This includes inherited

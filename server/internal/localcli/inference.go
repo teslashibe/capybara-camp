@@ -93,6 +93,12 @@ func (a *App) Infer(ctx context.Context, input InferenceRequest) (InferenceResul
 		}
 		return nil
 	})
+	// Cancellation closes the provider pipes as well as its context. An RPC
+	// waiting for its startup acknowledgement can observe EOF first. Preserve
+	// cancellation after runConversation has joined and reaped the process.
+	if ctx.Err() != nil {
+		return InferenceResult{}, ctx.Err()
+	}
 	if err != nil {
 		return InferenceResult{}, err
 	}

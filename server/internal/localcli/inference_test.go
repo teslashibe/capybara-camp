@@ -27,9 +27,16 @@ func checkInferencePrompt(prompt string) {
 }
 
 func TestInferenceCancellationReapsProviderAndReleasesProfile(t *testing.T) {
+	for _, flow := range []string{"stall", "stall-before-initialize"} {
+		t.Run(flow, func(t *testing.T) { testInferenceCancellation(t, flow) })
+	}
+}
+
+func testInferenceCancellation(t *testing.T, flow string) {
+	t.Helper()
 	a := providerFixture(t, "conversation-codex")
 	pidPath := filepath.Join(a.Config.Home, "inference.pid")
-	a.Config.Environment = append(a.Config.Environment, "CAMP_LOCAL_TEST_FLOW=stall", "CAMP_LOCAL_TEST_PID="+pidPath)
+	a.Config.Environment = append(a.Config.Environment, "CAMP_LOCAL_TEST_FLOW="+flow, "CAMP_LOCAL_TEST_PID="+pidPath)
 	input := InferenceRequest{Session: Session{Provider: "Codex", Root: a.Config.Home}, Model: "model", System: "system", Prompt: "prompt"}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

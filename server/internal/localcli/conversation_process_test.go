@@ -51,6 +51,9 @@ func runConversationCodexFixture() {
 	for {
 		message := read()
 		method, params := str(message["method"]), object(message["params"])
+		if flow == "stall-before-initialize" {
+			continue
+		}
 		if method == "initialized" {
 			continue
 		}
