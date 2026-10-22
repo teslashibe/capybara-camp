@@ -33,6 +33,25 @@ credentials and isolated native client state against the local API for
 collaboration, permissions, replay and ownership tests. Those checks supplement
 the final two-Mac/cloud acceptance; they do not replace it.
 
+Cloud source inspection and selected-file capture are now implemented at schema
+34. The owner creates a bounded export; only its assigned runner can claim it.
+The runner captures its isolated Git checkout, excludes credentials and uploads
+encrypted chunks from a saved private payload. Restart and lost claim/result/
+chunk/completion responses preserve the same bytes. Source changes invalidate
+reads and allow the claimant to discard its upload; expiry, cancellation and
+account erasure have explicit cleanup behavior. Exporting does not move session
+ownership or launch a provider.
+
+The real local API/PostgreSQL/Git integration tests pass for inspection and
+capture, including multi-chunk upload, changed local files after capture and
+credential exclusion (`build/workspace-export-integration.log`). The full Go
+race suite passes (`build/workspace-export-full-suite.log`). Focused race and
+migration tests pass after the final cleanup/body-limit changes
+(`build/workspace-export-final-focused.log`); vet and Linux builds pass
+(`build/workspace-export-vet.log`). Native reverse-transfer review, destination
+checkout preparation, history/attachments and final handoff acceptance remain
+open. This is a backend component, not a completed Cloud-to-Local flow.
+
 The destination-side Go `transfer-stage` helper now stages reviewed files into
 an isolated local checkout using the existing cloud stager. It verifies the
 payload/review hashes, scopes its restart journal by transfer and account context,
@@ -42,7 +61,7 @@ process and refuses a changed file. Existing native transfer coordinator tests
 also pass (`build/local-stage-go-tests.log`, `build/local-stage-final-go-tests.log`,
 `build/local-stage-native-tests.log`, `build/local-stage-final-bridge.log`).
 The Linux helper build also passes. This is a reverse-transfer component,
-not a complete Cloud-to-Local flow. Cloud capture, checkout preparation,
+not a complete Cloud-to-Local flow. Cloud capture is covered above; checkout preparation,
 history/attachment installation, the native review and final ownership commit
 remain required. No session was moved and no provider was invoked by this test.
 

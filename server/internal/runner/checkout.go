@@ -121,14 +121,15 @@ func (c *checkout) entries() ([]os.DirEntry, error) {
 	return entries, nil
 }
 
-// cleanCredentials removes abandoned tokens without touching prepared workspaces.
+// cleanCredentials removes abandoned tokens and incomplete export writes without
+// touching prepared workspaces or resumable export payloads.
 func (c *checkout) cleanCredentials() error {
 	entries, err := c.entries()
 	if err != nil {
 		return err
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "credential-") {
+		if strings.HasPrefix(entry.Name(), "credential-") || strings.HasPrefix(entry.Name(), "export-temp-") {
 			if err = c.root.RemoveAll(entry.Name()); err != nil {
 				return ErrState
 			}

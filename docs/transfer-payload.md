@@ -621,13 +621,58 @@ reviewed main/child history binding. Full migration acceptance still needs the
 native walkthrough and live two-Mac/provider checks, in addition to the
 remaining attachment, commit-graph and reverse-transfer work above.
 
+## Cloud source exports
+
+Schema 34 adds short-lived owner-only workspace exports. An owner creates an
+`inspect` job to list changed paths, then a `capture` job with an explicit path
+selection (including an intentional empty selection). Creation pins the source
+execution epoch, workspace, session, transcript and permission revisions.
+Only the assigned installation can claim the job. A claimed export reserves
+that installation's execution slot while the worker reads its isolated checkout.
+The export never launches a provider or moves session ownership.
+
+The runner uses the same Git capture and credential-exclusion code as local
+transfers. It saves the result in a private local file before uploading, so
+response loss or restart reuses the same bytes. Results use SHA-256 checks and
+encrypted 256 KiB chunks. Capture results must contain exactly the selected
+paths or their exclusions; they cannot carry runner-invented chat history.
+The owner can download completed results only while source, project, account
+and Git authorization still match. A teammate cannot inspect or download them.
+Revoking a runner grant stops further runner operations; it does not itself
+erase a completed result owned by the user.
+
+Jobs expire ten minutes after creation and cannot extend that deadline. Each
+owner can retain two active or completed unexpired jobs. Cancellation and failed
+captures delete uploaded chunks. Expired bytes are removed on the next owner
+export operation; expiry prevents access even before that cleanup runs. A runner
+can discard its own claimed upload after source changes, freeing its execution
+slot without gaining access to new source content.
+
+Owner routes under `/v1/camps/{camp}/sessions/{session}/exports`:
+
+- `POST /` with `Idempotency-Key`: create an inspection or selected capture
+- `GET /{export}`: read status and uploaded chunk ordinals
+- `GET /{export}/chunks/{ordinal}`: download a completed result
+- `POST /{export}/cancel`: cancel and discard file bytes
+
+Installation routes under `/v1/runner/exports` provide `GET /next`,
+`POST /{export}/claim`, `POST /{export}/result`,
+`PUT /{export}/chunks/{ordinal}`, and `POST /{export}/complete` or `/fail`.
+All writes after discovery carry the saved claim ID. Discovery exposes only
+an opaque ID, and a second claim cannot adopt an interrupted upload.
+
+This supplies source capture for Cloud-to-Local transfers. The native selection
+and download flow, destination checkout preparation, history/attachments and
+ownership handoff still need integration and acceptance. Commits absent from
+the remote repository also remain a separate migration requirement.
+
 ## Validation
 
 ```sh
 cd server
 go test -race ./internal/transfer
 # With CAMP_TEST_DATABASE_URL pointing to a disposable PostgreSQL database:
-go test -race -run 'TestTransfer|TestWorkerStagesTransfer|TestRunnerHandoff|TestWorkspaceHTTP|TestMigration' \
+go test -race -run 'TestTransfer|TestWorkerStagesTransfer|TestRunnerHandoff|TestWorkspaceExport|TestRunnerWorkspaceExport|TestWorkspaceHTTP|TestMigration' \
   ./internal/camp ./internal/httpapi ./internal/database ./internal/runner
 go vet ./internal/transfer ./internal/camp ./internal/httpapi
 # From the repository root, including the real bundled Go source guard:

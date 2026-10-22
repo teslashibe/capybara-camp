@@ -140,6 +140,11 @@ func (w *Worker) workspaceTick(ctx context.Context, account camp.RunnerAccountSt
 		} else if handled {
 			return nil
 		}
+		if handled, err := w.exportTick(ctx, account); err != nil {
+			return err
+		} else if handled {
+			return nil
+		}
 		if err = w.cleanupRetiredWorkspaces(ctx); err != nil {
 			return err
 		}

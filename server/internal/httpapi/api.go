@@ -86,6 +86,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/camps/{camp}/events", a.authorize(a.events))
 	a.sessionRoutes(mux)
 	a.transferRoutes(mux)
+	a.workspaceExportRoutes(mux)
 	a.handoffRoutes(mux)
 	a.requestRoutes(mux)
 	a.planningRoutes(mux)
@@ -118,6 +119,12 @@ func (a *API) Handler() http.Handler {
 			}
 			if r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/v1/camps/") && strings.Contains(r.URL.Path, "/transfers/") && strings.Contains(r.URL.Path, "/chunks/") {
 				maximum = 384 << 10
+			}
+			if r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/v1/runner/exports/") && strings.Contains(r.URL.Path, "/chunks/") {
+				maximum = 384 << 10
+			}
+			if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/camps/") && strings.HasSuffix(r.URL.Path, "/exports") {
+				maximum = 2 << 20 // 256 selected paths, including JSON escapes
 			}
 			if r.URL.Path == "/v1/runner/credentials" || strings.HasSuffix(r.URL.Path, "/events") || strings.HasSuffix(r.URL.Path, "/implementation-events") || strings.HasSuffix(r.URL.Path, "/controls") {
 				maximum = 384 << 10

@@ -570,7 +570,7 @@ func (c *checkout) eraseRuntime() error {
 		return err
 	}
 	for _, entry := range entries {
-		if entry.Name() == "provider-home" || entry.Name() == "profile.json" || entry.Name() == "turn.json" || strings.HasPrefix(entry.Name(), "held-turn-") {
+		if entry.Name() == "provider-home" || entry.Name() == "profile.json" || entry.Name() == "turn.json" || entry.Name() == "export.json" || strings.HasPrefix(entry.Name(), "export-") || strings.HasPrefix(entry.Name(), "held-turn-") {
 			if err = c.root.RemoveAll(entry.Name()); err != nil {
 				return err
 			}

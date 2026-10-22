@@ -288,6 +288,12 @@ epoch once. During the source hold, the Mac waits for saved, visible routing
 before releasing its lock. The cloud worker reconciles a lost completion
 response from its journal.
 The server retains the committed receipt and removes the temporary upload chunks.
+Cloud runners also support owner-selected source exports: inspect changed paths,
+capture the selected files with credential exclusions, and resume encrypted chunk
+uploads after a restart. Each export expires after ten minutes and reserves the
+runner while capturing. This is a backend component of Cloud-to-Local migration;
+native reverse-transfer review and full history/attachment installation remain
+unfinished. See the [export contract](docs/transfer-payload.md#cloud-source-exports).
 The native publisher includes saved subagent histories with a shared or private
 Camp copy. Child transcripts stay under the parent's permissions and have their
 own message IDs and paged history. The sidebar refreshes after child updates,

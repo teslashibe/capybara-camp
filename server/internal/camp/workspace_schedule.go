@@ -13,7 +13,9 @@ func installationOccupied(ctx context.Context, tx pgx.Tx, installation string) (
 	err := tx.QueryRow(ctx, `SELECT
  EXISTS(SELECT 1 FROM ticket_workspaces WHERE provider_installation_id=$1 AND state='preparing') OR
  EXISTS(SELECT 1 FROM prompt_requests r JOIN ticket_workspaces w ON w.id=r.execution_workspace_id
- WHERE w.provider_installation_id=$1 AND r.state IN ('claimed','started','cancel_requested','outcome_unknown'))`, installation).Scan(&busy)
+ WHERE w.provider_installation_id=$1 AND r.state IN ('claimed','started','cancel_requested','outcome_unknown')) OR
+ EXISTS(SELECT 1 FROM workspace_exports e JOIN ticket_workspaces w ON w.id=e.workspace_id
+ WHERE w.provider_installation_id=$1 AND e.state='claimed' AND e.expires_at>clock_timestamp())`, installation).Scan(&busy)
 	return busy, err
 }
 

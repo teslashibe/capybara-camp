@@ -118,6 +118,12 @@ or dispatched approvals. Downgrading to schema 31 requires no approval records.
 A retained approval, including a cancelled one, blocks destructive downgrade;
 retain a compatible binary or restore a complete backup instead.
 
+Schema 34 adds owner-only cloud workspace export jobs and encrypted chunks.
+Deploy the matching API before runners that request exports. Empty export tables
+can roll back; any retained export record blocks downgrade. Export access expires
+after ten minutes, with expired chunks cleaned on the next owner export operation.
+This backend path does not yet provide a complete native Cloud-to-Local transfer.
+
 The example uses one 20 GiB persistent volume. Size it for your retained shared
 history, monitor free space, and configure encrypted base backups plus WAL
 archiving to an off-host destination. A local volume or mirrored disks do not

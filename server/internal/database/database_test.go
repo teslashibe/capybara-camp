@@ -202,6 +202,23 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = pool.Exec(ctx, `UPDATE session_transfers SET history_sha256=$2 WHERE id=$1`, transfer, strings.Repeat("d", 64)); err != nil {
 		t.Fatal(err)
 	}
+	exportID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO workspace_exports(id,camp_id,session_id,owner_user_id,device_id,workspace_id,workspace_revision,source_epoch,source_revision,transcript_revision,permission_revision,kind,paths) VALUES($1,$2,$3,$4,$5,$6,1,1,1,0,1,'inspect','[]')`, exportID, camp, session, id, device, workspace); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 33); err == nil {
+		t.Fatal("Downgrade discarded workspace exports")
+	}
+	var exportState string
+	if err = pool.QueryRow(ctx, `SELECT state FROM workspace_exports WHERE id=$1`, exportID).Scan(&exportState); err != nil || exportState != "pending" {
+		t.Fatal("Export changed on refused downgrade", err)
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal("Rejected export downgrade changed readiness", err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM workspace_exports WHERE id=$1`, exportID); err != nil {
+		t.Fatal(err)
+	}
 	// An approval remains durable even when an older build is restored.
 	approval := uuid.NewString()
 	if _, err = pool.Exec(ctx, `INSERT INTO planning_execution_approvals(id,camp_id,plan_id,plan_version,plan_revision,plan_sha256,creator_user_id,owner_user_id,owner_device_id,session_id,profile_id,session_revision,transcript_revision,permission_revision,provider,model,effort,speed,execution_location,execution_epoch,permissions,prompt) VALUES($1,$2,$3,1,1,$4,$5,$5,$6,$7,$8,1,0,1,'Codex','fixture','high','standard','local',1,'{}','Preserved execution approval')`, approval, camp, plan, strings.Repeat("a", 64), id, device, session, profile); err != nil {
