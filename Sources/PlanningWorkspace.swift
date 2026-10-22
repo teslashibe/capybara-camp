@@ -264,9 +264,7 @@ struct PlanningWorkspace: View {
     private func participants(_ plan: LocalPlan) -> [PlanningParticipant] {
         plan.current.planners.indices.map { slot in
             let steps = plan.current.steps.filter { $0.slot == slot && $0.phase != "combined" }
-            let status = steps.contains(where: { ["starting", "running"].contains($0.state) }) ? "Working" :
-                steps.contains(where: { $0.phase == "review" && $0.state == "completed" }) ? "Reviewed" :
-                steps.contains(where: { $0.state == "completed" }) ? "Draft ready" : "Ready"
+            let status = PlanningParticipant.progress(steps.map { (phase: $0.phase, state: $0.state) }, planState: plan.current.state)
             return PlanningParticipant(id: slot, provider: plan.current.planners[slot].session.provider, status: status)
         }
     }

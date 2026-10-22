@@ -125,9 +125,7 @@ struct SharedPlanningResultView: View {
     private var participants: [PlanningParticipant] {
         result.version.planners.map { planner in
             let steps = result.version.steps.filter { $0.slot == planner.slot && $0.phase != "merge" }
-            let status = steps.contains(where: { ["started", "claimed"].contains($0.state) }) ? "Working" :
-                steps.contains(where: { $0.phase == "review" && $0.state == "completed" }) ? "Reviewed" :
-                steps.contains(where: { $0.state == "completed" }) ? "Draft ready" : "Ready"
+            let status = PlanningParticipant.progress(steps.map { (phase: $0.phase, state: $0.state) }, planState: result.version.state)
             return PlanningParticipant(id: planner.slot, provider: planner.provider, status: status)
         }
     }

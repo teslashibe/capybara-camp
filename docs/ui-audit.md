@@ -38,6 +38,31 @@ audit. Updating an already saved copy after newer local work also remains to be
 resolved: the current link preserves that local work but offers only the earlier
 saved copy.
 
+The next pass found that provider child tiles still said Ready after an
+unconfirmed draft, or Draft ready after a failed review. Local and shared
+planning now use the same outcome presentation, with the status exposed as an
+accessibility value. A separate private fixture verified Needs review, Failed,
+Paused, Cancelled and Reviewed in the native workspace. The saved captures are
+`build/ui-audit/native-planner-needs-review-oct22.png` and
+`native-planner-failed-oct22.png`. The existing reference planning capture was
+used to check the provider marks, child tiles and placement above Recent sessions.
+Local planning and imported-planning tests pass, including an unconfirmed draft
+followed by cancellation and a successful draft followed by a failed review.
+
+The same pass reproduced a keyboard gap: Tab cycled from Notifications through
+Board/Chat and Search back to Notifications, skipping the planning navigation.
+Making the buttons focusable exposed a second issue: Space did not activate
+them. Navigation and stage buttons now share a plain button component with
+explicit Space/Return handling and an enabled-state check. The final native
+build passed Tab to Codex, Space to open its pane, Shift-Tab to Both chats,
+Return to restore both panes, Space on Reviews and Return to open Claude. Tab
+skipped the disabled Implementation stage. The focus ring is visible in
+`build/ui-audit/native-planning-keyboard-oct22.png`. The final native regression
+and strict deep signature verification pass. Other controls' keyboard behavior
+still needs the full inventory audit. Pointer activation at a recent-session
+row edge continued to report no available windows, including after successful
+keyboard input; that hit area has not passed this check.
+
 ## Transfer review
 
 `tools/transfer-ui-audit.sh` builds a separate native window using the production
@@ -177,6 +202,8 @@ remain unverified by pointer; this retry does not close the whole-app audit.
 | UI-26 | Plain buttons left empty row space and small icon padding outside their hit areas | Explicit label hit areas cover recent sessions, main/child chats, provider/profile/project rows, planning navigation, segmented controls, context attachment and the 28-point action icons. The card model/logo layout is preserved. The full pointer/keyboard inventory remains a release gate; intermittent computer-use window errors prevented completing every edge-click case in this pass |
 | UI-27 | Transfer review kept Source verified after the source hold ended while permissions were open | The confirmation phase keeps following the source hold. Native checks using the real local guard rejected a changed project file and a changed child transcript; unchanged history completed. Invalidated/expired/released hold regressions pass. Real cloud and two-Mac transfer acceptance remain open |
 | UI-28 | Imported implementations required an extra history detour, used inconsistent controls and could leave an empty pane after revision changes | The native API walkthrough verified direct opening, shared Chat/Attempts controls, formatted saved settings, complete-stage indication and revision navigation. Read-only imports hide execution actions. Pointer edges and the final whole-app audit remain open |
+| UI-29 | Provider tiles labelled unconfirmed or failed planning work as Ready or Draft ready | One presentation function now serves local and shared planning. Native synthetic-state checks verify Needs review, Failed, Paused, Cancelled and Reviewed; imported/local regressions pass. Status is also exposed to accessibility |
+| UI-30 | Tab skipped planning navigation and stages; focus alone did not make Space activate them | The shared plain button now supports focus and Space/Return activation. Native checks passed provider drill-down, Both chats, Reviews, reverse focus and skipping disabled Implementation. The remaining whole-app keyboard inventory is open |
 
 Local captures are in `build/ui-audit/`: `reference-chat.png`,
 `reference-board.png`, `reference-planning.png`, `native-chat-before.png`, and

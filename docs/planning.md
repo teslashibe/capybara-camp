@@ -237,6 +237,15 @@ labelled as having an earlier saved copy. Signing out restores the local view.
 The coordinator and its link index are scoped to the person, server and Camp;
 clearing the Camp cache removes both. Neither changes the original local file.
 
+Saving newer local work to that same Camp ticket remains unfinished. The current
+server binds a source ID to one immutable import and rejects a changed payload.
+The update flow must review the new snapshot, retain earlier saved versions and
+attempts, and check the Camp ticket's revision before appending history. Changes
+made on the Camp side need an explicit conflict review. A lost response must
+reconcile the same approved append, including after reconnect, without creating
+another ticket or starting provider work. Merely enabling Save again does not
+satisfy this requirement.
+
 `LocalPlanImport.prepare` maps a local ticket into the import contract. It
 requires an owned, published planner binding for each participant and a pinned,
 complete cloud transcript for each implementation. Message IDs, order, text and

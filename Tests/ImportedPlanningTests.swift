@@ -46,6 +46,19 @@ actor ImportedPlanningFixture: CampPublishingTransport {
                 steps: [.init(ordinal: 0, slot: 0, phase: "draft", state: "outcome_unknown", output: "Partial saved answer", usage: usage)], sources: [], mode: .single, imported: imported),
             campId: scope.campId, creatorUserId: actor.userId, shared: false, revision: 1, activeVersion: 1, updatedAt: Date())
         precondition(result.valid)
+        precondition(PlanningParticipant.progress(result.version.steps.map { ($0.phase, $0.state) }, planState: result.version.state) == "Needs review",
+            "An imported unconfirmed result was presented as ready")
+        precondition(PlanningParticipant.progress([("draft", "unknown"), ("review", "cancelled")], planState: "needs_review") == "Needs review",
+            "Cancelling the remaining review hid the unconfirmed local draft")
+        precondition(PlanningParticipant.progress([("draft", "completed"), ("review", "failed")], planState: "failed") == "Failed",
+            "A completed draft hid a failed review")
+        precondition(PlanningParticipant.progress([("draft", "completed"), ("review", "cancel_requested")], planState: "running") == "Stopping")
+        precondition(PlanningParticipant.progress([("draft", "completed"), ("review", "pending_approval")], planState: "running") == "Needs approval")
+        precondition(PlanningParticipant.progress([("draft", "pending"), ("review", "pending")], planState: "paused") == "Paused")
+        precondition(PlanningParticipant.progress([("draft", "pending"), ("review", "pending")], planState: "running") == "Waiting")
+        precondition(PlanningParticipant.progress([("draft", "completed"), ("review", "pending")], planState: "running") == "Draft ready")
+        precondition(PlanningParticipant.progress([("draft", "completed"), ("review", "completed")], planState: "ready") == "Reviewed")
+        precondition(PlanningParticipant.progress([], planState: "draft") == "Ready")
         let link = PlanningQuoteLink(planID: result.id, version: 1, sourceID: source.id)
         precondition(PlanningQuoteLink(id: link.id)?.sourceID == source.id)
         precondition(PlanningQuoteLink(id: "plan-source:bad:0:wrong") == nil)

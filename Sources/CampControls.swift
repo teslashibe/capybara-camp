@@ -44,6 +44,20 @@ struct CampIconLabel: View {
         Image(systemName: symbol).frame(width: 28, height: 28).contentShape(Rectangle())
     }
 }
+
+struct CampPlainButton<Label: View>: View {
+    @Environment(\.isEnabled) private var isEnabled
+    let action: () -> Void
+    @ViewBuilder let label: () -> Label
+    var body: some View {
+        Button(action: action, label: label).buttonStyle(.plain).focusable()
+            .onKeyPress(keys: [.space, .return]) { _ in
+                guard isEnabled else { return .ignored }
+                action()
+                return .handled
+            }
+    }
+}
 import AppKit
 
 // All task types use the reference's six fixed slots. Long titles and a second
@@ -200,6 +214,23 @@ struct PlanningParticipant: Identifiable {
     let id: Int
     let provider: String
     let status: String
+
+    static func progress(_ steps: [(phase: String, state: String)], planState: String) -> String {
+        let states = Set(steps.map(\.state))
+        if !states.isDisjoint(with: ["unknown", "outcome_unknown"]) { return "Needs review" }
+        if states.contains("failed") { return "Failed" }
+        if states.contains("cancel_requested") { return "Stopping" }
+        if !states.isDisjoint(with: ["starting", "running", "started", "claimed"]) { return "Working" }
+        if states.contains("pending_approval") { return "Needs approval" }
+        if states.contains("cancelled") { return "Cancelled" }
+        if steps.contains(where: { $0.phase == "review" && $0.state == "completed" }) { return "Reviewed" }
+        if steps.contains(where: { $0.phase == "draft" && $0.state == "completed" }) { return "Draft ready" }
+        if planState == "paused" { return "Paused" }
+        if planState == "cancelled" { return "Cancelled" }
+        if planState == "running" || states.contains("queued") { return "Waiting" }
+        if ["needs_review", "failed"].contains(planState) { return "Not started" }
+        return "Ready"
+    }
 }
 
 struct PlanningNavigation: View {
@@ -218,7 +249,7 @@ struct PlanningNavigation: View {
                 ProviderBadge(provider: "Planning")
                 Text(title).font(.system(size: 12, weight: .medium)).lineLimit(2)
             }.padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 7)
-            Button {
+            CampPlainButton {
                 section = "Plans"; focusedSlot = nil
             } label: {
                 HStack(alignment: .top, spacing: 8) {
@@ -232,11 +263,11 @@ struct PlanningNavigation: View {
                     .background((section == "Plans" || section == "Reviews") && focusedSlot == nil ? campGreen.opacity(0.10) : .clear)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .contentShape(Rectangle())
-            }.buttonStyle(.plain).padding(.horizontal, 10)
+            }.padding(.horizontal, 10)
             if mode == .comparison {
                 VStack(spacing: 5) {
                     ForEach(participants) { participant in
-                        Button { section = "Plans"; focusedSlot = participant.id } label: {
+                        CampPlainButton { section = "Plans"; focusedSlot = participant.id } label: {
                             HStack(spacing: 8) {
                                 ProviderMark(provider: participant.provider, size: 15)
                                 VStack(alignment: .leading, spacing: 3) {
@@ -249,18 +280,18 @@ struct PlanningNavigation: View {
                                 .background(ProviderMark.wash(participant.provider).opacity(focusedSlot == participant.id && section == "Plans" ? 1 : 0.55))
                                 .clipShape(RoundedRectangle(cornerRadius: 7))
                                 .contentShape(Rectangle())
-                        }.buttonStyle(.plain).accessibilityLabel("Open \(participant.provider) planner")
+                        }.accessibilityLabel("Open \(participant.provider) planner").accessibilityValue(participant.status)
                     }
                 }.padding(.leading, 24).padding(.trailing, 10)
             }
             ForEach(sections.filter { $0 != "Plans" && (mode == .comparison || $0 != "Combined plan") }, id: \.self) { value in
-                Button { section = value; focusedSlot = nil } label: {
+                CampPlainButton { section = value; focusedSlot = nil } label: {
                     Label(value == "History" ? "Planning history" : value,
                           systemImage: value == "History" ? "clock.arrow.circlepath" : value == "Implementation" ? "play" : "lightbulb")
                         .font(.system(size: 11)).frame(maxWidth: .infinity, alignment: .leading).padding(8)
                         .background(section == value ? campGreen.opacity(0.10) : .clear).clipShape(RoundedRectangle(cornerRadius: 7))
                         .contentShape(Rectangle())
-                }.buttonStyle(.plain).padding(.horizontal, 10).disabled(value == "Implementation" && !canImplement)
+                }.padding(.horizontal, 10).disabled(value == "Implementation" && !canImplement)
             }
             Divider().padding(.horizontal, 14).padding(.top, 8)
             RecentSessionsList(store: store)
@@ -279,7 +310,7 @@ struct PlanningStageBar: View {
         ScrollView(.horizontal) {
             HStack(spacing: 6) {
                 ForEach(Array(values.enumerated()), id: \.element) { index, value in
-                    Button { section = value } label: {
+                    CampPlainButton { section = value } label: {
                         HStack(spacing: 7) {
                             if completed.contains(value) { Image(systemName: "checkmark").font(.system(size: 9)) }
                             else { Text("\(index + 1)").font(.system(size: 10)).foregroundStyle(campMuted) }
@@ -287,7 +318,7 @@ struct PlanningStageBar: View {
                         }.padding(.horizontal, 10).frame(height: 30)
                             .background(section == value ? Color(hex: 0xE4E3DE) : .clear).clipShape(RoundedRectangle(cornerRadius: 6))
                             .contentShape(Rectangle())
-                    }.buttonStyle(.plain)
+                    }
                         .accessibilityElement(children: .ignore)
                         .accessibilityAddTraits(.isButton)
                         .accessibilityLabel(mode == .single && value == "Plans" ? "Plan" : value)

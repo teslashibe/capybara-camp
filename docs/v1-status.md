@@ -37,6 +37,15 @@ computer use intermittently reports no windows. Republishing newer local work
 after a saved copy, live migration, multi-device acceptance and the complete
 design audit remain open; no cloud deployment or release was made.
 
+The following native planning pass corrected misleading provider-tile status
+and keyboard navigation. Local and shared results use one outcome presentation;
+unconfirmed work no longer says Ready, and a failed review is not hidden by a
+completed draft. Native fixtures verify unconfirmed, failed, paused, cancelled
+and completed states. The planning navigation and stages now support Tab,
+Shift-Tab, Space and Return, with disabled Implementation skipped. Focused native
+tests and strict signature verification pass. These checks close those specific
+findings; pointer edge checks and the rest of the keyboard inventory remain open.
+
 The October 22 transfer review now keeps checking the source hold while the
 user reviews permissions. Computer use reproduced the stale Source verified
 label, then verified the correction with the real native handoff coordinator
