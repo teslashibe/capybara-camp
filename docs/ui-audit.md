@@ -84,6 +84,16 @@ the release candidate after remaining capabilities are implemented.
 
 ## Findings and verification
 
+The October 22 pointer retry opened Speed from its lower-left padding, opened
+Accessibility review from the far right of its row, and returned to Main chat
+from that row's lower-right padding. Each action showed the expected menu or
+transcript. Recent sessions also switched to Codex and back to All types through
+accessibility, preserving the open Claude chat and restoring the ten-session
+list. Capture: `build/ui-audit/native-chat-click-retry-oct22.png`.
+Pointer access then again reported no available windows, including after raising
+the app. The filter's edge target and the remaining card/icon targets therefore
+remain unverified by pointer; this retry does not close the whole-app audit.
+
 | ID | Finding | Current evidence and next check |
 | --- | --- | --- |
 | UI-01 | Main chat and subagents were below Recent sessions | Corrected and clicked through in the native review build: main chat, Accessibility review, Layout review, back to main. Each shows its own transcript. Repeat with running children, empty children and session changes |
