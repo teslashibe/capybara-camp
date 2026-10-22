@@ -128,26 +128,19 @@ struct PlanningWorkspace: View {
     @State private var profiles: [String: [CampSession]] = [:]
     @State private var reviewedUnknown = false
     @State private var expandedVersions: Set<Int> = []
+    @State private var focusedSlot: Int?
     var plan: LocalPlan? { planning.ticket(id) }
     var body: some View {
         if let plan {
             HStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Planning", systemImage: "lightbulb").font(.system(size: 12, weight: .medium)).padding(.horizontal, 16).padding(.top, 10)
-                    ForEach(plan.current.workflow == .single ? ["Plans", "Implementation", "History"] : ["Plans", "Reviews", "Combined plan", "Implementation", "History"], id: \.self) { value in
-                        Button { section = value } label: {
-                            Label(value == "Plans" && plan.current.workflow == .single ? "Plan" : value, systemImage: value == "History" ? "clock.arrow.circlepath" : value == "Combined plan" ? "doc.text" : "bubble.left.and.bubble.right")
-                                .font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading).padding(10)
-                                .background(section == value ? campGreen.opacity(0.10) : .clear).clipShape(RoundedRectangle(cornerRadius: 8))
-                        }.buttonStyle(.plain).padding(.horizontal, 10)
-                    }
-                    Divider()
-                    RecentSessionsList(store: store)
-                }.frame(width: 230)
+                PlanningNavigation(store: store, title: plan.title, mode: plan.current.workflow,
+                    participants: participants(plan), section: $section, focusedSlot: $focusedSlot,
+                    canImplement: plan.current.state == "ready" || plan.implementation != nil)
                 Rectangle().fill(campInk.opacity(0.08)).frame(width: 1)
                 VStack(spacing: 0) {
                     HStack {
-                        Label(plan.current.workflow.title, systemImage: "lightbulb").font(.system(size: 13, weight: .medium))
+                        ProviderBadge(provider: "Planning")
+                        Text(plan.current.workflow.title).font(.system(size: 12, weight: .medium))
                         Text("\(plan.current.completedCount) of \(plan.current.workflow.turnLimit) \(plan.current.workflow == .single ? "turn" : "turns")").font(.system(size: 11)).foregroundStyle(campMuted)
                         Spacer()
                         Button {
@@ -190,13 +183,14 @@ struct PlanningWorkspace: View {
                             }.fixedSize(horizontal: false, vertical: true).padding(.bottom, 10)
                         }
                     }
-                    if section == "Implementation" { ImplementationSetupView(store: store, planning: planning, id: id) }
-                    else if section == "Combined plan" { combined(plan) }
-                    else if section == "History" { history(plan) }
+                    PlanningStageBar(mode: plan.current.workflow, section: $section, completed: completedStages(plan),
+                        canImplement: plan.current.state == "ready" || plan.implementation != nil)
+                        .padding(.horizontal, 22).padding(.bottom, 12)
+                    if section == "Implementation" { detailReview(plan) { ImplementationSetupView(store: store, planning: planning, id: id, scrolls: false) } }
+                    else if section == "Combined plan" { detailReview(plan) { combined(plan) } }
+                    else if section == "History" { detailReview(plan) { history(plan) } }
                     else {
-                        HStack(alignment: .top, spacing: 12) {
-                            ForEach(plan.current.planners.indices, id: \.self) { slot in pane(plan, slot: slot) }
-                        }.padding(.horizontal, 22)
+                        panes(plan).padding(.horizontal, 22)
                     }
                     footer(plan)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -206,6 +200,7 @@ struct PlanningWorkspace: View {
                 section = store.notificationPlanVersion.map { $0 == plan.current.number ? (plan.current.workflow == .single ? "Plans" : "Combined plan") : "History" } ?? "Plans"
                 if let version = store.notificationPlanVersion { expandedVersions.insert(version) }
                 reviewedUnknown = false
+                focusedSlot = nil
                 profiles = ["Codex": store.planningProfiles("Codex"), "Claude": store.planningProfiles("Claude")]
             }
             .onChange(of: brief) { _, value in
@@ -217,7 +212,42 @@ struct PlanningWorkspace: View {
                     planning.edit(id) { $0.brief = value }
                 }
             }
+            .onChange(of: plan.current.workflow) { _, _ in focusedSlot = nil; section = "Plans" }
             .onDisappear { saveTask?.cancel(); if planning.ticket(id)?.current.number == plan.current.number { planning.edit(id) { $0.brief = brief } } }
+        }
+    }
+    private func participants(_ plan: LocalPlan) -> [PlanningParticipant] {
+        plan.current.planners.indices.map { slot in
+            let steps = plan.current.steps.filter { $0.slot == slot && $0.phase != "combined" }
+            let status = steps.contains(where: { ["starting", "running"].contains($0.state) }) ? "Working" :
+                steps.contains(where: { $0.phase == "review" && $0.state == "completed" }) ? "Reviewed" :
+                steps.contains(where: { $0.state == "completed" }) ? "Draft ready" : "Ready"
+            return PlanningParticipant(id: slot, provider: plan.current.planners[slot].session.provider, status: status)
+        }
+    }
+    private func completedStages(_ plan: LocalPlan) -> Set<String> {
+        var result = Set<String>()
+        for (section, phase) in [("Plans", "draft"), ("Reviews", "review"), ("Combined plan", "combined")] {
+            let steps = plan.current.steps.filter { $0.phase == phase }
+            if !steps.isEmpty && steps.allSatisfy({ $0.state == "completed" }) { result.insert(section) }
+        }
+        if plan.implementation?.state == "complete" { result.insert("Implementation") }
+        return result
+    }
+    private func panes(_ plan: LocalPlan, all: Bool = false) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            ForEach(plan.current.planners.indices.filter { all || focusedSlot == nil || focusedSlot == $0 }, id: \.self) { slot in
+                pane(plan, slot: slot).id("\(plan.id):\(plan.current.number):\(slot):\(section)")
+            }
+        }
+    }
+    private func detailReview<Content: View>(_ plan: LocalPlan, @ViewBuilder content: () -> Content) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                panes(plan, all: true).frame(height: 340)
+                content()
+                    .background(.white).clipShape(RoundedRectangle(cornerRadius: 10))
+            }.padding(.horizontal, 22).padding(.bottom, 16)
         }
     }
     private func pane(_ plan: LocalPlan, slot: Int) -> some View {
@@ -241,33 +271,36 @@ struct PlanningWorkspace: View {
             PlanningModelMenu(store: store, id: id, version: version, slot: slot, expanded: true)
             Divider()
             ScrollViewReader { proxy in
-                ScrollView {
+                CampTranscriptViewport(padding: 12, followBottom: { proxy.scrollTo("bottom", anchor: .bottom) }) {
                     VStack(alignment: .leading, spacing: 18) {
                         let steps = version.steps.filter { $0.slot == slot && $0.phase != "combined" && (section != "Reviews" || $0.phase == "review") }
                         ForEach(steps) { step in output(plan, version: version, step: step) }
                         if steps.isEmpty { Text(version.editable ? "Start to generate an independent plan" : section == "Reviews" ? "The review will appear after both drafts" : "Waiting for this provider").font(.system(size: 12)).foregroundStyle(campMuted) }
                         Color.clear.frame(height: 1).id("bottom")
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                    }
                 }.onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
                     .onChange(of: planning.live) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
                     .onChange(of: version) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
             }
-        }.padding(14).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(.white.opacity(0.55)).clipShape(RoundedRectangle(cornerRadius: 10))
+        }.padding(14).frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(.white).clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(campInk.opacity(0.08)))
     }
     private func output(_ plan: LocalPlan, version: LocalPlanVersion, step: LocalPlanStep) -> some View {
         let live = planning.liveText(id, version: version.number, ordinal: step.ordinal)
         return VStack(alignment: .leading, spacing: 8) {
             HStack { Text(version.workflow == .single ? "Plan" : step.phase == "draft" ? "Independent plan" : step.phase == "review" ? "Review" : "Combined plan").font(.system(size: 12, weight: .medium)); Spacer(); if ["starting", "running"].contains(step.state) { ProgressView().controlSize(.mini) } }
-            if !step.output.isEmpty || !live.isEmpty { MessageView(message: Message(id: "\(version.number):\(step.ordinal)", role: "assistant", text: step.output.isEmpty ? live : step.output)) }
+            if !step.output.isEmpty || !live.isEmpty {
+                let planner = version.planners[step.slot]
+                MessageView(message: Message(id: "\(version.number):\(step.ordinal)", role: "assistant", text: step.output.isEmpty ? live : step.output),
+                    metadata: "\(planner.session.provider) · \(planner.model) · \(ModelMenu.effortName(planner.tuning.effort)) effort · \(ModelMenu.speedName(planner.tuning.speed))", fontSize: 12)
+            }
             else { Text(step.state == "pending" ? "Waiting" : step.state.replacingOccurrences(of: "_", with: " ").capitalized).font(.system(size: 11)).foregroundStyle(campMuted) }
             if !step.error.isEmpty { Text(step.error).font(.system(size: 11)).foregroundStyle(.orange) }
             if let count = step.usage.outputTokens { Text("\(count.formatted()) output tokens").font(.system(size: 10)).foregroundStyle(campMuted) }
         }
     }
     private func combined(_ plan: LocalPlan) -> some View {
-        ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if let step = plan.current.steps.first(where: { $0.phase == "combined" }) { output(plan, version: plan.current, step: step) }
                 else { Text("The combined plan follows both drafts and reviews").foregroundStyle(campMuted) }
@@ -275,7 +308,6 @@ struct PlanningWorkspace: View {
                     implementationLink(plan)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading).padding(22)
-        }
     }
     private func implementationLink(_ plan: LocalPlan) -> some View {
         Button(plan.implementation == nil ? "Continue to implementation" : "Open implementation") {
@@ -283,8 +315,8 @@ struct PlanningWorkspace: View {
         }.buttonStyle(.borderedProminent).tint(campGreen)
     }
     private func history(_ plan: LocalPlan) -> some View {
-        ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                Text("Planning history").font(.system(size: 13, weight: .medium))
                 ForEach(plan.versions.reversed()) { version in
                     DisclosureGroup("Version \(version.number) · \(version.state.replacingOccurrences(of: "_", with: " "))", isExpanded: Binding(get: { expandedVersions.contains(version.number) }, set: { expanded in if expanded { expandedVersions.insert(version.number) } else { expandedVersions.remove(version.number) } })) {
                         VStack(alignment: .leading, spacing: 18) {
@@ -299,8 +331,7 @@ struct PlanningWorkspace: View {
                         ForEach(execution.messages) { MessageView(message: $0) }
                     }
                 }
-            }.padding(22)
-        }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(22)
     }
     private func footer(_ plan: LocalPlan) -> some View {
         VStack(alignment: .leading, spacing: 10) {

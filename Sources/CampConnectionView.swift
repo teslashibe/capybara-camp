@@ -231,7 +231,7 @@ struct CampWorkerStatusView: View {
                         Button("Mark " + outcome) { Task { await worker.confirm(attempt, outcome: outcome); reviewing = nil } }
                     }
                 }
-            }.padding(24).frame(width: 580)
+            }.padding(24).frame(width: 580).campWindowBehavior()
         }
     }
 }

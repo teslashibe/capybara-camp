@@ -18,8 +18,8 @@ and acceptance are separate milestones.
 | Memory and skills | Approved Cortex/shared Markdown design | Actual native and Go integrations, provider/model consolidation, memory inspection, skill editing/version rollout and permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image and local development builds | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, Developer ID/notarization, universal V1 release and recorded website demo |
 
-Next: finish cloud account/runner and Git
-contracts, then memory/skills and shared execution. Validate the full workflow
+Next: finish the current native design corrections and their click-through,
+then cloud account/runner and Git contracts, memory/skills and shared execution. Validate the full workflow
 locally before the owner provisions the Hetzner box with us. Cloud sign-in and
 the two-Mac acceptance run follow that deployment. Hardware has not been bought
 or provisioned for this goal.
@@ -98,9 +98,21 @@ Recent sessions. Main chat and its children now appear above the recent list,
 and switching through two synthetic child transcripts passed. The full final
 gate remains open, including running children, other states and window sizes.
 
+The planning audit added provider drill-down, the shared stage bar and both
+planning conversations above the combined plan, history and implementation.
+Native comparison, executor/model selection, restart with preserved revisions,
+single planning and a two-message context attachment passed with synthetic data.
+The shorter planning panes wrap their own text and follow the bottom after
+resizing. Recorded planning settings appear beside each response. Shared-state
+and final keyboard/permission/notification checks remain pending.
+
 The GitHub QA walkthrough also found that Command-Q took effect after closing
 the Manage sources sheet, but did not close the app from inside that sheet.
 Check quit behavior for every modal during the final keyboard-access audit.
+The planning audit traced this to AppKit's modal-window termination setting.
+The fix passed Command-Q from Sources, Projects and Notifications, helper
+cleanup, and reopening the saved plan. Remaining sheets and in-flight operations
+still need the final keyboard audit.
 
 This review belongs at the end of implementation, alongside the two clean
 code-review cycles, native acceptance tests and performance checks. Preserve

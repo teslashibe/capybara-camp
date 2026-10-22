@@ -488,7 +488,7 @@ struct CampNotificationsView: View {
                     .buttonStyle(.plain).help("Close notifications").accessibilityLabel("Close notifications")
             }
             HStack {
-                Picker("Show", selection: $showRead) { Text("All").tag(true); Text("Unread").tag(false) }.pickerStyle(.segmented).frame(width: 200)
+                CampSegmentedControl(options: [(true, "All"), (false, "Unread")], selection: $showRead).frame(width: 200)
                 Spacer()
                 Button("Mark all read") { Task { await notices.markAllRead() } }.disabled(notices.unread == 0)
                 Button("Clear read") { Task { await notices.clearRead() } }.disabled(!notices.visible.contains(where: \.read))

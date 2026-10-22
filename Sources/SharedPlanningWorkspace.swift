@@ -143,14 +143,20 @@ struct SharedPlanningWorkspace: View {
     @ObservedObject var store: CampStore
     @ObservedObject var planning: CampPlanning
     let id: String
+    @State private var section = "Plans"
+    @State private var focusedSlot: Int?
     var body: some View {
         if let draft = planning.draft(id) {
             HStack(spacing: 0) {
-                RecentSessionsList(store: store).frame(width: 230)
+                PlanningNavigation(store: store, title: draft.input.title, mode: draft.input.workflow,
+                    participants: draft.input.planners.indices.map { slot in
+                        PlanningParticipant(id: slot, provider: store.cloud.sessions.first { $0.id == draft.input.planners[slot].sessionId }?.provider ?? (slot == 0 ? "Codex" : "Claude"), status: planning.pending(id) ? "Waiting to sync" : "Ready")
+                    }, section: $section, focusedSlot: $focusedSlot, sections: ["Plans"], canImplement: false)
                 Divider()
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
-                        Label(draft.input.workflow.title, systemImage: "lightbulb").font(.headline)
+                        ProviderBadge(provider: "Planning")
+                        Text(draft.input.workflow.title).font(.system(size: 12, weight: .medium))
                         Text("Shared Camp").foregroundStyle(campMuted)
                         Spacer()
                         Button { store.view = "Board" } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }.buttonStyle(.plain).help("Back to board").accessibilityLabel("Back to board")
@@ -168,7 +174,7 @@ struct SharedPlanningWorkspace: View {
                     }.frame(maxWidth: 300).disabled(planning.pending(id))
                     Text("Choose shared sessions below. Each provider runs on its session owner's Mac, using that owner's login.").font(.system(size: 11)).foregroundStyle(campMuted)
                     HStack(alignment: .top, spacing: 12) {
-                        ForEach(draft.input.planners.indices, id: \.self) { slot in
+                        ForEach(draft.input.planners.indices.filter { focusedSlot == nil || focusedSlot == $0 }, id: \.self) { slot in
                             VStack(alignment: .leading, spacing: 10) {
                                 let provider = store.cloud.sessions.first { $0.id == draft.input.planners[slot].sessionId }?.provider ?? (slot == 0 ? "Codex" : "Claude")
                                 Label { Text(provider) } icon: { ProviderMark(provider: provider, size: 17) }.font(.headline)
@@ -198,7 +204,7 @@ struct SharedPlanningWorkspace: View {
                             .disabled(planning.pending(id) || draft.input.budgetPolicy != "calls" || draft.input.brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }.padding(22).disabled(planning.pending(id) && draft.cancelRequested)
-            }.disabled(!planning.ready)
+            }.disabled(!planning.ready).onChange(of: draft.input.workflow) { _, _ in focusedSlot = nil }
         } else if let result = planning.detail(id, version: planning.selectedVersion) {
             SharedPlanningResultView(store: store, result: result)
         } else {

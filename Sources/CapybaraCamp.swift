@@ -637,7 +637,7 @@ final class TranscriptWatch {
         observeHistory()
         if Date() >= nextImportCheck { refresh(background: true) }
     }
-    func stopRuntimeObservation() { codexWatch.stop() }
+    func stopRuntimeObservation() { backgroundPoll?.cancel(); backgroundPoll = nil; codexWatch.stop() }
     func startBackgroundObservation() {
         guard backgroundPoll == nil else { return }
         Task { [weak self] in await self?.restoreCloudAndNotification() }
@@ -1200,26 +1200,31 @@ struct RootView: View {
                 else if let id = store.selectedID, let plan = store.planning.ticket(id), plan.implementation == nil || store.reviewingPlan == id { PlanningWorkspace(store: store, planning: store.planning, id: id) }
                 else { ChatView(store: store) }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.foregroundStyle(campInk).background(campCream)
+        }.foregroundStyle(campInk).background(campCream).tint(campGreen)
         .frame(minWidth: 1060, minHeight: 720)
         .onAppear {
             store.refresh(); store.startBackgroundObservation()
             AppDelegate.reopen = { openWindow(id: "camp") }
-            AppDelegate.prepareToQuit = { [weak store] in store?.stopRuntimeObservation(); await store?.notifications.flush(); await store?.sharedPlanning.flush() }
+            AppDelegate.prepareToQuit = { [weak store] in
+                AppDelegate.traceShutdown("stop observation"); store?.stopRuntimeObservation()
+                AppDelegate.traceShutdown("save notifications"); await store?.notifications.flush()
+                AppDelegate.traceShutdown("save shared planning"); await store?.sharedPlanning.flush()
+            }
         }
-        .sheet(isPresented: $store.notificationSheet) { CampNotificationsView(store: store, notices: store.notifications) }
+        .campWindowBehavior()
+        .sheet(isPresented: $store.notificationSheet) { CampNotificationsView(store: store, notices: store.notifications).campWindowBehavior() }
         .overlay(alignment: .topTrailing) { CampNotificationToast(store: store, notices: store.notifications).padding(22) }
         .onChange(of: store.view) { _, value in store.observeHistory(); if value == "Chat" { store.loadHistory() } }
-        .sheet(isPresented: $store.sourceSheet) { SourcesView(store: store) }
+        .sheet(isPresented: $store.sourceSheet) { SourcesView(store: store).campWindowBehavior() }
         .sheet(isPresented: Binding(get: { onboarding.presented }, set: { if !$0 { onboarding.pause() } })) {
-            CampOnboardingView(store: store, setup: onboarding, cloud: store.cloud, accounts: store.cloud.providerAccounts, git: store.cloud.gitConnections, projects: store.projects, notices: store.notifications)
+            CampOnboardingView(store: store, setup: onboarding, cloud: store.cloud, accounts: store.cloud.providerAccounts, git: store.cloud.gitConnections, projects: store.projects, notices: store.notifications).campWindowBehavior()
         }
         .onChange(of: onboarding.presented) { _, showing in if !showing && !onboarding.error.isEmpty { store.banner = onboarding.error } }
-        .sheet(isPresented: $store.projectSheet) { CampProjectsView(store: store, local: store.projects, cloud: store.cloud) }
-        .sheet(item: $store.permissionSheet) { SessionPermissionsView(store: store, session: $0) }
-        .sheet(isPresented: $showCamp) { CampConnectionView(cloud: store.cloud) }
-        .sheet(item: $store.shareSheet) { session in CampShareView(store: store, cloud: store.cloud, sharing: store.sharing, session: session) }
-        .sheet(item: $store.contextInspection) { value in ContextInspectionView(store: store, inspection: value) }
+        .sheet(isPresented: $store.projectSheet) { CampProjectsView(store: store, local: store.projects, cloud: store.cloud).campWindowBehavior() }
+        .sheet(item: $store.permissionSheet) { SessionPermissionsView(store: store, session: $0).campWindowBehavior() }
+        .sheet(isPresented: $showCamp) { CampConnectionView(cloud: store.cloud).campWindowBehavior() }
+        .sheet(item: $store.shareSheet) { session in CampShareView(store: store, cloud: store.cloud, sharing: store.sharing, session: session).campWindowBehavior() }
+        .sheet(item: $store.contextInspection) { value in ContextInspectionView(store: store, inspection: value).campWindowBehavior() }
         .onOpenURL { store.openContextLink($0) }
         .environment(\.openURL, OpenURLAction { url in
             if url.scheme == "capybara" { store.openContextLink(url); return .handled }
@@ -1288,15 +1293,7 @@ struct RootView: View {
             HStack {
                 HStack(spacing: 9) {
                     Text("View").font(.system(size: 12))
-                    HStack(spacing: 0) {
-                        ForEach(["Board", "Chat"], id: \.self) { view in
-                            Button { store.view = view } label: {
-                                Text(view).font(.system(size: 12)).frame(width: 56, height: 25)
-                                    .background(store.view == view ? Color(hex: 0xCDCCC6) : .clear)
-                                    .clipShape(RoundedRectangle(cornerRadius: 7))
-                            }.buttonStyle(.plain).accessibilityValue(store.view == view ? "Selected" : "")
-                        }
-                    }.padding(1).background(Color(hex: 0xE4E3DE)).clipShape(RoundedRectangle(cornerRadius: 8))
+                    CampSegmentedControl(options: [("Board", "Board"), ("Chat", "Chat")], selection: $store.view).frame(width: 114)
                 }
                 Spacer()
                 HStack { Image(systemName: "magnifyingglass"); TextField("Find a session or project", text: $store.search).textFieldStyle(.plain) }.font(.system(size: 12)).foregroundStyle(campMuted).padding(9).frame(width: 255).background(.white.opacity(0.8)).clipShape(RoundedRectangle(cornerRadius: 8))
@@ -1649,11 +1646,14 @@ struct ModelSettingsMenu: View {
     var body: some View {
         if expanded {
             ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 8) {
-                    modelField.frame(width: 165)
-                    effortField.frame(width: 110)
-                    speedField.frame(width: 105)
-                }
+                GeometryReader { geometry in
+                    let unit = max(0, geometry.size.width - 16) / 3.6
+                    HStack(alignment: .top, spacing: 8) {
+                        modelField.frame(width: unit * 1.6)
+                        effortField.frame(width: unit)
+                        speedField.frame(width: unit)
+                    }
+                }.frame(minWidth: 396).frame(height: 46)
                 VStack(alignment: .leading, spacing: 8) {
                     modelField
                     HStack(alignment: .top, spacing: 8) { effortField; speedField }
@@ -1758,10 +1758,15 @@ struct ModelSettingsMenu: View {
 }
 struct MessageView: View {
     let message: Message
+    var metadata: String? = nil
+    var fontSize: CGFloat = 13
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 7) { Image(systemName: message.role == "user" ? "person.crop.circle" : "sparkle"); Text(message.role == "user" ? "You" : "Assistant").fontWeight(.semibold) }.font(.system(size: 11)).foregroundStyle(message.role == "user" ? campMuted : campGreen)
-            Text((try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text)).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled)
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Image(systemName: message.role == "user" ? "person.crop.circle" : "sparkle")
+                Text("\(Text(message.role == "user" ? "You" : "Assistant").fontWeight(.semibold))\(Text(metadata.map { " · " + $0 } ?? "").font(.system(size: 10)).foregroundColor(campMuted))")
+            }.font(.system(size: 11)).foregroundStyle(message.role == "user" ? campMuted : campGreen)
+            Text((try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text)).font(.system(size: fontSize)).lineSpacing(4).textSelection(.enabled)
                 .lineLimit(nil).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
         }.padding(message.role == "user" ? 15 : 0).background(message.role == "user" ? Color.white.opacity(0.7) : .clear).clipShape(RoundedRectangle(cornerRadius: 10))
     }
@@ -1772,7 +1777,7 @@ struct SourcesView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack { Mascot(); VStack(alignment: .leading, spacing: 4) { Text("Bring your sessions to camp").font(.title2); Text(location == "Local" ? "Local folders only · Credentials stay with each CLI" : location == "GitHub" ? "Your GitHub account and repository access" : "Separate provider sign-ins on your Camp server").foregroundStyle(campMuted).font(.caption) } }
-            Picker("Source location", selection: $location) { Text("Local profiles").tag("Local"); Text("Cloud accounts").tag("Cloud"); Text("GitHub").tag("GitHub") }.pickerStyle(.segmented)
+            CampSegmentedControl(options: [("Local", "Local profiles"), ("Cloud", "Cloud accounts"), ("GitHub", "GitHub")], selection: $location).accessibilityLabel("Source location")
             ScrollView {
                 if location == "Local" {
                     VStack(alignment: .leading, spacing: 14) {
@@ -1792,17 +1797,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor static var reopen: (() -> Void)?
     @MainActor static var prepareToQuit: (() async -> Void)?
     private var quitting = false
-    func applicationWillFinishLaunching(_ notification: Notification) { MacNoticeDelivery.shared.install() }
+    @MainActor static func traceShutdown(_ stage: String) {
+        #if CAMP_DEVELOPMENT
+        if ProcessInfo.processInfo.environment["CAMP_DEV_SHUTDOWN_TRACE"] == "1" {
+            try? FileHandle.standardError.write(contentsOf: Data("Camp shutdown: \(stage)\n".utf8))
+        }
+        #endif
+    }
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        MacNoticeDelivery.shared.install()
+        Self.traceShutdown("installed")
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { if !flag { Self.reopen?() }; return true }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        Self.traceShutdown("termination requested")
         guard !quitting else { return .terminateLater }
         guard let prepare = Self.prepareToQuit else { return .terminateNow }
         quitting = true
-        Task { await prepare(); sender.reply(toApplicationShouldTerminate: true) }
+        Task {
+            await prepare()
+            Self.traceShutdown("prepared")
+            sender.reply(toApplicationShouldTerminate: true)
+        }
         return .terminateLater
     }
     func applicationWillTerminate(_ notification: Notification) {
+        Self.traceShutdown("terminated")
         for process in Bridge.activeProcesses.values where process.isRunning { process.terminate() }
     }
 }

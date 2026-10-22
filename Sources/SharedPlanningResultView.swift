@@ -4,13 +4,17 @@ struct SharedPlanningResultView: View {
     @ObservedObject var store: CampStore
     let result: CloudPlanningResult
     @State private var section = "Plans"
+    @State private var focusedSlot: Int?
     var body: some View {
         HStack(spacing: 0) {
-            RecentSessionsList(store: store).frame(width: 230)
+            PlanningNavigation(store: store, title: result.title, mode: result.version.workflow,
+                participants: participants, section: $section, focusedSlot: $focusedSlot,
+                sections: ["Plans", "Combined plan", "History"], canImplement: false)
             Divider()
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Label(result.version.workflow.title, systemImage: "lightbulb").font(.headline)
+                    ProviderBadge(provider: "Planning")
+                    Text(result.version.workflow.title).font(.system(size: 12, weight: .medium))
                     Text("Version \(result.version.version)").foregroundStyle(campMuted)
                     Spacer()
                     if let maxVersion = result.activeVersion {
@@ -42,25 +46,25 @@ struct SharedPlanningResultView: View {
                         }
                     } }
                 }
-                if result.version.workflow == .comparison { Picker("View", selection: $section) {
-                    ForEach(["Plans", "Reviews", "Combined plan"], id: \.self) { Text($0).tag($0) }
-                }.pickerStyle(.segmented).frame(maxWidth: 400) }
-                if section == "Combined plan" {
-                    resultMessages(result.version.steps.filter { $0.phase == "merge" })
-                } else {
-                    HStack(alignment: .top, spacing: 14) {
-                        ForEach(result.version.planners, id: \.slot) { planner in
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack { ProviderMark(provider: planner.provider, size: 16); Text(planner.provider).font(.headline) }
-                                ModelSettingsMenu(provider: planner.provider, title: "\(planner.provider) planner", sessionModel: planner.model,
-                                    modelLabel: planner.model, models: [], caps: ModelOption(id: planner.model, label: planner.model),
-                                    choice: ModelTuning(effort: planner.effort, speed: planner.speed), locked: true, expanded: true, selectModel: { _ in }, tune: { _, _ in })
-                                Divider()
-                                resultMessages(result.version.steps.filter { $0.slot == planner.slot && $0.phase == (section == "Plans" ? "draft" : "review") })
-                            }.padding(14).frame(maxWidth: .infinity, maxHeight: .infinity).background(.white.opacity(0.55)).clipShape(RoundedRectangle(cornerRadius: 10))
+                PlanningStageBar(mode: result.version.workflow, section: $section, completed: completedStages, showImplementation: false)
+                if section == "History" || section == "Combined plan" {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            plannerPanes.frame(height: 340)
+                            VStack(alignment: .leading, spacing: 12) {
+                                if section == "History" {
+                                    Text("Planning history").font(.headline)
+                                    ForEach(Array(max(1, (result.activeVersion ?? result.version.version) - 99)...(result.activeVersion ?? result.version.version)).reversed(), id: \.self) { version in
+                                        Button("Version \(version)") { store.sharedPlanning.open(result.id, version: version); section = "Plans"; focusedSlot = nil }
+                                    }
+                                } else {
+                                    messageBlocks(result.version.steps.filter { $0.phase == "merge" })
+                                }
+                            }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
+                                .background(.white).clipShape(RoundedRectangle(cornerRadius: 10))
                         }
                     }
-                }
+                } else { plannerPanes }
                 HStack {
                     Text("\(result.version.steps.filter { $0.state == "completed" }.count) of \(result.version.workflow.turnLimit) · \(result.version.state.replacingOccurrences(of: "_", with: " "))").font(.system(size: 11)).foregroundStyle(campMuted)
                     Spacer()
@@ -74,20 +78,65 @@ struct SharedPlanningResultView: View {
                 if !store.sharedPlanning.error.isEmpty { Text(store.sharedPlanning.error).font(.caption).foregroundStyle(.orange) }
             }.padding(22).frame(maxWidth: .infinity, maxHeight: .infinity)
         }.onAppear { if store.notificationPlanVersion != nil && result.version.workflow == .comparison { section = "Combined plan" } }
-            .onChange(of: result.version.workflow) { _, _ in section = "Plans" }
+            .onChange(of: result.version.workflow) { _, _ in section = "Plans"; focusedSlot = nil }
+            .onChange(of: result.id) { _, _ in
+                section = store.notificationPlanVersion != nil && result.version.workflow == .comparison ? "Combined plan" : "Plans"
+                focusedSlot = nil
+            }
+    }
+    private var plannerPanes: some View {
+        HStack(alignment: .top, spacing: 14) {
+            ForEach(result.version.planners.filter { focusedSlot == nil || focusedSlot == $0.slot }, id: \.slot) { planner in
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack { ProviderMark(provider: planner.provider, size: 16); Text(planner.provider).font(.headline) }
+                    ModelSettingsMenu(provider: planner.provider, title: "\(planner.provider) planner", sessionModel: planner.model,
+                        modelLabel: planner.model, models: [], caps: ModelOption(id: planner.model, label: planner.model),
+                        choice: ModelTuning(effort: planner.effort, speed: planner.speed), locked: true, expanded: true, selectModel: { _ in }, tune: { _, _ in })
+                    Divider()
+                    resultMessages(result.version.steps.filter { $0.slot == planner.slot && $0.phase != "merge" && (section != "Reviews" || $0.phase == "review") })
+                }.padding(14).frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity).background(.white).clipShape(RoundedRectangle(cornerRadius: 10))
+                    .id("\(result.id):\(result.version.version):\(planner.slot):\(section)")
+            }
+        }
+    }
+    private var participants: [PlanningParticipant] {
+        result.version.planners.map { planner in
+            let steps = result.version.steps.filter { $0.slot == planner.slot && $0.phase != "merge" }
+            let status = steps.contains(where: { ["started", "claimed"].contains($0.state) }) ? "Working" :
+                steps.contains(where: { $0.phase == "review" && $0.state == "completed" }) ? "Reviewed" :
+                steps.contains(where: { $0.state == "completed" }) ? "Draft ready" : "Ready"
+            return PlanningParticipant(id: planner.slot, provider: planner.provider, status: status)
+        }
+    }
+    private var completedStages: Set<String> {
+        var result = Set<String>()
+        for (section, phase) in [("Plans", "draft"), ("Reviews", "review"), ("Combined plan", "merge")] {
+            let steps = self.result.version.steps.filter { $0.phase == phase }
+            if !steps.isEmpty && steps.allSatisfy({ $0.state == "completed" }) { result.insert(section) }
+        }
+        return result
     }
     private func resultMessages(_ steps: [CloudPlanningResult.Step]) -> some View {
         ScrollViewReader { proxy in
-            ScrollView {
+            CampTranscriptViewport(followBottom: { proxy.scrollTo("bottom", anchor: .bottom) }) {
                 VStack(alignment: .leading, spacing: 14) {
-                    ForEach(steps) { step in
-                        if step.output.isEmpty { HStack { if ["started", "claimed"].contains(step.state) { ProgressView().controlSize(.small) }; Text(step.state.replacingOccurrences(of: "_", with: " ")).font(.caption).foregroundStyle(campMuted) } }
-                        else { MessageView(message: Message(id: String(step.id), role: "assistant", text: step.output)) }
-                    }
+                    messageBlocks(steps)
                     Color.clear.frame(height: 1).id("bottom")
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
+                }
             }.onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
                 .onChange(of: section) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: steps.map(\.output)) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+        }
+    }
+    private func messageBlocks(_ steps: [CloudPlanningResult.Step]) -> some View {
+        ForEach(steps) { step in
+            Text(step.phase == "draft" ? "Independent plan" : step.phase == "review" ? "Review" : "Combined plan").font(.system(size: 12, weight: .medium))
+            if step.output.isEmpty { HStack { if ["started", "claimed"].contains(step.state) { ProgressView().controlSize(.small) }; Text(step.state.replacingOccurrences(of: "_", with: " ")).font(.caption).foregroundStyle(campMuted) } }
+            else {
+                let planner = result.version.planners.first { $0.slot == step.slot }
+                MessageView(message: Message(id: String(step.id), role: "assistant", text: step.output),
+                    metadata: planner.map { "\($0.provider) · \($0.model) · \(ModelMenu.effortName($0.effort)) effort · \(ModelMenu.speedName($0.speed))" }, fontSize: 12)
+            }
         }
     }
 }

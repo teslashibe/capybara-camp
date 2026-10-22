@@ -70,7 +70,7 @@ struct CampProjectsView: View {
         VStack(alignment:.leading,spacing:16) {
             HStack { Text("Projects").font(.title2);Spacer();Button { dismiss() } label: { Image(systemName:"xmark").frame(width:28,height:28) }.buttonStyle(.plain).accessibilityLabel("Close projects") }
             Text("Group client work across repositories, plans and sessions").font(.system(size:12)).foregroundStyle(campMuted)
-            Picker("Location",selection:$shared) { Text("On this Mac").tag(false);Text("Shared Camp").tag(true) }.pickerStyle(.segmented).disabled(cloud.scope==nil)
+            CampSegmentedControl(options: [(false, "On this Mac"), (true, "Shared Camp")], selection: $shared).frame(width: 260).disabled(cloud.scope==nil)
                 .onChange(of:shared) { _,_ in reset() }
             HStack(alignment:.top,spacing:20) {
                 VStack(alignment:.leading,spacing:8) {

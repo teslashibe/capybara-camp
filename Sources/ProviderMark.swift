@@ -4,6 +4,7 @@ import AppKit
 struct ProviderMark: View {
     let provider: String
     var size: CGFloat = 18
+    static func wash(_ provider: String) -> Color { Color(hex: provider == "Claude" ? 0xFBEDE5 : provider == "Planning" ? 0xF1EAF8 : 0xEAF2EC) }
     var body: some View {
         Image(nsImage: Self.image(provider: provider, size: size))
             .resizable().scaledToFit().frame(width: size, height: size).accessibilityHidden(true)
@@ -59,5 +60,16 @@ struct ProviderMark: View {
     private static func color(_ hex: Int) -> NSColor {
         NSColor(red: CGFloat((hex >> 16) & 255) / 255, green: CGFloat((hex >> 8) & 255) / 255,
                 blue: CGFloat(hex & 255) / 255, alpha: 1)
+    }
+}
+
+struct ProviderBadge: View {
+    let provider: String
+    var body: some View {
+        HStack(spacing: 5) {
+            ProviderMark(provider: provider, size: 14)
+            Text(provider).font(.system(size: 10, weight: .medium))
+        }.padding(.horizontal, 6).padding(.vertical, 3)
+            .background(ProviderMark.wash(provider)).clipShape(RoundedRectangle(cornerRadius: 5))
     }
 }

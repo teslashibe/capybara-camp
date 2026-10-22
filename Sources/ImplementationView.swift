@@ -4,16 +4,28 @@ struct ImplementationSetupView: View {
     @ObservedObject var store: CampStore
     @ObservedObject var planning: LocalPlanning
     let id: String
+    var scrolls = true
     @State private var busy = false
     @State private var reviewedUnknown = false
     @State private var choices: [CampSession] = []
     var plan: LocalPlan? { planning.ticket(id) }
     var executor: LocalPlanner? { plan.flatMap { $0.executorChoices?[$0.selectedExecutor ?? ""] } }
     var body: some View {
-        ScrollView {
+        Group {
+            if scrolls { ScrollView { content } }
+            else { content }
+        }.task(id: id) {
+            choices = store.planningProfiles("Codex") + store.planningProfiles("Claude")
+            if executor == nil, let source = choices.first { planning.configureExecutor(id, source: source, model: store.effectiveModel(source), tuning: store.tuning(source)) }
+        }
+    }
+    private var content: some View {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Implementation").font(.headline)
-                Text("Choose who implements the approved plan").font(.system(size: 12)).foregroundStyle(campMuted)
+                HStack {
+                    Text("Implementation").font(.system(size: 13, weight: .medium))
+                    Spacer()
+                    Text("Choose who implements the approved plan").font(.system(size: 11)).foregroundStyle(campMuted)
+                }
                 if let plan, let executor {
                     Picker("Account", selection: Binding(get: { plan.selectedExecutor ?? "" }, set: { id in
                         if let source = choices.first(where: { $0.id == id }) { planning.configureExecutor(self.id, source: source, model: store.effectiveModel(source), tuning: store.tuning(source)) }
@@ -42,13 +54,10 @@ struct ImplementationSetupView: View {
                             Task { await store.approveAndImplement(id, expectedVersion: plan.current.number, executor: executor, reviewedUnknown: reviewedUnknown); busy = false }
                         }.buttonStyle(.borderedProminent).tint(campGreen)
                             .disabled(busy || plan.current.state != "ready" || plan.implementation?.active == true || (plan.implementation?.state == "needs_review" && !reviewedUnknown))
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                     }
                 } else { Text("Connect a local profile before choosing an executor").font(.system(size: 12)).foregroundStyle(campMuted) }
             }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
-        }.task(id: id) {
-            choices = store.planningProfiles("Codex") + store.planningProfiles("Claude")
-            if executor == nil, let source = choices.first { planning.configureExecutor(id, source: source, model: store.effectiveModel(source), tuning: store.tuning(source)) }
-        }
     }
 }
 
