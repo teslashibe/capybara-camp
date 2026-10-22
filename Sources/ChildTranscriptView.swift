@@ -25,7 +25,7 @@ struct ChildTranscriptView: View {
                 CampTranscriptViewport(padding: 25, followBottom: { proxy.scrollTo("child-bottom", anchor: .bottom) }) {
                     VStack(alignment: .leading, spacing: 22) {
                         if !error.isEmpty { Text(error).font(.system(size: 12)).foregroundStyle(Color.orange) }
-                        ForEach(messages) { MessageView(message: $0) }
+                        ForEach(messages) { MessageView(message: $0, provider: parent.provider) }
                         Color.clear.frame(height: 1).id("child-bottom")
                     }
                 }.onChange(of: messages) { _, _ in

@@ -77,7 +77,24 @@ struct ActivityResult: Codable {
     let errors: [String: String]
 }
 struct ChildrenResult: Codable { let children: [ChildSession] }
-struct Message: Codable, Identifiable, Equatable, Sendable { let id: String; let role: String; let text: String }
+struct Message: Codable, Identifiable, Equatable, Sendable {
+    let id: String
+    let role: String
+    let text: String
+    var model: String? = nil
+    var effort: String? = nil
+    var speed: String? = nil
+    // Context provenance covers exactly the text supplied to the model.
+    var contextMessage: Message { Message(id: id, role: role, text: text) }
+    var settingsDescription: String? {
+        guard role == "assistant" else { return nil }
+        var parts: [String] = []
+        if let model, !model.isEmpty, model.utf8.count <= 200, !model.contains(where: { $0.isNewline || $0.asciiValue == 0 }) { parts.append(model) }
+        if let effort, ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].contains(effort) { parts.append(ModelMenu.effortName(effort) + " effort") }
+        if let speed, ["standard", "fast", "ultrafast"].contains(speed) { parts.append(ModelMenu.speedName(speed)) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
 struct QueuedPrompt: Codable, Identifiable {
     let id: String
     let sessionID: String
@@ -923,7 +940,7 @@ final class TranscriptWatch {
             defer { if readGeneration == generation { loading = false; historyRequestID = nil } }
             if !more && messages.isEmpty {
                 let cached = await cloud.cachedTranscript(session: session)
-                if readGeneration == generation { messages = cached.map { Message(id: $0.id, role: $0.role, text: $0.text) } }
+                if readGeneration == generation { messages = cached.map(\.transcriptMessage) }
             }
             do {
                 let page = try await cloud.transcript(session: session, before: more ? (cloudHistoryBefore[id] ?? 0) : 0, revision: more ? (cloudHistoryRevision[id] ?? 0) : 0)
@@ -932,7 +949,7 @@ final class TranscriptWatch {
                 let unique = Dictionary(combined.map { ($0.id, $0) }, uniquingKeysWith: { a, b in a.revision > b.revision ? a : b })
                 let ordered = unique.values.filter { !$0.removed }.sorted { $0.ordinal < $1.ordinal }
                 cloudHistory[id] = ordered; cloudHistoryBefore[id] = page.before; cloudHistoryRevision[id] = page.revision
-                remoteHasMore = page.hasMore; messages = ordered.map { Message(id: $0.id, role: $0.role, text: $0.text) }
+                remoteHasMore = page.hasMore; messages = ordered.map(\.transcriptMessage)
                 historyTotal = messages.count + (page.hasMore ? 1 : 0)
             } catch { if readGeneration == generation && !silent { banner = error.localizedDescription } }
         }
@@ -1527,8 +1544,8 @@ struct ChatView: View {
                             VStack(alignment: .leading, spacing: 22) {
                                 if s.isCloud ? store.remoteHasMore : store.historyTotal > store.messages.count { Button("Load earlier messages") { store.loadHistory(more: true) }.font(.caption) }
                                 if store.loading { ProgressView().controlSize(.small) }
-                                ForEach(store.messages) { m in MessageView(message: m).id(m.id) }
-                                if store.runningID == s.id { MessageView(message: Message(id: "live", role: "assistant", text: store.liveText.isEmpty ? "Thinking…" : store.liveText)) }
+                                ForEach(store.messages) { m in MessageView(message: m, provider: s.provider).id(m.id) }
+                                if let run = store.conversation(s) { MessageView(message: run.streamedMessage, provider: s.provider) }
                                 Color.clear.frame(height: 1).id("bottom")
                             }
                         }
@@ -1765,12 +1782,19 @@ struct ModelSettingsMenu: View {
 struct MessageView: View {
     let message: Message
     var metadata: String? = nil
+    var provider: String? = nil
     var fontSize: CGFloat = 13
+    private var responseMetadata: String? {
+        guard message.role == "assistant" else { return nil }
+        if let metadata { return metadata }
+        let parts = [provider, message.settingsDescription].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Image(systemName: message.role == "user" ? "person.crop.circle" : "sparkle")
-                Text("\(Text(message.role == "user" ? "You" : "Assistant").fontWeight(.semibold))\(Text(metadata.map { " · " + $0 } ?? "").font(.system(size: 10)).foregroundColor(campMuted))")
+                Text("\(Text(message.role == "user" ? "You" : "Assistant").fontWeight(.semibold))\(Text(responseMetadata.map { " · " + $0 } ?? "").font(.system(size: 10)).foregroundColor(campMuted))")
             }.font(.system(size: 11)).foregroundStyle(message.role == "user" ? campMuted : campGreen)
             Text((try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text)).font(.system(size: fontSize)).lineSpacing(4).textSelection(.enabled)
                 .lineLimit(nil).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
@@ -1795,7 +1819,7 @@ struct SourcesView: View {
                 else { CampGitConnectionsView(cloud: store.cloud) }
             }.frame(maxHeight: .infinity)
             HStack { if location == "Local" { Button("Add profile folder") { store.addSource() } }; Spacer(); Button("Done") { store.sourceSheet = false }.keyboardShortcut(.defaultAction) }
-        }.padding(28).frame(width: 640, height: 640)
+        }.padding(28).frame(width: 640, height: 640).background(campCream).foregroundStyle(campInk).tint(campGreen)
     }
 }
 

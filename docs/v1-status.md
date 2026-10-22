@@ -71,8 +71,9 @@ recorded implementation and acceptance evidence, not just an updated spec.
    native demo with playback controls and reduced-motion support.
 
 The current UI audit pass has corrected the notification drawer and toast,
-verified local onboarding through project creation, and added native question
-and permission-choice fixtures. The [audit ledger](ui-audit.md) distinguishes
+verified local onboarding through project creation, added native question
+and permission-choice fixtures, and retained recorded response metadata in local
+and shared transcripts. The [audit ledger](ui-audit.md) distinguishes
 these checks from the remaining full design, cloud and release gates.
 
 ## Final design acceptance

@@ -8,7 +8,9 @@ import Foundation
         let source = CampSession(id: "local-source", sessionID: "native-source", provider: "Claude", sourceID: "fixture", sourceLabel: "Fixture", root: root.path, title: "Synthetic source", cwd: root.path, updated: 1, path: "", accountID: "", archived: false)
         let target = CampSession(id: "local-target", sessionID: "native-target", provider: "Codex", sourceID: "fixture", sourceLabel: "Fixture", root: root.path, title: "Synthetic target", cwd: root.path, updated: 2, path: "", accountID: "", archived: false)
         store.sessions = [source, target]
-        let messages = [Message(id: "not-selected", role: "user", text: "Private excluded text"), Message(id: "picked", role: "assistant", text: "Selected answer")]
+        let legacyMessage = try JSONDecoder().decode(Message.self, from: Data(#"{"id":"legacy","role":"assistant","text":"Old message"}"#.utf8))
+        precondition(legacyMessage.settingsDescription == nil)
+        let messages = [Message(id: "not-selected", role: "user", text: "Private excluded text"), Message(id: "picked", role: "assistant", text: "Selected answer", model: "actual-model", effort: "high", speed: "fast")]
         let preview = ContextPreview(messages: messages, total: 2)
         let reference = try store.makeReference(source, preview: preview, range: 1...1)
         precondition(reference.messages?.map(\.id) == ["picked"])
@@ -17,6 +19,10 @@ import Foundation
         let contexts = try await store.resolveContexts([reference], destination: target)
         precondition(contexts.count == 1 && contexts[0].messages.map(\.text) == ["Selected answer"])
         let contextJSON = try JSONEncoder().encode(contexts)
+        let wire = try JSONSerialization.jsonObject(with: contextJSON) as! [[String: Any]]
+        let contextMessages = wire[0]["messages"] as! [[String: Any]]
+        precondition(Set(contextMessages[0].keys) == ["id", "role", "text"], "Display metadata must not alter the approved model-context contract")
+        precondition(reference.messages?.first?.model == "actual-model", "Context inspection should retain the recorded display metadata")
         precondition(!String(data: contextJSON, encoding: .utf8)!.contains("Private excluded text"))
         precondition(contexts[0].id.hasPrefix("source-") && contexts[0].id != source.id)
         try store.mentions.clear([reference], for: target.id)

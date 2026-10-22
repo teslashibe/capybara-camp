@@ -17,6 +17,14 @@ struct SessionContext: Codable, Sendable {
     var title: String
     var revision: String
     var messages: [Message]
+    private enum CodingKeys: String, CodingKey { case id, title, revision, messages }
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(revision, forKey: .revision)
+        try container.encode(messages.map(\.contextMessage), forKey: .messages)
+    }
 }
 
 @MainActor final class SessionMentions: ObservableObject {
@@ -115,7 +123,7 @@ extension CampStore {
         }
         if let remote = cloudSessions[session.id] {
             let page = try await cloud.transcript(session: remote, before: 0, revision: 0)
-            return ContextPreview(messages: page.messages.filter { !$0.removed }.map { Message(id: $0.id, role: $0.role, text: $0.text) }, total: page.messages.count + (page.hasMore ? 1 : 0), cloud: CloudSourceRef(sessionId: remote.id, transcriptRevision: page.revision, permissionRevision: remote.permissionRevision), before: page.before)
+            return ContextPreview(messages: page.messages.filter { !$0.removed }.map(\.transcriptMessage), total: page.messages.count + (page.hasMore ? 1 : 0), cloud: CloudSourceRef(sessionId: remote.id, transcriptRevision: page.revision, permissionRevision: remote.permissionRevision), before: page.before)
         }
         guard (1...1000).contains(limit) else { throw CampCloudError.invalidResponse }
         let input = try CampWire.body(["session": object(session), "limit": limit])
@@ -126,7 +134,7 @@ extension CampStore {
         guard let source = preview.cloud, let remote = cloudSessions[candidate.id], source.permissionRevision == remote.permissionRevision,
               preview.before > 0 else { throw CampError.message("This source changed or has no earlier messages") }
         let page = try await cloud.transcript(session: remote, before: preview.before, revision: source.transcriptRevision)
-        let messages = page.messages.map { Message(id: $0.id, role: $0.role, text: $0.text) } + preview.messages
+        let messages = page.messages.map(\.transcriptMessage) + preview.messages
         guard messages.count <= 1000 else { throw CampError.message("Choose a range from these 1,000 messages before loading more") }
         return ContextPreview(messages: messages, total: messages.count + (page.hasMore ? 1 : 0), cloud: source, before: page.before)
     }
@@ -141,7 +149,7 @@ extension CampStore {
             source.messageIds = chosen.map(\.id)
             return SessionReference(id: candidate.id, scope: scope.key, cloud: source)
         }
-        return SessionReference(id: candidate.id, title: candidate.title, messages: chosen, digest: PublishMessage.hash(try CampWire.encoder().encode(chosen)))
+        return SessionReference(id: candidate.id, title: candidate.title, messages: chosen, digest: PublishMessage.hash(try CampWire.encoder().encode(chosen.map(\.contextMessage))))
     }
     func resolveContexts(_ references: [SessionReference], destination: CampSession) async throws -> [SessionContext] {
         guard references.count <= 20 else { throw CampError.message("Attach up to 20 sessions") }
@@ -154,10 +162,10 @@ extension CampStore {
                 guard reference.scope == cloud.scope?.key, let session = cloudSessions[reference.id],
                       session.permissionRevision == remote.permissionRevision else { throw CampError.message("A tagged session is no longer shared with this Camp") }
                 let page = try await cloud.context(session: session, source: remote)
-                messages = page.messages.map { Message(id: $0.id, role: $0.role, text: $0.text) }; revision = String(remote.transcriptRevision)
+                messages = page.messages.map(\.transcriptMessage); revision = String(remote.transcriptRevision)
             } else {
                 guard !destination.isCloud, let saved = reference.messages, let digest = reference.digest,
-                      PublishMessage.hash(try CampWire.encoder().encode(saved)) == digest else { throw CampError.message("Share this local source with the Camp before using it in a shared request") }
+                      PublishMessage.hash(try CampWire.encoder().encode(saved.map(\.contextMessage))) == digest else { throw CampError.message("Share this local source with the Camp before using it in a shared request") }
                 messages = saved; revision = digest
             }
             bytes += messages.reduce(0, { $0 + $1.text.utf8.count })
@@ -177,6 +185,7 @@ struct ContextInspectionView: View {
     let inspection: ContextInspection
     @Environment(\.dismiss) private var dismiss
     var body: some View {
+        let provider = store.sessions.first(where: { $0.id == inspection.sourceID && $0.provider != "Planning" })?.provider
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
@@ -187,7 +196,7 @@ struct ContextInspectionView: View {
                 Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }.buttonStyle(.plain).help("Close source snapshot")
             }
             ScrollViewReader { proxy in
-                ScrollView { VStack(alignment: .leading, spacing: 18) { ForEach(inspection.messages) { message in MessageView(message: message).id(message.id) } }.padding(12) }
+                ScrollView { VStack(alignment: .leading, spacing: 18) { ForEach(inspection.messages) { message in MessageView(message: message, provider: provider).id(message.id) } }.padding(12) }
                     .onAppear { proxy.scrollTo(inspection.selectedMessage, anchor: .top) }
             }
             if let original = store.sessions.first(where: { $0.id == inspection.sourceID }) {

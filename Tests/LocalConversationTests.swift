@@ -54,6 +54,18 @@ import Foundation
         try await until { Bridge.activeProcesses.isEmpty }
 
         var result: ConversationResult?
+        let metadata = LocalConversation(session: a, history: [], prompt: "metadata")
+        metadata.completed = { result = $0 }
+        try metadata.start(prompt: "metadata", model: "requested-model", tuning: ModelTuning(effort: "low", speed: "standard"), makeProcess: { fixtureProcess("message-settings") })
+        try await until { result != nil }
+        let responses = metadata.messages.filter { $0.role == "assistant" }
+        precondition(responses.count == 3)
+        precondition(responses[0].model == "actual-first" && responses[0].effort == "ultra" && responses[0].speed == "ultrafast")
+        precondition(responses[1].model == "actual-second" && responses[1].effort == "high" && responses[1].speed == "fast")
+        precondition(responses[2].settingsDescription == nil, "Unknown response settings must not inherit the request or the preceding message")
+        let restoredMessage = try JSONDecoder().decode(Message.self, from: JSONEncoder().encode(responses[0]))
+        precondition(restoredMessage == responses[0], "Saving implementation history must retain response metadata")
+        result = nil
         let cancel = LocalConversation(session: a, history: [], prompt: "cancel")
         cancel.completed = { result = $0 }
         try cancel.start(prompt: "cancel", model: "", tuning: ModelTuning(), makeProcess: {
@@ -61,7 +73,7 @@ import Foundation
         })
         try await until { cancel.ready }; cancel.stop()
         try await until { result != nil }
-        precondition(result?.state == "cancelled" && result?.accepted == true)
+        precondition(result?.state == "cancelled" && result?.accepted == true && result?.message == "Stopped")
         precondition(Bridge.activeProcesses.isEmpty)
 
         result = nil

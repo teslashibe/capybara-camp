@@ -252,7 +252,7 @@ import SwiftUI
                 let page = try CampWire.decoder().decode(CloudTranscript.self, from: await c.transport.perform(operation))
                 try check(c)
                 guard page.revision == source.transcriptRevision, Set(page.messages.map(\.id)) == Set(ids), page.messages.count == ids.count else { throw CampCloudError.invalidResponse }
-                let messages = page.messages.filter { !$0.removed }.map { Message(id: $0.id, role: $0.role, text: $0.text) }
+                let messages = page.messages.filter { !$0.removed }.map(\.transcriptMessage)
                 bytes += messages.reduce(0) { $0 + $1.text.utf8.count }
                 guard bytes <= 256 << 10 else { throw CampError.message("The selected source context exceeds 256 KB") }
                 result.append(SessionContext(id: "camp:" + source.sessionId, title: "Shared session", revision: String(source.transcriptRevision), messages: messages))
@@ -270,7 +270,7 @@ import SwiftUI
                 before = page.before
             }
             guard ended else { throw CampError.message("The tagged transcript exceeds the request page limit") }
-            let messages = pages.reversed().flatMap { $0 }.filter { !$0.removed }.map { Message(id: $0.id, role: $0.role, text: $0.text) }
+            let messages = pages.reversed().flatMap { $0 }.filter { !$0.removed }.map(\.transcriptMessage)
             bytes += messages.reduce(0) { $0 + $1.text.utf8.count }
             result.append(SessionContext(id: "camp:" + source.sessionId, title: "Shared session", revision: String(source.transcriptRevision), messages: messages))
         }

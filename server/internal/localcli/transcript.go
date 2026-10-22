@@ -54,6 +54,9 @@ func records(ctx context.Context, s Session, strict bool, visit func(Message) er
 				if str(item["type"]) == "agentMessage" {
 					m.Role = "assistant"
 					m.Text = str(item["text"])
+					m.Model = observedModel(item["model"])
+					m.Effort = observedEffort(item["effort"])
+					m.Speed = observedSpeed(item["service_tier"])
 				}
 				if m.Text != "" {
 					found = true
@@ -72,7 +75,9 @@ func records(ctx context.Context, s Session, strict bool, visit func(Message) er
 		if s.Path == "" {
 			return nil
 		}
+		var settings settingsReader
 		return readLines(ctx, s.Path, strict, func(n int, d map[string]any) error {
+			settings.consume("Codex", d)
 			p := object(d["payload"])
 			role := str(p["role"])
 			if str(d["type"]) != "response_item" || str(p["type"]) != "message" || (role != "user" && role != "assistant") {
@@ -86,7 +91,11 @@ func records(ctx context.Context, s Session, strict bool, visit func(Message) er
 			if id == "" {
 				id = strconv.Itoa(n)
 			}
-			return visit(Message{ID: id, Role: role, Text: text})
+			m := Message{ID: id, Role: role, Text: text}
+			if role == "assistant" {
+				m.Model, m.Effort, m.Speed = settings.current.Model, settings.current.Effort, settings.current.Speed
+			}
+			return visit(m)
 		})
 	}
 	if s.Path == "" {
@@ -112,7 +121,12 @@ func records(ctx context.Context, s Session, strict bool, visit func(Message) er
 		if id == "" {
 			id = strconv.Itoa(n)
 		}
-		return visit(Message{ID: id, Role: role, Text: text, Model: str(message["model"])})
+		m := Message{ID: id, Role: role, Text: text}
+		if role == "assistant" {
+			settings := claudeMessageSettings(d)
+			m.Model, m.Effort, m.Speed = settings.Model, settings.Effort, settings.Speed
+		}
+		return visit(m)
 	})
 }
 
@@ -184,7 +198,7 @@ func fingerprint(s Session) (string, error) {
 		values = append(values, []any{path, inode, info.Size(), info.ModTime().UnixNano()})
 	}
 	encoded, err := json.Marshal(values)
-	return hash(encoded), err
+	return hash(append([]byte("transcript-settings-v1\n"), encoded...)), err
 }
 
 type ExportMessage struct {
@@ -194,6 +208,8 @@ type ExportMessage struct {
 	Text    string `json:"text"`
 	Removed bool   `json:"removed"`
 	Model   string `json:"model,omitempty"`
+	Effort  string `json:"effort,omitempty"`
+	Speed   string `json:"speed,omitempty"`
 }
 type ExportPage struct {
 	Messages    []ExportMessage `json:"messages"`
@@ -326,7 +342,7 @@ func syncIndex(ctx context.Context, db *sql.DB, s Session, stamp string) error {
 		} else if err != nil {
 			return err
 		}
-		body, err := json.Marshal(ExportMessage{ID: m.ID, Ordinal: position, Role: m.Role, Text: m.Text, Model: m.Model})
+		body, err := json.Marshal(ExportMessage{ID: m.ID, Ordinal: position, Role: m.Role, Text: m.Text, Model: m.Model, Effort: m.Effort, Speed: m.Speed})
 		if err != nil {
 			return err
 		}

@@ -31,15 +31,16 @@ the release candidate after remaining capabilities are implemented.
 | UI-07 | Planning navigation and stage presentation differ from the reference | Added the shared planning navigation, provider child tiles and stage bar. Native passes 4–6 verified both chats, provider drill-down, combined result, history and implementation on the same ticket. Combined result, history and implementation retain both conversations above their content. Restart retained version 1 and created editable version 2; switching that revision to single planning removed the second provider. A two-message session snapshot was attached through the picker. Shared-result and running states still need validation |
 | UI-08 | Memory, skills and cloud execution controls are in the design but not fully implemented natively | Open. Integrate the real services, then audit these screens; a placeholder does not pass |
 | UI-09 | Quit did not take effect while Manage sources was open in earlier QA | Corrected using AppKit's per-window termination setting and the existing save/delegate path. Audit 9 verified Command-Q from Sources, Projects and Notifications, actual process exit, helper exit, and reopening the saved five-step plan. Remaining sheets and interrupted/in-flight operations still belong to the final keyboard audit |
-| UI-10 | Message metadata, composer/context placement and notification styling need detailed comparison | Planner metadata and long-transcript append passed earlier. The native interaction fixture verified reported High/Ultra Fast for Codex, High/Fast for Claude, queue/edit/requeue, steering, command approval and completion notifications. Main-chat historical metadata, dictation, question/permission variants and notification navigation remain |
+| UI-10 | Message metadata, composer/context placement and notification styling need detailed comparison | Planner metadata and long-transcript append passed earlier. The native interaction fixture verified reported High/Ultra Fast for Codex, High/Fast for Claude, queue/edit/requeue, steering, command approval and completion notifications. Recorded main-chat metadata and child metadata now pass the local fixture checks. Dictation, the remaining provider variants and final navigation checks remain |
 | UI-11 | Projects and new account onboarding need visual integration with the approved style | Native click-through verified automatic discovery of two synthetic profiles, optional Camp validation, Accounts/Git steps, pause and resume at step four, empty project-name validation, project creation, and the final summary. The new project appeared in the sidebar. Signed-in, loading and recovery states remain open |
-| UI-12 | Remaining native segmented controls still use the system-blue treatment | Projects, Sources, notifications and Board/Chat now share one neutral segmented component. Native pass 6 verified distinct Local profiles, Cloud accounts and GitHub accessible names and successful source-tab switching. Full keyboard navigation and other sheets remain open |
+| UI-12 | Remaining native segmented controls still use the system-blue treatment | Projects, Sources, notifications and Board/Chat now share one neutral segmented component. Native pass 6 verified distinct Local profiles, Cloud accounts and GitHub accessible names and successful source-tab switching. The later source-manager pass verified Right-arrow navigation from Local profiles through Cloud accounts to GitHub, and quitting from that sheet. Other sheets and the full keyboard inventory remain open |
 | UI-13 | Implementation's shorter planning panes allowed text to spill into the adjacent provider | Pass 5 verifies transcript wrapping inside both columns after constraining each scroll viewport's content width. Bottom-following is preserved; repeat at the minimum window size |
 | UI-14 | Completed planning stages were all reported as selected to accessibility | Native passes 6 and 9 verify button roles, correct selection/completion values and the unavailable description. The unfinished Implementation control is disabled and refuses activation |
 | UI-15 | Resizing a planning pane can leave the latest lines below its scroll position | Pass 7 verifies that both planner transcripts follow the bottom after narrowing the window. Model controls and response metadata wrap without overlapping, and the final line stays visible. The size-bound task cancels when the viewport disappears or resizes again |
 | UI-16 | Main chat watched only height changes; child chat did not follow a resize | Both now use the same width-constrained transcript viewport as planning. The live fixture's last marker stayed visible after resizing. Parent/child switching stayed isolated while the parent ran |
-| UI-17 | Toast placement and main-chat response metadata differ from the reference | The foreground toast now uses the compact dark bottom-center layout. Notification history uses the right-side drawer, unread rows, separate settings and count badge. The second native pass verified Escape returns focus to the bell, Tab and arrow-key filtering, result navigation and mark-all-read. Historical Assistant metadata remains open; do not fabricate model metadata for older messages that do not report it |
+| UI-17 | Toast placement and main-chat response metadata differ from the reference | The foreground toast now uses the compact dark bottom-center layout. Notification history uses the right-side drawer, unread rows, separate settings and count badge. The second native pass verified Escape returns focus to the bell, Tab and arrow-key filtering, result navigation and mark-all-read. Native history and live replies now preserve the recorded model, effort and speed. The synthetic Claude capture shows distinct settings for two replies and provider-only text for an unknown reply. Changing the next model did not relabel past messages; child transcripts also showed their own model. Missing provider metadata remains unset |
 | UI-18 | Provider questions were centered and the scroll area collapsed to a partial option list | Left alignment and question headers are corrected. The review caught that an ideal height still shrank under the main transcript, so the question viewport now reserves 180 points and scrolls longer content. Verified the final form at 1370×860 and after native zoom to 1728×1005 and back: both questions and all choices remained visible, and submitting a selected option plus text resolved the request. The 1060×720 minimum and larger question sets remain in the final audit |
+| UI-19 | An acknowledged Stop showed the unconfirmed-exit warning | Confirmed cancellation now says Stopped. The native fixture verified the banner and Active now returning to zero; the conversation regression still distinguishes uncertain exits |
 
 Local captures are in `build/ui-audit/`: `reference-chat.png`,
 `reference-board.png`, `reference-planning.png`, `native-chat-before.png`, and
@@ -173,3 +174,49 @@ The normal signed app also opened the saved notification history, with unread
 rows and the new drawer visible in `notification-normal-final.png`. The focused
 notification, onboarding and permission suites passed, as did the final
 conversation and execution-approval suites. Full UI acceptance is still open.
+
+## Message metadata review
+
+The Go transcript reader supplies per-message model, effort and speed when the
+provider records them. Codex rollout messages use the current turn context; a
+future settings event does not relabel the current answer. SQLite messages use
+only fields present on that item. Claude reads each message independently.
+Missing and invalid values stay empty rather than inheriting profile defaults.
+The export fingerprint changes once so previously indexed transcripts can be
+refreshed with the newly retained fields.
+
+The native message type preserves those optional values through local history,
+child transcripts, saved implementation history and shared transcript
+conversion. Live responses retain their settings at message boundaries. The
+existing message component renders the header. The selected next model remains
+independent from older replies.
+
+Context attachments still encode exactly `id`, `role` and `text` per message.
+Their digest covers those same fields. Display metadata remains available for
+inspection without changing the approved context bytes or accepting new fields
+in the Go context tool. Tests cover legacy message decoding, strict context
+shape, unknown settings, multiple response boundaries and shared export fields.
+
+The computer-use pass showed Opus/High/Fast, Sonnet/Low/Standard and an unknown
+reply together; switched the next model; opened a child with a different model;
+and inspected a live High/Fast response. Captures are
+`message-metadata-before.png`, `message-metadata-after.png`,
+`child-message-metadata.png` and `live-message-metadata.png` in `build/ui-audit/`.
+Real provider/version coverage and the final complete design audit remain open.
+
+The follow-up native check verified `Stopped` after provider acknowledgement,
+with no active fixture process left. Unconfirmed exits retain their warning.
+The source manager now uses the shared cream background and passed arrow-key
+navigation through Local profiles, Cloud accounts and GitHub, then Command-Q
+from the sheet. Captures: `acknowledged-stop.png` and
+`sources-shared-style.png`.
+
+Validation for this change passed the Go local CLI tests and the native
+conversation, context, sharing and state suites. The cancellation wording then
+passed the conversation suite again. The latest normal development build is
+`build/Capybara Camp Message Review.app`, using a separate bundle identity and
+synthetic profiles. This does not complete the full UI or release acceptance.
+
+The final normal signed build also displayed the three metadata cases together
+in `message-normal-final.png`. It uses synthetic state, leaves the existing app
+in place, and does not register the production source-link scheme.

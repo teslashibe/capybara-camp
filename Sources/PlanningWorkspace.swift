@@ -328,7 +328,7 @@ struct PlanningWorkspace: View {
                 }
                 ForEach((plan.implementations ?? []).reversed()) { execution in
                     DisclosureGroup("Implementation · \(execution.executor.session.provider) · \(execution.state)") {
-                        ForEach(execution.messages) { MessageView(message: $0) }
+                        ForEach(execution.messages) { MessageView(message: $0, provider: execution.executor.session.provider) }
                     }
                 }
             }.frame(maxWidth: .infinity, alignment: .leading).padding(22)

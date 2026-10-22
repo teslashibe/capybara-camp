@@ -46,6 +46,10 @@ struct ConversationResult: Sendable {
     private(set) var activity = ""
     private(set) var effectivePermissions = ""
     private(set) var reportedSettings = ReportedModelSettings()
+    var streamedMessage: Message {
+        Message(id: "live", role: "assistant", text: text.isEmpty ? "Thinking…" : text,
+                model: reportedSettings.model, effort: reportedSettings.effort, speed: reportedSettings.speed)
+    }
     var changed: (() -> Void)?
     var completed: ((ConversationResult) -> Void)?
     var didAccept: (() -> Void)?
@@ -229,7 +233,8 @@ struct ConversationResult: Sendable {
     }
     private func finishMessage() {
         flush()
-        if !text.isEmpty { messages.append(Message(id: UUID().uuidString, role: "assistant", text: text)) }
+        if !text.isEmpty { messages.append(Message(id: UUID().uuidString, role: "assistant", text: text,
+            model: reportedSettings.model, effort: reportedSettings.effort, speed: reportedSettings.speed)) }
         text = ""
     }
     private func finish(code: Int32, error: String) {
@@ -243,7 +248,11 @@ struct ConversationResult: Sendable {
         else if terminal == "cancelled" { state = "cancelled" }
         else if terminal == "failed" { state = "failed" }
         else { state = "uncertain" }
-        let message = notice.isEmpty && state != "completed" ? (error.isEmpty ? "The CLI stopped before confirming the result. Check the transcript before retrying." : error) : notice
+        let message: String
+        if !notice.isEmpty { message = notice }
+        else if state == "completed" { message = "" }
+        else if state == "cancelled" { message = "Stopped" }
+        else { message = error.isEmpty ? "The CLI stopped before confirming the result. Check the transcript before retrying." : error }
         completed?(ConversationResult(state: state, message: message, accepted: accepted,
             output: messages.filter { $0.role == "assistant" }.map(\.text).joined(separator: "\n\n"), usage: usage))
         changed = nil; completed = nil; didAccept = nil; sessionCreated = nil

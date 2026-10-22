@@ -202,6 +202,16 @@ func run(scenario string, args []string) error {
 				return emit(message{"type": "done"})
 			}
 		}
+	case "message-settings":
+		_ = emit(message{"type": "started"})
+		_ = emit(message{"type": "settings", "model": "actual-first", "effort": "ultra", "speed": "ultrafast"})
+		_ = emit(message{"type": "text", "text": "First response"})
+		_ = emit(message{"type": "boundary"})
+		_ = emit(message{"type": "settings", "model": "actual-second", "effort": "high", "speed": "fast"})
+		_ = emit(message{"type": "text", "text": "Second response"})
+		_ = emit(message{"type": "boundary"})
+		_ = emit(message{"type": "settings"})
+		_ = emit(message{"type": "text", "text": "Unreported settings"})
 	case "reported-settings":
 		_ = emit(message{"type": "settings", "model": "actual-model", "effort": "ultra", "speed": "ultrafast"})
 		_ = emit(message{"type": "started"})

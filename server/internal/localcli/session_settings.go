@@ -51,20 +51,25 @@ func emitSettings(emit func(map[string]any) error, s runtimeSettings) error {
 
 type settingsReader struct{ current, next runtimeSettings }
 
+func claudeMessageSettings(d map[string]any) runtimeSettings {
+	message := object(d["message"])
+	speed := observedSpeed(object(message["usage"])["speed"])
+	if speed == "" {
+		speed = observedSpeed(d["speed"])
+	}
+	return runtimeSettings{Model: observedModel(message["model"]), Effort: observedEffort(d["effort"]), Speed: speed}
+}
+
 func (r *settingsReader) consume(provider string, d map[string]any) {
 	if provider == "Claude" {
 		if str(d["type"]) != "assistant" || boolean(d["isSidechain"]) || (d["parent_tool_use_id"] != nil && d["parent_tool_use_id"] != "") {
 			return
 		}
-		model := observedModel(object(d["message"])["model"])
-		if model == "" {
+		settings := claudeMessageSettings(d)
+		if settings.Model == "" {
 			return
 		}
-		speed := observedSpeed(object(object(d["message"])["usage"])["speed"])
-		if speed == "" {
-			speed = observedSpeed(d["speed"])
-		}
-		r.current = runtimeSettings{Model: model, Effort: observedEffort(d["effort"]), Speed: speed}
+		r.current = settings
 		return
 	}
 	p := object(d["payload"])

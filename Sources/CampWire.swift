@@ -67,6 +67,7 @@ struct CloudSessionPage: Codable, Sendable { var sessions: [CloudSession]; var n
 struct CloudMessage: Codable, Identifiable, Equatable, Sendable {
     var id: String; var ordinal: Int64; var role: String; var text: String; var removed: Bool
     var model: String?; var effort: String?; var speed: String?; var revision: Int64
+    var transcriptMessage: Message { Message(id: id, role: role, text: text, model: model, effort: effort, speed: speed) }
 }
 struct CloudTranscript: Codable, Sendable { var revision: Int64; var messages: [CloudMessage]; var before: Int64; var hasMore: Bool }
 struct CloudSourceRef: Codable, Equatable, Sendable {

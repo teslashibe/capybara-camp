@@ -51,10 +51,12 @@ type Session struct {
 }
 
 type Message struct {
-	ID    string `json:"id"`
-	Role  string `json:"role"`
-	Text  string `json:"text"`
-	Model string `json:"model,omitempty"`
+	ID     string `json:"id"`
+	Role   string `json:"role"`
+	Text   string `json:"text"`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+	Speed  string `json:"speed,omitempty"`
 }
 
 type request struct {
