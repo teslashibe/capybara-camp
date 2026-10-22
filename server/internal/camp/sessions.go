@@ -361,7 +361,9 @@ func (s *Store) WriteTranscript(ctx context.Context, a auth.Actor, campID, id, r
 	if err != nil {
 		return 0, err
 	}
-	if session.OwnerUserID != a.UserID || session.OwnerDeviceID != a.DeviceID {
+	// A human owner can finish a read-only copy after reconnecting on another
+	// device. Live transcript publication retains its device ownership check.
+	if session.OwnerUserID != a.UserID || (session.OwnerDeviceID != a.DeviceID && !session.HistoryOnly) {
 		return 0, ErrDenied
 	}
 	if session.ExecutionLocation != "local" {

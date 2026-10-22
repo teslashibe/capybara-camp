@@ -47,6 +47,7 @@ struct LocalShare: Codable, Identifiable, Sendable {
     var syncToCloud: Bool?
     var childHistories: [CloudChildHistory]?
     var publishedHistory:LocalHistoryBinding?
+    var historySnapshot: HistorySourceSnapshot?
     var state: String = "Waiting to sync"
 }
 protocol CampPublishingTransport: Sendable {

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/teslashibe/capybara-camp/server/internal/auth"
 )
 
 func TestHistorySourcesRetainContextWithoutBecomingExecutors(t *testing.T) {
@@ -145,6 +146,54 @@ func TestHistorySourcesRetainContextWithoutBecomingExecutors(t *testing.T) {
 	ordinaryJSON, _ := json.Marshal(liveInput)
 	if strings.Contains(string(ordinaryJSON), "history_only") {
 		t.Fatal("Ordinary publication changed its idempotency payload")
+	}
+}
+
+func TestOwnerCanFinishHistoryCopyFromAnotherDevice(t *testing.T) {
+	s, pool, actors, c, project, profile := sessionFixture(t)
+	owner := actors[0]
+	other := auth.Actor{UserID: owner.UserID, DeviceID: uuid.NewString(), Email: owner.Email, Name: owner.Name}
+	if _, err := pool.Exec(t.Context(), `INSERT INTO devices(id,user_id,name,token_hash,expires_at) VALUES($1,$2,'Recovery Mac',$3,now()+interval '1 day')`, other.DeviceID, other.UserID, auth.HashToken(other.DeviceID)); err != nil {
+		t.Fatal(err)
+	}
+	input := sessionInput(project, profile)
+	input.HistoryOnly, input.AllowRequests = true, false
+	history, err := s.PublishSession(t.Context(), owner, c.ID, uuid.NewString(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := TranscriptInput{Messages: []MessageInput{{ID: "first", Ordinal: 0, Role: "user", Text: "First captured prompt"}}}
+	revision, err := s.WriteTranscript(t.Context(), owner, c.ID, history.ID, uuid.NewString(), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := TranscriptInput{ExpectedRevision: revision, Messages: []MessageInput{{ID: "second", Ordinal: 1, Role: "assistant", Text: "Captured answer"}}}
+	if _, err = s.WriteTranscript(t.Context(), actors[1], c.ID, history.ID, uuid.NewString(), second); !errors.Is(err, ErrDenied) {
+		t.Fatal("A teammate wrote the owner's history", err)
+	}
+	key := uuid.NewString()
+	completed, err := s.WriteTranscript(t.Context(), other, c.ID, history.ID, key, second)
+	if err != nil || completed != revision+1 {
+		t.Fatal("Owner could not finish the saved copy", completed, err)
+	}
+	if repeated, err := s.WriteTranscript(t.Context(), other, c.ID, history.ID, key, second); err != nil || repeated != completed {
+		t.Fatal("History recovery repeated a page", repeated, err)
+	}
+	pinned, err := s.Transcript(t.Context(), owner, c.ID, history.ID, revision, 0, 200)
+	if err != nil || len(pinned.Messages) != 1 || pinned.Messages[0].Text != first.Messages[0].Text {
+		t.Fatal("Recovery changed a pinned earlier revision", err)
+	}
+	current, err := s.Session(t.Context(), other, c.ID, history.ID)
+	if err != nil || current.OwnerDeviceID != owner.DeviceID || !current.HistoryOnly || current.ExecutionEpoch != 1 || current.AllowRequests {
+		t.Fatal("Copying history transferred execution ownership", current, err)
+	}
+	input.ID, input.LocalSessionID, input.HistoryOnly = uuid.NewString(), uuid.NewString(), false
+	live, err := s.PublishSession(t.Context(), owner, c.ID, uuid.NewString(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.WriteTranscript(t.Context(), other, c.ID, live.ID, uuid.NewString(), first); !errors.Is(err, ErrDenied) {
+		t.Fatal("History recovery widened live-session writing", err)
 	}
 }
 

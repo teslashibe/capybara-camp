@@ -24,10 +24,20 @@ actor PublishingFixture: CampPublishingTransport {
     func moveToCloud() { remote?.executionLocation = "cloud"; remote?.state = "running"; remote?.model = "cloud-actual"; remote?.stage = "In progress"; remote?.title = "Cloud title" }
     func releaseSession() { releaseGate?.resume(); releaseGate = nil; holdSession = false }
     func loseChildResponse() {lostChildResponse=true;lostResponse=false}
+    func corruptHistory() { if let key = messages.keys.sorted().first { messages[key]?.text = "Unexpected saved content" } }
     func childSnapshot()->([CloudChildHistory],[String:PublishMessage],Int){(Array(childHistories.values),childMessages,childWrites)}
     func perform(_ operation: CampPublication) async throws -> Data {
         if operation.method == "GET" {
             guard let remote else { throw CampCloudError.server(404, "not_found") }
+            if operation.path.contains("/transcript?") {
+                let parts = URLComponents(string: "https://fixture.example" + operation.path)!
+                let before = Int64(parts.queryItems?.first { $0.name == "before" }?.value ?? "0") ?? 0
+                let all = messages.values.filter { before == 0 || $0.ordinal < before }.sorted { $0.ordinal < $1.ordinal }
+                let page = Array(all.suffix(200)).map { CloudMessage(id: $0.id, ordinal: $0.ordinal, role: $0.role, text: $0.text, removed: $0.removed,
+                    model: $0.model, effort: $0.effort, speed: $0.speed, revision: remote.transcriptRevision) }
+                return try CampWire.encoder().encode(CloudTranscript(revision: remote.transcriptRevision, messages: page,
+                    before: all.count > 200 ? page.first!.ordinal : 0, hasMore: all.count > 200))
+            }
             if operation.path.hasSuffix("/children/publication") {
                 return try CampWire.encoder().encode(CloudChildHistoryList(parentRevision:remote.transcriptRevision,permissionRevision:remote.permissionRevision,children:Array(childHistories.values)))
             }
@@ -49,7 +59,7 @@ actor PublishingFixture: CampPublishingTransport {
         case "session":
             let expected = (object["expected_revision"] as! NSNumber).int64Value
             guard expected == remote?.revision ?? 0 else { throw CampCloudError.server(409, "revision_conflict") }
-            let value = CloudSession(id: object["id"] as! String, campId: scope.campId, projectId: object["project_id"] as! String, profileId: object["profile_id"] as! String, provider: profile!.provider, profileLabel: profile!.label, ownerUserId: actor.userId, ownerDeviceId: actor.deviceId, localSessionId: object["local_session_id"] as! String, title: (object["title"] as! String).trimmingCharacters(in: .whitespacesAndNewlines), model: object["model"] as! String, state: object["state"] as! String, stage: object["stage"] as! String, shared: object["shared"] as! Bool, allowRequests: object["allow_requests"] as! Bool, externalOwner: object["external_owner"] as! Bool, revision: expected + 1, transcriptRevision: remote?.transcriptRevision ?? 0, permissionRevision: 1, updatedAt: Date(), executionLocation: remote?.executionLocation)
+            let value = CloudSession(id: object["id"] as! String, campId: scope.campId, projectId: object["project_id"] as! String, profileId: object["profile_id"] as! String, provider: profile!.provider, profileLabel: profile!.label, ownerUserId: actor.userId, ownerDeviceId: actor.deviceId, localSessionId: object["local_session_id"] as! String, title: (object["title"] as! String).trimmingCharacters(in: .whitespacesAndNewlines), model: object["model"] as! String, state: object["state"] as! String, stage: object["stage"] as! String, shared: object["shared"] as! Bool, allowRequests: object["allow_requests"] as! Bool, externalOwner: object["external_owner"] as! Bool, revision: expected + 1, transcriptRevision: remote?.transcriptRevision ?? 0, permissionRevision: 1, updatedAt: Date(), executionLocation: object["history_only"] as? Bool == true ? "local" : remote?.executionLocation, executionEpoch: object["history_only"] as? Bool == true ? 1 : nil, historyOnly: object["history_only"] as? Bool)
             remote = value; result = try CampWire.encoder().encode(value)
         case "transcript":
             let expected = (object["expected_revision"] as! NSNumber).int64Value
@@ -239,6 +249,82 @@ actor ChangingHistoryFixture {
         } catch {}
         let purged = try await cache.shares(scope)
         precondition(purged.isEmpty)
+        let historyMessages = (0..<230).map { Message(id: "saved-\($0)", role: "assistant", text: $0 == 17 ? String(repeating: "界", count: 100_000) : "Saved message \($0)", model: "historical-model", effort: "ultra", speed: "fast") }
+        let history = HistorySourceSnapshot(messages: historyMessages)
+        precondition(history.valid)
+        precondition(!HistorySourceSnapshot(messages: [historyMessages[0], historyMessages[0]]).valid)
+        do { _ = try history.page(after: -2); preconditionFailure("Negative history cursor was accepted") } catch {}
+        var pageAfter: Int64 = -1, all: [PublishMessage] = []
+        repeat {
+            let page = try history.page(after: pageAfter)
+            precondition(page.messages.count <= 200 && page.messages.reduce(0, { $0 + $1.text.utf8.count }) <= 1 << 20)
+            all += page.messages; pageAfter = page.after
+            if !page.hasMore { break }
+        } while true
+        precondition(all.count == 230 && all[17].text == historyMessages[17].text)
+        let historyID = HistorySourceSnapshot.localID(key: "implementation-fixture", messages: historyMessages)
+        precondition(historyID == HistorySourceSnapshot.localID(key: "implementation-fixture", messages: historyMessages))
+        precondition(HistorySourceSnapshot.limited("界界界", bytes: 7) == "界界")
+        let historyLocal = CampSession(id: historyID, sessionID: historyID, provider: "Claude", sourceID: native.sourceID,
+            sourceLabel: native.sourceLabel, root: native.root, title: "Saved implementation", cwd: native.cwd, updated: 1,
+            path: "", accountID: "", archived: true, model: "historical-model")
+        let historyCache = try CampCache(directory: root.appendingPathComponent("frozen-history"))
+        let historyServer = PublishingFixture(scope: scope, actor: actor)
+        func frozenPublisher() -> CampSharing {
+            let publisher = CampSharing(cache: historyCache, export: { _, _ in preconditionFailure("Frozen history reread a live CLI session") })
+            publisher.localSession = { _ in nil }
+            publisher.childCatalog = { _ in preconditionFailure("Frozen history probed live subagents") }
+            publisher.attach(scope: scope, actor: actor, transport: historyServer)
+            return publisher
+        }
+        let frozen = frozenPublisher()
+        await eventually("Frozen publisher did not restore") { frozen.ready }
+        try await frozen.configureHistory(local: historyLocal, snapshot: history, projectId: project)
+        await eventually("Frozen history did not publish") { frozen.shares.first?.state == "Saved to Camp" }
+        let historyUploaded = await historyServer.snapshot()
+        precondition(historyUploaded.0?.isHistoryOnly == true && historyUploaded.0?.shared == false && historyUploaded.0?.allowRequests == false)
+        precondition(historyUploaded.3.count == 230 && historyUploaded.1 == 2, "Lost response duplicated a history page")
+        precondition(frozen.shares.first?.publishedHistory?.mainRevision == history.revision)
+        var altered = history; altered.messages[0] = Message(id: "saved-0", role: "assistant", text: "Changed")
+        do { try await frozen.configureHistory(local: historyLocal, snapshot: altered, projectId: project); preconditionFailure("Replaced a saved snapshot identity") } catch {}
+        do { try await frozen.configure(local: historyLocal, projectId: project, shared: true, allowRequests: true); preconditionFailure("History became executable") } catch {}
+        frozen.attach(scope: nil, actor: nil, transport: nil)
+        try await historyCache.clear(scope)
+        let recovered = frozenPublisher()
+        await eventually("Recovered publisher did not restore") { recovered.ready }
+        try await recovered.configureHistory(local: historyLocal, snapshot: history, projectId: project)
+        await eventually("Recovered history did not reconcile") { recovered.shares.first?.state == "Saved to Camp" }
+        let recoveredUpload = await historyServer.snapshot()
+        precondition(recoveredUpload.0?.id == historyUploaded.0?.id && recoveredUpload.1 == historyUploaded.1 && recoveredUpload.0?.transcriptRevision == historyUploaded.0?.transcriptRevision, "Cache recovery republished a complete snapshot")
+        recovered.attach(scope: nil, actor: nil, transport: nil)
+        await historyServer.corruptHistory()
+        let corrupted = frozenPublisher()
+        await eventually("Corrupt-history publisher did not restore") { corrupted.ready }
+        await eventually("Unexpected remote content was not rejected") { corrupted.shares.first?.state == "Needs review" }
+        let corruptResult = await historyServer.snapshot()
+        precondition(corruptResult.1 == recoveredUpload.1, "Conflicting remote history was overwritten")
+        corrupted.attach(scope: nil, actor: nil, transport: nil)
+        let partialCache = try CampCache(directory: root.appendingPathComponent("partial-history"))
+        let partialServer = PublishingFixture(scope: scope, actor: actor)
+        let partial = CampSharing(cache: partialCache, export: { _, _ in preconditionFailure("Historical upload launched a CLI") })
+        partial.attach(scope: scope, actor: actor, transport: partialServer)
+        await eventually("Partial publisher did not restore") { partial.ready }
+        try await partial.configureHistory(local: historyLocal, snapshot: history, projectId: project)
+        await eventually("The interrupted history page did not reach the server") {
+            let state = await partialServer.snapshot()
+            return state.1 == 1 && partial.shares.first?.state == "Waiting to sync"
+        }
+        partial.attach(scope: nil, actor: nil, transport: nil)
+        try await partialCache.clear(scope)
+        var otherDevice = actor; otherDevice.deviceId = UUID().uuidString
+        let continued = CampSharing(cache: partialCache, export: { _, _ in preconditionFailure("History recovery launched a CLI") })
+        continued.attach(scope: scope, actor: otherDevice, transport: partialServer)
+        await eventually("Recovery publisher did not restore") { continued.ready }
+        try await continued.configureHistory(local: historyLocal, snapshot: history, projectId: project)
+        await eventually("Another device could not finish the owner's history copy") { continued.shares.first?.state == "Saved to Camp" }
+        let resumedHistory = await partialServer.snapshot()
+        precondition(resumedHistory.1 == 2 && resumedHistory.3.count == 230 && resumedHistory.0?.ownerDeviceId == actor.deviceId, "History recovery duplicated data or changed execution ownership")
+        continued.attach(scope: nil, actor: nil, transport: nil)
         print("Native sharing, parent/child pagination, lost-response recovery, tombstones, privacy and hash isolation passed")
     }
 }

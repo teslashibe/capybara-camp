@@ -142,6 +142,29 @@ actor PlanImportFixture: CampPublishingTransport {
         precondition(json.contains("minimal") && json.contains("ultrafast") && json.contains("prior-model"))
         let restored = try CampWire.decoder().decode(PreparedLocalPlanImport.self, from: CampWire.encoder().encode(prepared))
         precondition(restored == prepared)
+        let originalSources = sources
+        for planner in [a, b] {
+            let localID = LocalPlanImport.plannerHistoryID(planner.session)
+            let local = LocalPlanImport.historySession(planner.session, id: localID, title: planner.session.title, model: planner.model)
+            let empty = HistorySourceSnapshot(messages: [])
+            var remote = originalSources[planner.session.id]!.remote!
+            remote.id = HistorySourceSnapshot.cloudID(localID: localID, scope: scope)
+            remote.localSessionId = localID; remote.transcriptRevision = 0; remote.historyOnly = true
+            sources[planner.session.id] = LocalShare(id: remote.id, local: local, projectId: project, shared: false, allowRequests: false,
+                remote: remote, publishedHistory: .init(parentId: PublishMessage.hash(Data(localID.utf8)), mainRevision: empty.revision, children: [], transcriptRevision: 0), historySnapshot: empty)
+            visible[remote.id] = remote
+        }
+        var savedTranscript = transcript
+        let savedID = LocalPlanImport.implementationHistoryID(execution)
+        savedTranscript.session.id = HistorySourceSnapshot.cloudID(localID: savedID, scope: scope)
+        savedTranscript.session.localSessionId = savedID; savedTranscript.session.historyOnly = true
+        visible[savedTranscript.session.id] = savedTranscript.session
+        let fromCopies = try prepare(transcripts: [executionID: savedTranscript])
+        precondition(fromCopies.input.versions[0].planners[0].sessionId == sources[codex.id]!.id)
+        precondition(fromCopies.input.implementations[0].sessionId == savedTranscript.session.id)
+        sources[codex.id]?.publishedHistory = nil
+        rejects { _ = try prepare(transcripts: [executionID: savedTranscript]) }
+        sources = originalSources
         var many = plan; many.implementations = []
         many.versions = (1...100).map { number in var version = first; version.number = number; return version }
         let fullHistory = try prepare(many); precondition(fullHistory.input.versions.count == 100)

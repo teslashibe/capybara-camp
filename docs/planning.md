@@ -224,9 +224,10 @@ route. Other requests retain the 2 MiB limit. The final response must match the
 reviewed owner, Camp, project, version and saved planning snapshot before the
 controller installs it.
 
-These components are tested independently of the UI. Automatic publication of
-the required source snapshots and the native review screen remain unfinished;
-the current app does not yet expose a complete local-plan import action.
+These components are tested independently of the UI. The saved-history
+publisher is implemented; the coordinator and native review screen remain
+unfinished. The current app does not yet expose a complete local-plan import
+action.
 
 ### Read-only history sources
 
@@ -251,8 +252,25 @@ executor selectors. The saved implementations remain inside their parent plan.
 
 Schema 29 adds the marker and database constraints. Existing sessions default
 to normal behavior. Downgrading requires there to be no history-only records;
-the migration refuses to remove their execution protection. This storage and
-read contract is ready for the native publisher, which is still being connected.
+the migration refuses to remove their execution protection.
+
+`CampSharing.configureHistory` publishes a frozen `HistorySourceSnapshot`,
+using the same durable profile, session and transcript operations as ordinary
+sharing. It does not read the provider's live files or launch a CLI. Snapshot
+identities and cloud IDs are deterministic per person and Camp. The publisher checks
+the existing server transcript before uploading and verifies the complete
+copy before reporting it saved. A changed or non-prefix server history needs
+review; it is never overwritten as part of recovery.
+
+Publication allows at most 2,000 messages and 8 MiB of text per snapshot, with
+the transcript API's 1 MiB text and 2 MiB encoded limits per page. One message
+must fit a page. Stored snapshot publication is limited to 32 MiB of text in
+the local Camp cache. The snapshot and pending request survive restart, and
+clearing that cache removes them. A completed copy can be recovered by its
+stable identity without writing the transcript again. The same human owner
+can finish an incomplete history copy from another authenticated Mac; live
+transcript writes keep their existing device binding and execution ownership
+does not change.
 
 The native reader retains import metadata in its scoped cache and shows the
 original saved state, step errors and unconfirmed outcomes. Quoted sources open

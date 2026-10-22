@@ -7,6 +7,7 @@ struct LocalShareStatus {
 
 @MainActor final class CampSharing: ObservableObject {
     @Published private(set) var shares: [LocalShare] = []
+    @Published private(set) var ready = false
     var localSession: ((String) -> CampSession?)?
     var localStatus: ((CampSession) -> LocalShareStatus)?
     var localChildren: ((CampSession) -> [ChildSession])?
@@ -37,13 +38,13 @@ struct LocalShareStatus {
         self.transport = transport
         guard self.scope != scope || self.actor?.deviceId != actor?.deviceId else { return }
         task?.cancel(); task = nil; watch.stop(); generation = UUID()
-        self.scope = scope; self.actor = actor; shares = []; changed?()
+        self.scope = scope; self.actor = actor; shares = []; ready = false; changed?()
         guard let scope, let cache else { return }
         let token = generation
         task = Task { [weak self] in
             guard let epoch = try? await cache.epoch(scope), let values = try? await cache.shares(scope), self?.generation == token else { return }
             self?.cacheEpoch = epoch
-            self?.shares = values; self?.changed?(); self?.task = nil
+            self?.shares = values; self?.ready = true; self?.changed?(); self?.task = nil
             self?.observe(); self?.wake()
         }
     }
@@ -54,6 +55,7 @@ struct LocalShareStatus {
     }
     func configure(local: CampSession, projectId: String, shared: Bool, allowRequests: Bool, adopt: Bool = false, syncToCloud: Bool? = nil) async throws {
         guard let scope, let actor, let cache, transport != nil, UUID(uuidString: projectId) != nil, !local.isCloud else { throw CampCloudError.cacheUnavailable }
+        guard binding(for: local)?.historySnapshot == nil else { throw CampError.message("Saved history cannot be configured as a live session") }
         task?.cancel(); task = nil; generation = UUID()
         let token = generation
         var value = binding(for: local) ?? LocalShare(id: UUID().uuidString.lowercased(), local: local, projectId: projectId, shared: shared, allowRequests: allowRequests)
@@ -72,6 +74,22 @@ struct LocalShareStatus {
         try check(token)
         set(value); observe(); wake()
     }
+    func configureHistory(local: CampSession, snapshot: HistorySourceSnapshot, projectId: String) async throws {
+        guard ready, let scope, let actor, let cache, transport != nil, UUID(uuidString: projectId) != nil,
+              snapshot.valid, local.id == local.sessionID, local.id.range(of: "^history:[a-f0-9]{64}$", options: .regularExpression) != nil,
+              ["Codex", "Claude"].contains(local.provider), !local.sourceID.isEmpty else { throw CampCloudError.invalidResponse }
+        let existing = binding(for: local)
+        guard existing == nil || existing?.historySnapshot == snapshot else { throw CampError.message("A saved history identity cannot be replaced") }
+        let total = shares.filter { $0.local.id != local.id }.reduce(0) { $0 + ($1.historySnapshot?.bytes ?? 0) } + snapshot.bytes
+        guard total <= 32 << 20 else { throw CampError.message("Saved history publication exceeds the 32 MB local cache limit") }
+        task?.cancel(); task = nil; generation = UUID(); let token = generation
+        var value = existing ?? LocalShare(id: HistorySourceSnapshot.cloudID(localID: local.id, scope: scope), local: local,
+            projectId: projectId, shared: false, allowRequests: false)
+        value.historySnapshot = snapshot; value.syncToCloud = true; value.allowRequests = false; value.deviceId = actor.deviceId
+        value.state = "Waiting to sync"
+        try await cache.saveShare(value, scope: scope, expectedEpoch: cacheEpoch)
+        try check(token); set(value); wake()
+    }
     func localChanged() { if !shares.isEmpty { wake() } }
     func retry() { retryDelay = 1; wake() }
     private func set(_ value: LocalShare) {
@@ -80,7 +98,7 @@ struct LocalShareStatus {
     }
     private func observe() {
         var paths = Set<String>()
-        for value in shares where value.shared || value.syncToCloud == true {
+        for value in shares where value.historySnapshot == nil && (value.shared || value.syncToCloud == true) {
             let local = localSession?(value.local.id) ?? value.local
             if !local.path.isEmpty {
                 paths.insert(local.path); paths.insert(URL(fileURLWithPath: local.path).deletingLastPathComponent().path)
@@ -155,12 +173,17 @@ struct LocalShareStatus {
             if command.kind == "session" { updated.needsWithdrawalFence = true }
             try await commit(updated, generation: token)
         }
+        guard try await cache?.epoch(scope) == cacheEpoch else { throw CancellationError() }
+        try check(token)
         let data = try await transport.perform(command)
         try check(token)
         switch command.kind {
         case "profile": updated.profile = try CampWire.decoder().decode(CloudProfile.self, from: data)
         case "session", "ownership":
             updated.remote = try CampWire.decoder().decode(CloudSession.self, from: data)
+            if value.historySnapshot != nil {
+                guard let remote = updated.remote, validHistoryRemote(remote, for: value) else { throw CampCloudError.invalidResponse }
+            }
             if command.kind == "session" { updated.projectChangeRequested = false }
             if command.kind == "ownership" { updated.adoptRequested = false }
         case "transcript":
@@ -182,8 +205,102 @@ struct LocalShareStatus {
         }
         return updated
     }
+    private func historyMessages(_ value: LocalShare, generation token: UUID) async throws -> [CloudMessage] {
+        guard let scope, let transport, let remote = value.remote else { throw CampCloudError.invalidResponse }
+        if remote.transcriptRevision == 0 { return [] }
+        var result: [CloudMessage] = [], before: Int64 = 0, bytes = 0
+        for _ in 0..<2001 {
+            let path = "/v1/camps/\(scope.campId)/sessions/\(value.id)/transcript?limit=200&before=\(before)&revision=\(remote.transcriptRevision)"
+            let page = try CampWire.decoder().decode(CloudTranscript.self, from: await transport.perform(CampPublication(kind: "read", method: "GET", path: path, body: Data())))
+            try check(token)
+            bytes += page.messages.reduce(0) { $0 + $1.text.utf8.count }
+            guard page.revision == remote.transcriptRevision, page.messages.count <= 200, result.count + page.messages.count <= 2000,
+                  bytes <= 8 << 20, !page.hasMore || !page.messages.isEmpty && page.before > 0 && (before == 0 || page.before < before),
+                  page.messages.allSatisfy({ $0.revision > 0 && $0.revision <= page.revision && (before == 0 || $0.ordinal < before) }) else { throw CampCloudError.invalidResponse }
+            result = page.messages + result
+            if !page.hasMore {
+                guard Set(result.map(\.id)).count == result.count else { throw CampCloudError.invalidResponse }
+                return result
+            }
+            before = page.before
+        }
+        throw CampCloudError.responseTooLarge
+    }
+    private func readHistorySession(_ value: LocalShare, generation token: UUID) async throws -> CloudSession {
+        guard let scope, let transport else { throw CampCloudError.cacheUnavailable }
+        let operation = CampPublication(kind: "read", method: "GET", path: "/v1/camps/\(scope.campId)/sessions/\(value.id)", body: Data())
+        let remote = try CampWire.decoder().decode(CloudSession.self, from: await transport.perform(operation))
+        try check(token)
+        guard validHistoryRemote(remote, for: value) else { throw CampCloudError.invalidResponse }
+        return remote
+    }
+    private func validHistoryRemote(_ remote: CloudSession, for value: LocalShare) -> Bool {
+        guard let scope, let actor else { return false }
+        return remote.id == value.id && remote.campId == scope.campId && remote.ownerUserId == actor.userId &&
+            remote.localSessionId == value.local.sessionID && remote.provider == value.local.provider &&
+            remote.isHistoryOnly && !remote.allowRequests && !remote.externalOwner && remote.executionLocation == "local" && remote.executionEpoch == 1 &&
+            UUID(uuidString: remote.profileId) != nil && UUID(uuidString: remote.ownerDeviceId) != nil && remote.permissionRevision > 0 &&
+            remote.revision > 0 && remote.transcriptRevision >= 0 && !["running", "waiting"].contains(remote.state) && remote.stage != "In progress"
+    }
+    private func synchronizeHistory(_ original: LocalShare, generation token: UUID) async throws {
+        guard let snapshot = original.historySnapshot, snapshot.valid, let scope, let actor, let cache else { throw CampCloudError.invalidResponse }
+        var value = original
+        if value.pending != nil { value = try await perform(value, generation: token) }
+        do { value.remote = try await readHistorySession(value, generation: token) }
+        catch CampCloudError.server(404, _) where value.remote == nil {}
+        if value.remote == nil {
+            if value.profile == nil {
+                let label = value.local.sourceLabel.isEmpty ? value.local.provider : value.local.sourceLabel
+                value.pending = CampPublication(kind: "profile", method: "POST", path: "/v1/profiles", body: try CampWire.body([
+                    "local_id": PublishMessage.hash(Data(value.local.sourceID.utf8)), "provider": value.local.provider,
+                    "label": HistorySourceSnapshot.limited(label, bytes: 120)]))
+                try await commit(value, generation: token); value = try await perform(value, generation: token)
+            }
+            guard let profile = value.profile, profile.ownerUserId == actor.userId, profile.ownerDeviceId == actor.deviceId else { throw CampCloudError.invalidResponse }
+            let title = value.local.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            value.pending = CampPublication(kind: "session", method: "PUT", path: "/v1/camps/\(scope.campId)/sessions/\(value.id)", body: try CampWire.body([
+                "id": value.id, "project_id": value.projectId, "profile_id": profile.id, "local_session_id": value.local.sessionID,
+                "title": HistorySourceSnapshot.limited(title.isEmpty ? "Saved history" : title, bytes: 500), "model": value.local.model,
+                "state": "idle", "stage": "Ready", "shared": false, "allow_requests": false, "external_owner": false,
+                "history_only": true, "expected_revision": 0]))
+            try await commit(value, generation: token); value = try await perform(value, generation: token)
+        }
+        var copied = try await historyMessages(value, generation: token)
+        guard snapshot.matchesPrefix(copied) else { throw CampCloudError.server(400, "history_content_changed") }
+        // A recovered cache may have lost message receipts. Reconcile the
+        // actual pinned content before deciding which pages need publication.
+        let receipts = copied.map { message -> PublishedDigest in
+            let local = snapshot.messages[Int(message.ordinal)]
+            let value = PublishMessage(id: local.id, ordinal: message.ordinal, role: local.role, text: local.text,
+                removed: false, model: local.model, effort: local.effort, speed: local.speed)
+            return PublishedDigest(id: value.id, digest: value.digest)
+        }
+        try await commit(value, hashes: receipts, generation: token)
+        var after = Int64(copied.count) - 1
+        while copied.count < snapshot.messages.count {
+            let page = try snapshot.page(after: after)
+            guard !page.messages.isEmpty, let remote = value.remote else { throw CampCloudError.invalidResponse }
+            struct Upload: Encodable { let expectedRevision: Int64; let messages: [PublishMessage] }
+            value.pending = CampPublication(kind: "transcript", method: "POST", path: "/v1/camps/\(scope.campId)/sessions/\(value.id)/transcript",
+                body: try CampWire.encoder().encode(Upload(expectedRevision: remote.transcriptRevision, messages: page.messages)),
+                hashes: page.messages.map { PublishedDigest(id: $0.id, digest: $0.digest) })
+            try await commit(value, generation: token); value = try await perform(value, generation: token)
+            after = page.after; copied += page.messages.map { CloudMessage(id: $0.id, ordinal: $0.ordinal, role: $0.role, text: $0.text, removed: false,
+                model: $0.model, effort: $0.effort, speed: $0.speed, revision: value.remote!.transcriptRevision) }
+        }
+        value.remote = try await readHistorySession(value, generation: token)
+        copied = try await historyMessages(value, generation: token)
+        guard copied.count == snapshot.messages.count, snapshot.matchesPrefix(copied), let remote = value.remote else { throw CampCloudError.invalidResponse }
+        value.publishedHistory = LocalHistoryBinding(parentId: PublishMessage.hash(Data(value.local.id.utf8)), mainRevision: snapshot.revision,
+            children: [], transcriptRevision: remote.transcriptRevision)
+        value.state = remote.shared ? "Shared" : "Saved to Camp"
+        try await commit(value, generation: token)
+        try await cache.ingest(scope: scope, session: remote, expectedEpoch: cacheEpoch)
+        try check(token); await published?(remote, scope, cacheEpoch)
+    }
     private func synchronize(_ id: String, generation token: UUID) async throws {
         guard let scope, let actor, let cache, let transport, var value = shares.first(where: { $0.id == id }) else { return }
+        if value.historySnapshot != nil { try await synchronizeHistory(value, generation: token); return }
         if (value.deviceId != nil && value.deviceId != actor.deviceId) || (value.profile != nil && value.profile?.ownerDeviceId != actor.deviceId) {
             value.profile = nil; value.pending = nil; value.adoptRequested = false; value.deviceId = actor.deviceId
             try await commit(value, generation: token)

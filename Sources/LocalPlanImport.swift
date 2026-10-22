@@ -119,6 +119,16 @@ extension String {
 
 enum LocalPlanImport {
     static func fingerprint(_ plan: LocalPlan) throws -> String { PublishMessage.hash(try CampWire.encoder().encode(plan)) }
+    static func plannerHistoryID(_ session: CampSession) -> String {
+        HistorySourceSnapshot.localID(key: "planner\n" + session.provider + "\n" + session.sourceID + "\n" + session.sessionID, messages: [])
+    }
+    static func implementationHistoryID(_ execution: LocalImplementation) -> String {
+        HistorySourceSnapshot.localID(key: "implementation\n" + execution.id, messages: execution.messages)
+    }
+    static func historySession(_ source: CampSession, id: String, title: String, model: String) -> CampSession {
+        CampSession(id: id, sessionID: id, provider: source.provider, sourceID: source.sourceID, sourceLabel: source.sourceLabel,
+            root: source.root, title: title, cwd: source.cwd, updated: source.updated, path: "", accountID: source.accountID, archived: true, model: model)
+    }
 
     // Bindings are supplied only after the existing session publisher has saved
     // them. No profile roots, account credentials or execution paths enter input.
@@ -146,12 +156,21 @@ enum LocalPlanImport {
             guard version.workflow.accepts(version.planners.map { $0.session.provider }) else { throw CampError.message("The planning providers are invalid") }
             var mapped: [CloudPlannerInput] = []
             for planner in version.planners {
-                guard let binding = planners[planner.session.id], let remote = binding.remote, let profile = binding.profile,
+                guard let binding = planners[planner.session.id], let remote = binding.remote,
                       binding.id == remote.id, binding.local.sourceID == planner.session.sourceID,
-                      binding.local.sessionID == planner.session.sessionID, binding.local.provider == planner.session.provider,
-                      profile.id == remote.profileId, profile.provider == planner.session.provider,
-                      profile.ownerUserId == scope.userId, profile.localId == PublishMessage.hash(Data(planner.session.sourceID.utf8)),
-                      remote.localSessionId == planner.session.sessionID else { throw CampError.message("Save each planner's source session to this Camp before importing") }
+                      binding.local.provider == planner.session.provider else { throw CampError.message("Save each planner's source session to this Camp before importing") }
+                if remote.isHistoryOnly {
+                    let expected = plannerHistoryID(planner.session), empty = HistorySourceSnapshot(messages: [])
+                    guard binding.local.sessionID == expected, remote.localSessionId == expected,
+                          remote.id == HistorySourceSnapshot.cloudID(localID: expected, scope: scope), binding.historySnapshot == empty,
+                          binding.publishedHistory?.mainRevision == empty.revision,
+                          binding.publishedHistory?.transcriptRevision == remote.transcriptRevision else { throw CampCloudError.invalidResponse }
+                } else {
+                    guard let profile = binding.profile, binding.local.sessionID == planner.session.sessionID,
+                          profile.id == remote.profileId, profile.provider == planner.session.provider,
+                          profile.ownerUserId == scope.userId, profile.localId == PublishMessage.hash(Data(planner.session.sourceID.utf8)),
+                          remote.localSessionId == planner.session.sessionID else { throw CampCloudError.invalidResponse }
+                }
                 try authorize(remote, provider: planner.session.provider, owned: true)
                 mapped.append(CloudPlannerInput(sessionId: remote.id, model: planner.model, effort: planner.tuning.effort, speed: planner.tuning.speed))
             }
@@ -178,13 +197,14 @@ enum LocalPlanImport {
         for item in plan.implementations ?? [] {
             guard item.valid, !item.active, let binding = implementations[item.id], binding.revision >= 0,
                   binding.revision <= binding.session.transcriptRevision,
-                  binding.session.localSessionId == item.providerSessionID,
+                  binding.session.localSessionId == (binding.session.isHistoryOnly ? implementationHistoryID(item) : item.providerSessionID),
+                  !binding.session.isHistoryOnly || binding.session.id == HistorySourceSnapshot.cloudID(localID: implementationHistoryID(item), scope: scope),
                   item.messages.count == binding.messages.count,
                   Set(binding.messages.map(\.id)).count == binding.messages.count,
                   binding.messages.enumerated().allSatisfy({ index, cloud in
                       let local = item.messages[index]
                       return cloud.ordinal == Int64(index) && !cloud.removed && cloud.revision > 0 && cloud.revision <= binding.revision && cloud.id == local.id &&
-                          cloud.role == local.role && cloud.text == local.text && cloud.model == local.model && cloud.effort == local.effort && cloud.speed == local.speed
+                          cloud.role == local.role && cloud.text == local.text && (cloud.model ?? "") == (local.model ?? "") && (cloud.effort ?? "") == (local.effort ?? "") && (cloud.speed ?? "") == (local.speed ?? "")
                   }) else { throw CampError.message("Save the complete, stopped implementation transcript to this Camp before importing") }
             try authorize(binding.session, provider: item.executor.session.provider, owned: true)
             history.append(.init(sourceId: PublishMessage.hash(Data(item.id.utf8)), planVersion: item.planVersion,

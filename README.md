@@ -145,9 +145,10 @@ Preparation requires published source bindings and an exact match between the
 saved implementation transcript and its pinned cloud copy. The controller saves
 the reviewed request before submission, reuses its key after a lost response,
 and checks source access again before accepting the result. Profile paths and
-local execution directories are excluded. Automatic source publication and the
-native review screen still need to be connected before this becomes an
-end-to-end app flow.
+local execution directories are excluded. The saved-history publisher copies
+frozen transcripts through the existing Camp session API and verifies their
+complete content before import. The native review screen and coordinator still
+need to be connected before this becomes an end-to-end app flow.
 Copied history sources use an immutable read-only marker. The server refuses
 execution against them, and the native board keeps them under their parent
 plan instead of adding another ordinary session card.

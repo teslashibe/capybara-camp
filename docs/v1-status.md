@@ -30,7 +30,18 @@ The server rejects execution, ownership changes, workspaces and transfers for
 these records, while allowing authorized transcript and context reads. The
 native app retains their access records but excludes them from ordinary cards,
 recent sessions and executor selectors. Existing sessions keep their behavior.
-The source-copy publisher and review screen are still the next integration step.
+The source-copy publisher now uses frozen snapshots, deterministic identities,
+durable publication requests and a full server-content comparison. It can
+recover completed copies after a cache reset and let the same owner finish an
+incomplete copy from another Mac without changing execution ownership. The
+native review screen and coordinator are still the next integration step.
+The saved-snapshot publisher and import binding tests pass for long Unicode
+messages, lost responses, a cleared local cache, conflicting remote content,
+and a partial copy completed on another device. Publisher writes recheck the
+cache epoch. Normal live-session writes remain device-bound; the history-only
+exception requires the same human owner. Full Go race tests and vet pass, as
+do Linux command builds and the focused native suites. This does not complete
+the import screen or two-Mac acceptance.
 Native state, worker, import and planning suites pass. Full Go race tests and
 vet pass at schema 29, with additional targeted history/board checks after the
 last guard change. Tests cover private context, immutable source type,
