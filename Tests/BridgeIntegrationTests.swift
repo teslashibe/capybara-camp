@@ -38,6 +38,24 @@ import Foundation
         precondition(changes.files.count==1 && changes.files[0].path=="file.txt")
         let capture=try JSONDecoder().decode(TransferCapture.self,from:await Bridge.call("transfer-capture",input:request))
         precondition(capture.valid && capture.files.count==1 && capture.payload.map(PublishMessage.hash)==capture.payloadSha256,"The bundled capture helper was not used")
+        let destination=root.appendingPathComponent("restored-checkout")
+        try git(["-c","core.hooksPath=/dev/null","clone","--no-local","--no-hardlinks","--",repository.path,destination.path])
+        try FileManager.default.setAttributes([.posixPermissions:0o700],ofItemAtPath:destination.path)
+        let restoreID=UUID().uuidString.lowercased(), restoreScope=PublishMessage.hash(Data("synthetic-camp-owner".utf8))
+        let restore=try CampWire.body(["scope":restoreScope,"transferID":restoreID,"destination":destination.path,"branch":capture.branch,
+            "payload":capture.payload!.base64EncodedString(),"payloadSHA256":capture.payloadSha256,"reviewSHA256":capture.reviewSha256])
+        let staged=try await Bridge.call("transfer-stage",input:restore)
+        let receipt=try JSONSerialization.jsonObject(with:staged) as! [String:Any]
+        precondition(receipt["transferID"] as? String == restoreID && receipt["scope"] as? String == restoreScope)
+        precondition((receipt["receipt"] as? [String:Any])?["review_sha256"] as? String == capture.reviewSha256)
+        let stagedAgain=try await Bridge.call("transfer-stage",input:restore)
+        precondition(staged==stagedAgain,"Restarted helper changed the staging receipt")
+        let restored=try String(contentsOf:destination.appendingPathComponent("file.txt"),encoding:.utf8)
+        precondition(restored=="after\n","The bundled helper did not restore selected changes")
+        try Data("new local work\n".utf8).write(to:destination.appendingPathComponent("file.txt"))
+        do {_=try await Bridge.call("transfer-stage",input:restore);preconditionFailure("Staging overwrote local work")}catch{}
+        let retained=try String(contentsOf:destination.appendingPathComponent("file.txt"),encoding:.utf8)
+        precondition(retained=="new local work\n")
         let profile=root.appendingPathComponent("claude"), parentPath=profile.appendingPathComponent("projects/fixture/parent.jsonl")
         let childPath=profile.appendingPathComponent("projects/fixture/parent/subagents/agent-one.jsonl")
         try FileManager.default.createDirectory(at:childPath.deletingLastPathComponent(),withIntermediateDirectories:true)
@@ -59,6 +77,6 @@ import Foundation
         do {_=try await Bridge.call("transfer-capture",input:boundRequest);preconditionFailure("Packaged capture accepted stale child history")}catch{}
         do { _ = try Bridge.process("unrecognized-action"); preconditionFailure("The bridge accepted an unsupported command") }
         catch let error as CampError { precondition(error.localizedDescription == "Unsupported local session action") }
-        print("PASS: app-bundled Go recovery, change review, exact capture, pinned child export and action validation")
+        print("PASS: app-bundled Go recovery, change review, exact capture, restartable local staging, pinned child export and action validation")
     }
 }

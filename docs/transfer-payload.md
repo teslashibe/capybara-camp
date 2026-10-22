@@ -195,6 +195,31 @@ files before returning the same receipt. A receipt is evidence of local file
 verification, not permission to switch execution. Server-side source fencing,
 main-history context and assignment commit use the handoff protocol below.
 
+## Local destination staging helper
+
+The bundled Go helper accepts `transfer-stage` for the destination side of a
+Cloud-to-Local transfer. Its caller supplies the downloaded manifest as base64
+`payload`, exact `payloadSHA256`, reviewed `reviewSHA256`, canonical `transferID`,
+a 64-character lowercase SHA-256 `scope` identifying the origin/Camp/owner,
+an absolute `destination` and its reviewed destination `branch`.
+
+The destination must already be a private, isolated Git checkout at the
+manifest's pinned commit, on the same filesystem as the app support directory.
+The helper verifies both hashes before touching it
+and applies files through the same stager used by the cloud runner. It retains
+the staging journal under the app support directory, scoped to the transfer.
+Repeated calls recheck the same checkout and return the same receipt. A changed
+destination, branch, base, reviewed payload or conflicting local edit fails
+without discarding the edit. Unknown fields, trailing JSON, symlink destinations
+and non-private directories are refused. Input size includes the bounded base64
+envelope; no provider process or Git network operation runs.
+
+This helper does not create or fetch the checkout, download cloud history,
+change a session assignment or start a local CLI. The cloud capture job, native
+reverse-transfer coordinator, local history/attachment installation and final
+ownership commit remain required before Cloud-to-Local moves are available in
+the app. The staging receipt is file-verification evidence only.
+
 ## Native Local-to-Cloud review
 
 The original source Mac owns the review. In **Run on → Cloud**, the owner chooses

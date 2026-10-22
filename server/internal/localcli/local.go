@@ -90,6 +90,9 @@ func (a *App) Run(ctx context.Context, action string, input io.Reader) (any, err
 	if action == "transfer-changes" || action == "transfer-capture" {
 		return a.reviewTransfer(ctx, action, input)
 	}
+	if action == "transfer-stage" {
+		return a.stageTransfer(ctx, input)
+	}
 	if action == "transfer-resolve" {
 		return a.resolveTransferFence(ctx, input)
 	}

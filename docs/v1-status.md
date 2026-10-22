@@ -33,6 +33,19 @@ credentials and isolated native client state against the local API for
 collaboration, permissions, replay and ownership tests. Those checks supplement
 the final two-Mac/cloud acceptance; they do not replace it.
 
+The destination-side Go `transfer-stage` helper now stages reviewed files into
+an isolated local checkout using the existing cloud stager. It verifies the
+payload/review hashes, scopes its restart journal by transfer and account context,
+and preserves conflicting local edits. Go race tests and vet pass; the packaged
+native bridge test restores a selected file, reopens the receipt in a new helper
+process and refuses a changed file. Existing native transfer coordinator tests
+also pass (`build/local-stage-go-tests.log`, `build/local-stage-final-go-tests.log`,
+`build/local-stage-native-tests.log`, `build/local-stage-final-bridge.log`).
+The Linux helper build also passes. This is a reverse-transfer component,
+not a complete Cloud-to-Local flow. Cloud capture, checkout preparation,
+history/attachment installation, the native review and final ownership commit
+remain required. No session was moved and no provider was invoked by this test.
+
 The repeatable native/API implementation journey now passes for both Codex and
 Claude (`build/native-api-integration.log`, with an earlier focused pass in
 `build/native-api-integration-focused.log`). It runs the actual Swift
