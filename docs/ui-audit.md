@@ -6,6 +6,23 @@ discrepancy list, not a release approval.
 
 ## Shared implementation follow-ups
 
+A later card audit found that converted implementation cards used the nested
+planner-row variant of the model control without its surrounding provider row.
+That hid both the provider mark and visible effort/speed, although accessibility
+still announced them. The card now uses the same compact component as other
+session cards, aligned to the leading edge. Before capture:
+`build/ui-audit/implementation-card-before-effort-oct22.png`.
+The rebuilt signed development app visibly shows the provider mark, High effort
+and Ultra Fast on the running fixture, and High effort/Fast on the cancelled
+fixture, without changing card dimensions. Computer use opened the running
+card's chat and returned to the board. After capture:
+`build/ui-audit/implementation-card-effort-oct22.png`.
+Shared implementation and follow-up tests pass in
+`build/export-card-native-tests.log`; the optimized arm64 build passes strict
+deep signature verification with Ambient Local Development. Accessibility clicks
+work; coordinate clicks return no available window and browser control remains
+disabled. Full pointer/design acceptance remains open.
+
 Two isolated native clients signed in as the creator and executor owner through
 the real local API and disposable PostgreSQL database on October 22. The creator
 opened the converted card, read its saved implementation and sent a follow-up.

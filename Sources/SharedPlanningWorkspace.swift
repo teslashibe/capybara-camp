@@ -132,7 +132,8 @@ struct SharedPlanningCard: View {
                 } else if let execution = ticket?.implementation {
                     ModelSettingsMenu(provider: execution.provider, title: "Implementation model", sessionModel: execution.model, modelLabel: execution.model,
                         models: [], caps: ModelOption(id: execution.model, label: execution.model), choice: ModelTuning(effort: execution.effort, speed: execution.speed),
-                        locked: true, planningRow: true, selectModel: { _ in }, tune: { _, _ in })
+                        locked: true, selectModel: { _ in }, tune: { _, _ in })
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 } else if let ticket {
                     ForEach(ticket.planners, id: \.slot) { p in
                         PlanningCardModelRow(provider: p.provider, open: { store.openPlan(session, slot: p.slot) }) {

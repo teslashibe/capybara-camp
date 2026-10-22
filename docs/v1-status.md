@@ -33,6 +33,17 @@ credentials and isolated native client state against the local API for
 collaboration, permissions, replay and ownership tests. Those checks supplement
 the final two-Mac/cloud acceptance; they do not replace it.
 
+A rebuilt native card audit corrected converted implementation cards hiding
+their provider icon and visible effort/speed. They now use the same compact
+component as other session cards. Computer use verified High effort/Ultra Fast
+on the running fixture, High effort/Fast on a cancelled fixture, unchanged card
+dimensions and navigation into the running chat and back. The native suites pass
+(`build/export-card-native-tests.log`), and the optimized arm64 development build
+passes strict deep signature verification. Capture:
+`build/ui-audit/implementation-card-effort-oct22.png`. The full design comparison
+and pointer-edge checks remain open because browser control is disabled and
+coordinate input reports no available window.
+
 Cloud source inspection and selected-file capture are now implemented at schema
 34. The owner creates a bounded export; only its assigned runner can claim it.
 The runner captures its isolated Git checkout, excludes credentials and uploads
