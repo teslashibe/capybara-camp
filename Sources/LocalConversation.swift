@@ -54,6 +54,7 @@ struct ConversationResult: Sendable {
     var completed: ((ConversationResult) -> Void)?
     var didAccept: (() -> Void)?
     var sessionCreated: ((String) -> Void)?
+    var forwardEvent: ((Data) async throws -> Void)?
     private var process: Process?
     private var input: ConversationInput?
     private var pendingText: String?
@@ -116,6 +117,7 @@ struct ConversationResult: Sendable {
                         guard let value = try JSONSerialization.jsonObject(with: line) as? [String: Any], let type = value["type"] as? String else {
                             throw CampError.message("The local CLI returned an unreadable event")
                         }
+                        try await self?.forward(line)
                         if type == "approval" {
                             let approval = try JSONDecoder().decode(ProviderApproval.self, from: line)
                             guard mode == .implementation, approval.valid else { throw CampError.message("The CLI returned an unsupported approval request") }
@@ -143,6 +145,14 @@ struct ConversationResult: Sendable {
             let wrote = await writeTask.value, errors = await diagnostics.value
             await self?.finish(code: p.terminationStatus, error: protocolError.isEmpty ? (wrote ? String(data: errors.suffix(4000), encoding: .utf8) ?? "" : "The prompt could not be written to the CLI") : protocolError)
         }
+    }
+
+    private func forward(_ data: Data) async throws { try await forwardEvent?(data) }
+
+    func deliverSharedControl(_ value: CloudControlEnvelope.Input) async throws {
+        guard mode == .implementation, ready, !stopped, !finished, let input else { throw CampError.message("The implementation is no longer accepting input") }
+        let data = try JSONEncoder().encode(value) + Data([10])
+        try await Task.detached { try input.write(data) }.value
     }
 
     nonisolated private static func tokenCount(_ value: Any?) -> Int64? {
@@ -255,7 +265,7 @@ struct ConversationResult: Sendable {
         else { message = error.isEmpty ? "The CLI stopped before confirming the result. Check the transcript before retrying." : error }
         completed?(ConversationResult(state: state, message: message, accepted: accepted,
             output: messages.filter { $0.role == "assistant" }.map(\.text).joined(separator: "\n\n"), usage: usage))
-        changed = nil; completed = nil; didAccept = nil; sessionCreated = nil
+        changed = nil; completed = nil; didAccept = nil; sessionCreated = nil; forwardEvent = nil
     }
     func stop() {
         guard !finished, !stopped else { return }; stopped = true

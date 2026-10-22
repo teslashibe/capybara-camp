@@ -489,6 +489,14 @@ final class TranscriptWatch {
         }
         cloud.worker.execute = { [weak self] local, request, prompt, history, contexts, completed in
             guard let self else { return nil }
+            if request.isImplementation {
+                let run = LocalConversation(session: local, history: [], prompt: prompt, promptID: request.id)
+                run.completed = completed
+                do {
+                    try run.start(prompt: prompt, model: request.model, tuning: ModelTuning(effort: request.effort, speed: request.speed), contexts: contexts, mode: .implementation, executionApproved: true, newSession: (request.providerSessionId ?? "").isEmpty, executionContext: request.executionContext ?? "", permissions: request.permissionSettings, makeProcess: self.conversationProcess)
+                    return run
+                } catch { return nil }
+            }
             if request.isPlanning {
                 let run = LocalConversation(session: local, history: [], prompt: prompt)
                 run.completed = completed

@@ -346,3 +346,73 @@ func TestImplementationUnknownOutcomeRetainsHistoryAcrossRestart(t *testing.T) {
 		t.Fatal("old version lost stream", err)
 	}
 }
+
+func TestImplementationLocalControlsRequireOwnerDeviceAndLiveLease(t *testing.T) {
+	s, actors, c, p, target, approval := approvedImplementationFixture(t, true)
+	dispatchImplementationFixture(t, s, actors[0], c, p, approval)
+	r, err := s.ClaimImplementationWork(t.Context(), actors[1], c.ID, uuid.NewString(), []string{target.ID})
+	if err != nil || r == nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ActOnRequest(t.Context(), actors[1], c.ID, r.ID, uuid.NewString(), RequestAction{Action: "start", LeaseToken: r.LeaseToken, ExecutionContext: approval.ExecutionContext}); err != nil {
+		t.Fatal(err)
+	}
+	if err = localImplementationEvent(t, s, actors[1], *r, 1, map[string]any{"type": "session", "sessionID": uuid.NewString()}); err != nil {
+		t.Fatal(err)
+	}
+	approvalID := uuid.NewString()
+	if err = localImplementationEvent(t, s, actors[1], *r, 2, map[string]any{"type": "approval", "id": approvalID, "kind": "command", "title": "Run fixture", "detail": "echo fixture", "questions": []any{}, "canApprove": true, "acceptLabel": "Allow once"}); err != nil {
+		t.Fatal(err)
+	}
+	seq := int64(2)
+	input := ControlInput{ID: uuid.NewString(), ApprovalSeq: &seq, Control: map[string]any{"type": "approval", "id": approvalID, "allow": true, "answers": map[string]any{}}}
+	if _, err = s.SendControl(t.Context(), actors[0], c.ID, r.ID, input); !errors.Is(err, ErrDenied) {
+		t.Fatal("creator answered executor owner approval", err)
+	}
+	for range 2 {
+		if _, err = s.SendControl(t.Context(), actors[1], c.ID, r.ID, input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	otherDevice := actors[1]
+	otherDevice.DeviceID = uuid.NewString()
+	for _, actor := range []auth.Actor{actors[0], otherDevice} {
+		if _, err = s.LocalImplementationControls(t.Context(), actor, c.ID, r.ID, r.LeaseToken); !errors.Is(err, ErrDenied) {
+			t.Fatal("wrong device received controls", err)
+		}
+	}
+	if _, err = s.LocalImplementationControls(t.Context(), actors[1], c.ID, r.ID, uuid.NewString()); !errors.Is(err, ErrDenied) {
+		t.Fatal("wrong lease read controls", err)
+	}
+	controls, err := s.LocalImplementationControls(t.Context(), actors[1], c.ID, r.ID, r.LeaseToken)
+	if err != nil || len(controls) != 1 || controls[0].ID != input.ID {
+		t.Fatal("control delivery", err)
+	}
+	if err = localImplementationEvent(t, s, actors[1], *r, 3, map[string]any{"type": "approvalResolved", "requestID": approvalID}); err != nil {
+		t.Fatal(err)
+	}
+	status, err := s.ControlStatus(t.Context(), actors[1], c.ID, r.ID, input.ID)
+	if err != nil || status.State != "accepted" {
+		t.Fatal("provider acknowledgement", status.State, err)
+	}
+	controls, err = s.LocalImplementationControls(t.Context(), actors[1], c.ID, r.ID, r.LeaseToken)
+	if err != nil || len(controls) != 0 {
+		t.Fatal("resolved answer redelivered", err)
+	}
+	steerID := uuid.NewString()
+	steer := ControlInput{ID: steerID, Control: map[string]any{"type": "steer", "id": steerID, "text": "Use the focused test"}}
+	if _, err = s.SendControl(t.Context(), actors[1], c.ID, r.ID, steer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ActOnRequest(t.Context(), actors[1], c.ID, r.ID, uuid.NewString(), RequestAction{Action: "finish", LeaseToken: r.LeaseToken, Outcome: "completed", Evidence: "Synthetic finished"}); err != nil {
+		t.Fatal(err)
+	}
+	status, err = s.ControlStatus(t.Context(), actors[1], c.ID, r.ID, steerID)
+	if err != nil || status.State != "unconfirmed" {
+		t.Fatal("unacknowledged steer invented acceptance", err)
+	}
+	var retained []byte
+	if err = s.pool.QueryRow(t.Context(), `SELECT encrypted_input FROM request_controls WHERE id=$1`, steerID).Scan(&retained); err != nil || retained != nil {
+		t.Fatal("terminal local work retained control payload", err)
+	}
+}

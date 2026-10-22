@@ -7,6 +7,18 @@ import (
 )
 
 func (a *API) implementationRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /v1/camps/{camp}/requests/{request}/local-controls", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		var in struct {
+			LeaseToken string `json:"lease_token"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := a.Camps.LocalImplementationControls(r.Context(), u, r.PathValue("camp"), r.PathValue("request"), in.LeaseToken)
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
 	mux.HandleFunc("POST /v1/camps/{camp}/planning/{plan}/execution-approvals/{approval}/dispatch", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		var in struct {
 			ExpectedRevision int64 `json:"expected_revision"`

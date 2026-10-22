@@ -101,12 +101,13 @@ runtime identity. The provider conversation ID is write-once and cannot adopt
 an imported source chat, the workspace's ordinary conversation or another
 implementation using the same profile.
 
-Workers opt in with `include_implementation: true`. Existing native workers do
-not opt in yet. The updated cloud runner does; initial implementation turns start
-a new provider conversation and follow-ups resume its saved identity. Local
-start requires the exact approved CLI context fingerprint. The native worker
-still needs to obtain and verify that fingerprint against its actual project
-and profile before this path can be enabled.
+Workers opt in with `include_implementation: true`. Updated native and cloud
+workers support this contract; older workers skip these requests. Initial
+implementation turns start a new provider conversation and follow-ups resume
+its saved identity. The native worker reads the actual CLI context for the
+assigned profile, project and permissions before starting, compares its
+fingerprint with the saved approval, and cancels admission when they differ.
+The bridge checks that fingerprint again before provider submission.
 
 `GET /implementation-runs/{id}` returns the saved provider identity and latest
 100 requests. `POST /implementation-runs/{id}/requests` queues a follow-up;
@@ -115,6 +116,20 @@ are currently limited to the plan creator and executor owner and recheck the
 plan and pinned source grants. Follow-ups preserve the original plan context.
 The usual request stream endpoint supplies ordered output; local workers publish
 through `/requests/{id}/implementation-events` with their lease.
+
+The Mac worker persists each bounded stream event before sending it and retries
+the same sequence after a lost response. Cumulative text is sent as small deltas;
+the pipe reader applies backpressure while delivery is pending. The cache reads
+only the current attempt for each event. A saved uncertain attempt requires
+review and never relaunches its provider automatically.
+
+Provider approvals and steering use the existing owner-only controls API.
+`POST /requests/{id}/local-controls` additionally requires the assigned owner's
+device and live request lease. The worker saves a control's delivery intent
+before writing to the subprocess. A provider acknowledgement resolves it;
+unconfirmed delivery does not automatically repeat after a process restart.
+Completed local work clears retained control payloads. Losing source access or
+the execution lease stops the local process.
 
 An expired started lease becomes outcome unknown and prevents another claim.
 Restart is refused while implementation work is queued, active or uncertain.

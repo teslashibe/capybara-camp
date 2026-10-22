@@ -22,8 +22,8 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: connect shared implementation approval, execution and history to the native
-worker and planning workspace, then finish the remaining transfer cases,
+Next: connect shared implementation approval and history to the native planning
+workspace, validate the worker against the local API, then finish the remaining transfer cases,
 full-history migration and shared skills. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
@@ -52,8 +52,7 @@ The schema 33 dispatcher atomically consumes consent and saves one implementatio
 conversation under the original plan/version. Requests retain a write-once
 provider identity, preserve the source chat and workspace runtime, and support
 follow-ups through owner approval. Workers must explicitly opt in. The cloud
-runner opts in; the native worker remains disabled for this request type until
-its execution and permission-review path is complete. Local start checks the
+runner and updated native worker support this request type. Local start checks the
 approved CLI context fingerprint. Revocation restricts content, uncertain outcomes
 prevent automatic reruns, and restart retains earlier execution history after
 active work is reconciled. Downgrade refuses to delete retained conversations.
@@ -63,8 +62,32 @@ The full PostgreSQL Go race suite and vet pass at schema 33
 provider identity, revocation, recovery and migration tests. Linux backend builds
 pass. The final importer/follow-up regression is recorded separately in
 `build/implementation-final-focused.log`. This is synthetic API/runtime evidence.
-Native approval, worker implementation, same-ticket shared views and live-provider
+Native approval, same-ticket shared views and live-provider
 acceptance remain open; no release or cloud deployment was made.
+
+The native worker now verifies the actual CLI permission context before starting,
+uses a separate persistent conversation and preserves its identity for follow-ups.
+It journals each bounded stream event before sending, retries the same sequence
+after a lost response and applies pipe backpressure. Event persistence reads one
+attempt rather than decoding every saved attempt. Owner-only approval and
+steering inputs reach the assigned Mac through a lease-checked endpoint; delivery
+intent is saved before writing to the subprocess. Provider acknowledgements
+remain distinct from attempted delivery. Source revocation and lease loss stop
+the process; uncertain work still requires review.
+
+The shared Swift module compiles and worker, cloud/cache and conversation suites
+pass (`build/native-implementation-final.log`). Codex and Claude subprocess
+fixtures verify live output, approval responses, follow-up identity, lost-response
+replay and changed-permission refusal. A final direct steering/acknowledgement
+check also passes (`build/native-worker-controls-result.log`). The full backend race run passed all
+packages except a new HTTP test that expected 403 for a denied lease; the API's
+established contract returns 404. After correcting that assertion, the Camp, HTTP
+and migration suites and vet pass (`build/native-implementation-backend-final-focused.log`).
+Linux backend builds pass. Full native/local-API integration, live providers and
+the shared implementation UI remain acceptance work, not completed deployment.
+The HTTP stream limit now admits valid escaped output within the stream's
+existing per-event bound; its regression and focused backend suites pass
+(`build/native-implementation-event-limits.log`).
 
 The shared implementation review found an existing request-content leak after
 tagged-source revocation. Regression tests reproduced it through detail reads,

@@ -760,6 +760,8 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 		if err = s.publishRunnerTranscript(ctx, tx, r); err != nil {
 			return r, err
 		}
+	}
+	if terminal && (r.ExecutionLocation == "cloud" || r.Kind == "implementation") {
 		if _, err = tx.Exec(ctx, `UPDATE request_controls SET encrypted_input=NULL,state='resolved' WHERE request_id=$1`, r.ID); err != nil {
 			return r, err
 		}

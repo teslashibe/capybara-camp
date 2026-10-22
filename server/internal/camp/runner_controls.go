@@ -50,7 +50,7 @@ func (s *Store) ControlStatus(ctx context.Context, a auth.Actor, campID, request
 	if err != nil {
 		return out, err
 	}
-	if r.OwnerUserID != a.UserID || r.ExecutionLocation != "cloud" {
+	if r.OwnerUserID != a.UserID || (r.ExecutionLocation != "cloud" && r.Kind != "implementation") {
 		return out, ErrDenied
 	}
 	if _, err = s.requestAccess(ctx, tx, r); err != nil {
@@ -126,7 +126,7 @@ func (s *Store) SendControl(ctx context.Context, a auth.Actor, campID, id string
 	if err != nil {
 		return out, err
 	}
-	if r.OwnerUserID != a.UserID || r.ExecutionLocation != "cloud" {
+	if r.OwnerUserID != a.UserID || (r.ExecutionLocation != "cloud" && r.Kind != "implementation") {
 		return out, ErrDenied
 	}
 	if _, err = s.requestAccess(ctx, tx, r); err != nil {
@@ -217,17 +217,44 @@ func (g *GitStore) RunnerControls(ctx context.Context, token, workspaceID, id st
 	if err != nil {
 		return out, err
 	}
+	return g.store.requestControls(ctx, tx, r)
+}
+
+func (s *Store) LocalImplementationControls(ctx context.Context, a auth.Actor, campID, id, lease string) ([]RunnerControl, error) {
+	if !validID(lease) {
+		return nil, ErrInput
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = s.lock(ctx, tx, a, campID, false); err != nil {
+		return nil, err
+	}
+	r, err := loadRequest(ctx, tx, campID, id)
+	if err != nil {
+		return nil, err
+	}
+	if r.Kind != "implementation" || r.ExecutionLocation != "local" || r.OwnerUserID != a.UserID || r.OwnerDeviceID != a.DeviceID || subtle.ConstantTimeCompare([]byte(r.LeaseToken), []byte(lease)) != 1 {
+		return nil, ErrDenied
+	}
+	return s.requestControls(ctx, tx, r)
+}
+
+func (s *Store) requestControls(ctx context.Context, tx pgx.Tx, r Request) ([]RunnerControl, error) {
+	out := []RunnerControl{}
 	if r.State != "started" {
 		return out, nil
 	}
-	live, err := hasLiveLease(ctx, tx, id)
+	live, err := hasLiveLease(ctx, tx, r.ID)
 	if err != nil || !live {
 		return out, ErrTransition
 	}
-	if _, err = g.store.requestAccess(ctx, tx, r); err != nil {
+	if _, err = s.requestAccess(ctx, tx, r); err != nil {
 		return out, err
 	}
-	rows, err := tx.Query(ctx, `SELECT id,encrypted_input FROM request_controls WHERE request_id=$1 AND state='pending' ORDER BY created_at,id LIMIT 16`, id)
+	rows, err := tx.Query(ctx, `SELECT id,encrypted_input FROM request_controls WHERE request_id=$1 AND state='pending' ORDER BY created_at,id LIMIT 16`, r.ID)
 	if err != nil {
 		return out, err
 	}
@@ -238,7 +265,7 @@ func (g *GitStore) RunnerControls(ctx context.Context, token, workspaceID, id st
 		if err = rows.Scan(&value.ID, &encrypted); err != nil {
 			return nil, err
 		}
-		raw, e := g.store.cryptControl(value.ID, encrypted, false)
+		raw, e := s.cryptControl(value.ID, encrypted, false)
 		if e != nil {
 			return nil, e
 		}

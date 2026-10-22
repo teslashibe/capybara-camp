@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -88,5 +89,23 @@ func TestPlanningApprovalHTTPReviewAndImplementationDispatch(t *testing.T) {
 	client.call("GET", "/v1/camps/"+c.ID+"/planning/"+plan.ID+"/implementation-runs/"+dispatched.ImplementationID, "", nil, &implementation, 200)
 	if len(implementation.Requests) != 1 || implementation.Requests[0].LeaseToken != "" {
 		t.Fatal("implementation read contract")
+	}
+	requestPath := "/v1/camps/" + c.ID + "/requests/" + claimed.ID
+	lease := claimed.LeaseToken
+	client.call("POST", requestPath+"/actions", "", camp.RequestAction{Action: "start", LeaseToken: lease, ExecutionContext: strings.Repeat("a", 64)}, nil, 200)
+	raw, _ := json.Marshal(map[string]any{"type": "session", "sessionID": uuid.NewString()})
+	client.call("POST", requestPath+"/implementation-events", "", camp.LocalPlanningEvent{StreamEvent: camp.StreamEvent{Seq: 1, Event: raw}, LeaseToken: lease}, nil, 200)
+	// Escaped output can exceed the ordinary JSON body limit while remaining
+	// within the stream's per-event bound.
+	raw, _ = json.Marshal(map[string]any{"type": "text", "text": strings.Repeat("\"", 40<<10)})
+	client.call("POST", requestPath+"/implementation-events", "", camp.LocalPlanningEvent{StreamEvent: camp.StreamEvent{Seq: 2, Event: raw}, LeaseToken: lease}, nil, 200)
+	id := uuid.NewString()
+	client.call("POST", requestPath+"/controls", "", camp.ControlInput{ID: id, Control: map[string]any{"type": "steer", "id": id, "text": "Use the regression test"}}, nil, 200)
+	anonymous.call("POST", requestPath+"/local-controls", "", map[string]string{"lease_token": lease}, nil, 401)
+	client.call("POST", requestPath+"/local-controls", "", map[string]string{"lease_token": uuid.NewString()}, nil, 404)
+	var controls []camp.RunnerControl
+	client.call("POST", requestPath+"/local-controls", "", map[string]string{"lease_token": lease}, &controls, 200)
+	if len(controls) != 1 || controls[0].ID != id {
+		t.Fatal("local control transport")
 	}
 }

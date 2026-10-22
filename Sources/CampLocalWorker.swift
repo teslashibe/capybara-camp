@@ -13,6 +13,10 @@ import SwiftUI
         let body = try CampWire.body(["session": JSONSerialization.jsonObject(with: JSONEncoder().encode(local)), "limit": 120])
         return try JSONDecoder().decode(Transcript.self, from: await Bridge.call("transcript", input: body)).messages
     }
+    var inspectExecution: (CampSession, PermissionSettings) async throws -> ExecutionContext = { local, permissions in
+        let body = try CampWire.body(["session": JSONSerialization.jsonObject(with: JSONEncoder().encode(local)), "permissions": JSONSerialization.jsonObject(with: JSONEncoder().encode(permissions))])
+        return try JSONDecoder().decode(ExecutionContext.self, from: await Bridge.call("execution-context", input: body))
+    }
     private struct Context {
         var scope: CloudScope; var actor: CloudActor; var transport: any CampPublishingTransport
         var generation: UUID; var epoch: Int64?
@@ -29,6 +33,7 @@ import SwiftUI
     private var active: LocalConversation?
     private var activeAttempt: CloudAttempt?
     private var activeStream: CampLocalPlanStream?
+    private var implementationStream: CampLocalImplementationStream?
     private var reservedPlanningSession: CampSession?
     private var preparingRequestID: String?
     private var preparationInterruption: String?
@@ -43,9 +48,9 @@ import SwiftUI
         self.handoff = CampLocalHandoff(readFences:readFences,cache:cache)
     }
     deinit { task?.cancel(); leaseTask?.cancel() }
-    var activePlanningCount: Int { reservedPlanningSession != nil || activeAttempt?.request.isPlanning == true ? 1 : 0 }
+    var activePlanningCount: Int { reservedPlanningSession != nil || activeAttempt?.request.isIsolatedWork == true ? 1 : 0 }
     func usesPlanningProvider(_ provider: String) -> Bool {
-        reservedPlanningSession?.provider == provider || (activeAttempt?.request.isPlanning == true && active?.session.provider == provider)
+        reservedPlanningSession?.provider == provider || (activeAttempt?.request.isIsolatedWork == true && active?.session.provider == provider)
     }
 
     func attach(scope: CloudScope?, actor: CloudActor?, transport: (any CampPublishingTransport)?, sessions: [CloudSession]) {
@@ -54,6 +59,7 @@ import SwiftUI
         let nextEligibility = Set(sessions.map { "\($0.id):\($0.ownerUserId):\($0.ownerDeviceId):\($0.externalOwner)" })
         self.sessions = sessions
         guard let scope, let actor, let transport else {
+            implementationStream?.stop(); implementationStream = nil
             activeStream?.stop(); activeStream = nil
             task?.cancel(); task = nil; leaseTask?.cancel(); leaseTask = nil; active?.stop(); active = nil; activeAttempt = nil
             context = nil; reservedPlanningSession = nil; issues = []; status = "Local worker idle"; return
@@ -62,6 +68,7 @@ import SwiftUI
             context?.transport = transport
             if priorEligibility != nextEligibility { hasWorkHint = true; queueSignal &+= 1 }
         } else {
+            implementationStream?.stop(); implementationStream = nil
             activeStream?.stop(); activeStream = nil
             task?.cancel(); task = nil; leaseTask?.cancel(); leaseTask = nil; active?.stop(); active = nil; activeAttempt = nil
             context = Context(scope: scope, actor: actor, transport: transport, generation: UUID())
@@ -97,6 +104,7 @@ import SwiftUI
         try check(c)
         var body: [String: Any] = ["action": name, "lease_token": attempt.request.leaseToken ?? ""]
         if name == "start", let digest = attempt.request.quotedContextDigest { body["quoted_context_digest"] = digest }
+        if name == "start", attempt.request.isImplementation { body["execution_context"] = attempt.request.executionContext }
         if let value = attempt.outcome { body["outcome"] = value }
         if let value = attempt.evidence { body["evidence"] = value }
         if attempt.request.isPlanning, ["finish", "reconcile"].contains(name) {
@@ -127,6 +135,7 @@ import SwiftUI
                     watchLease(current.leaseUntil, attempt: attempt, context: c)
                     if current.state == "cancel_requested" || current.contentRestricted == true { active?.stop() }
                 }
+                if attempt.request.isImplementation, active?.ready == true { try await deliverControls(attempt, c) }
                 return
             }
             let saved = try await cache.attempts(c.scope); try check(c)
@@ -202,6 +211,10 @@ import SwiftUI
             try await cache?.removeWorkerAttempt(attempt.id, scope: c.scope, expectedEpoch: c.epoch!)
             status = "Context access changed"; return
         }
+        guard current.supportedWork, current.id == attempt.id, current.sessionId == attempt.request.sessionId,
+              current.ownerUserId == c.actor.userId, current.ownerDeviceId == c.actor.deviceId else { throw CampCloudError.invalidResponse }
+        let lease = attempt.request.leaseToken
+        attempt.request = current; attempt.request.leaseToken = lease
         let remote = try await get(CloudSession.self, "/v1/camps/\(c.scope.campId)/sessions/\(attempt.request.sessionId)", c)
         guard !remote.isHistoryOnly, remote.ownerUserId == c.actor.userId, remote.ownerDeviceId == c.actor.deviceId,
               remote.permissionRevision == attempt.request.permissionRevision, !remote.externalOwner,
@@ -211,11 +224,30 @@ import SwiftUI
             try await cache?.removeWorkerAttempt(attempt.id, scope: c.scope, expectedEpoch: c.epoch!)
             status = "Waiting for the assigned local session"; return
         }
-        if attempt.request.isPlanning { reservedPlanningSession = local }
+        if attempt.request.isIsolatedWork { reservedPlanningSession = local }
         defer { reservedPlanningSession = nil }
         attempt.localSessionId = local.id
+        var executionSession = local
+        if attempt.request.isImplementation {
+            guard let permissions = attempt.request.permissionSettings, permissions.valid(for: local.provider), attempt.request.executionLocation == "local" else { throw CampCloudError.invalidResponse }
+            do {
+                let context = try await inspectExecution(local, permissions)
+                guard context.fingerprint == attempt.request.executionContext, context.provider == local.provider,
+                      URL(fileURLWithPath: context.cwd).resolvingSymlinksInPath() == URL(fileURLWithPath: local.cwd).resolvingSymlinksInPath(),
+                      URL(fileURLWithPath: context.profile).resolvingSymlinksInPath() == URL(fileURLWithPath: local.root).resolvingSymlinksInPath() else { throw CampError.message("The CLI permissions changed since approval") }
+            } catch {
+                _ = try await action("cancel", attempt: attempt, context: c)
+                try await cache?.removeWorkerAttempt(attempt.id, scope: c.scope, expectedEpoch: c.epoch!)
+                status = "Review implementation permissions again · " + error.localizedDescription; return
+            }
+            let existing = attempt.request.providerSessionId ?? ""
+            let providerID = existing.isEmpty ? (attempt.localProviderSessionId ?? UUID().uuidString.lowercased()) : existing
+            attempt.localProviderSessionId = providerID
+            executionSession = CampSession(id: "camp-implementation:" + (attempt.request.implementationId ?? ""), sessionID: providerID, provider: local.provider, sourceID: local.sourceID, sourceLabel: local.sourceLabel, root: local.root, title: local.title, cwd: local.cwd, updated: local.updated, path: "", accountID: local.accountID, archived: false, model: attempt.request.model)
+            try await save(attempt, c)
+        }
         let history: [Message], contexts: [SessionContext]
-        do { history = attempt.request.isPlanning ? [] : try await readHistory(local); contexts = try await sourceContexts(attempt.request, c) }
+        do { history = attempt.request.isIsolatedWork ? [] : try await readHistory(local); contexts = try await sourceContexts(attempt.request, c) }
         catch {
             // No provider process has started. Persist a failed admission instead
             // of repeatedly claiming an unreadable source or oversized snapshot.
@@ -244,13 +276,21 @@ import SwiftUI
         }
         activeAttempt = attempt; heartbeatAt = Date().addingTimeInterval(heartbeatInterval)
         let running = attempt
-        let launched = execute?(local, attempt.request, attempt.request.prompt, history, contexts, { [weak self] result in
+        let launched = execute?(executionSession, attempt.request, attempt.request.prompt, history, contexts, { [weak self] result in
             Task { await self?.finished(running, result, c) }
         })
         guard let launched else {
             await finished(attempt, ConversationResult(state: "failed", message: "The local runner was unavailable before submission", accepted: false), c); return
         }
         active = launched; status = attempt.request.isPlanning ? "Planning on this Mac" : "Running shared work on this Mac"
+        if attempt.request.isImplementation, let cache, let epoch = c.epoch {
+            let stream = CampLocalImplementationStream(request: attempt.request, scope: c.scope, epoch: epoch, cache: cache, transport: c.transport)
+            implementationStream = stream
+            launched.forwardEvent = { [weak stream] data in
+                guard let stream else { throw CancellationError() }
+                try await stream.emit(data)
+            }
+        }
         if attempt.request.isPlanning {
             let stream = CampLocalPlanStream(request: attempt.request, transport: c.transport)
             activeStream = stream
@@ -316,7 +356,7 @@ import SwiftUI
     }
     private func finished(_ saved: CloudAttempt, _ result: ConversationResult, _ c: Context) async {
         var attempt = saved
-        if activeAttempt?.id == attempt.id { activeStream?.stop(); activeStream = nil; leaseTask?.cancel(); leaseTask = nil; active = nil; activeAttempt = nil }
+        if activeAttempt?.id == attempt.id { activeStream?.stop(); activeStream = nil; implementationStream?.stop(); implementationStream = nil; leaseTask?.cancel(); leaseTask = nil; active = nil; activeAttempt = nil }
         attempt.state = result.state == "uncertain" ? "uncertain" : "finish_pending"
         attempt.outcome = result.state == "uncertain" ? nil : result.state
         attempt.evidence = "Local CLI \(result.state); attempt \(attempt.startKey)"
@@ -340,6 +380,11 @@ import SwiftUI
         } catch { if context?.generation == c.generation { status = "Completion needs review · " + error.localizedDescription } }
     }
     private func settle(_ attempt: CloudAttempt, _ c: Context) async throws {
+        if attempt.request.isImplementation, let cache, let epoch = c.epoch,
+           let saved = try await cache.attempts(c.scope).first(where: { $0.id == attempt.id }), let pending = saved.pendingStream {
+            let stream = CampLocalImplementationStream(request: saved.request, scope: c.scope, epoch: epoch, cache: cache, transport: c.transport)
+            try await stream.flush(pending)
+        }
         let current = try await get(CloudRequest.self, "/v1/camps/\(c.scope.campId)/requests/\(attempt.id)", c)
         if !["completed", "failed", "cancelled"].contains(current.state) {
             let actionName = current.state == "outcome_unknown" ? "reconcile" : "finish"
@@ -347,6 +392,19 @@ import SwiftUI
         }
         try await cache?.removeWorkerAttempt(attempt.id, scope: c.scope, expectedEpoch: c.epoch!)
         issues.removeAll { $0.id == attempt.id }; status = "Shared work finished"; hasWorkHint = true; queueSignal &+= 1
+    }
+    private func deliverControls(_ attempt: CloudAttempt, _ c: Context) async throws {
+        guard let cache, let epoch = c.epoch, let active else { return }
+        let command = CampPublication(kind: "worker-controls", method: "POST", path: "/v1/camps/\(c.scope.campId)/requests/\(attempt.id)/local-controls", body: try CampWire.body(["lease_token": attempt.request.leaseToken ?? ""]))
+        let controls = try CampWire.decoder().decode([LocalWorkerControl].self, from: await c.transport.perform(command))
+        try check(c)
+        guard controls.count <= 16, controls.allSatisfy(\.valid), activeAttempt?.id == attempt.id else { throw CampCloudError.invalidResponse }
+        for control in controls {
+            if try await cache.markWorkerControl(attempt.id, control: control.id, scope: c.scope, expectedEpoch: epoch) {
+                try check(c)
+                try await active.deliverSharedControl(control.control)
+            }
+        }
     }
     func confirm(_ attempt: CloudAttempt, outcome: String) async {
         guard let c = context, ["completed", "failed", "cancelled"].contains(outcome), issues.contains(where: { $0.id == attempt.id }) else { return }

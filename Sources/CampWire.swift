@@ -98,6 +98,17 @@ struct CloudRequest: Codable, Identifiable, Equatable, Sendable {
     var quotedSources: [ImportedPlanningSource]? = nil
     var quotedContextDigest: String? = nil
     var isPlanning: Bool { kind == "planning" }
+    var implementationId: String? = nil
+    var providerSessionId: String? = nil
+    var executionContext: String? = nil
+    var permissions: [String: String]? = nil
+    var mode: String? = nil
+    var isImplementation: Bool { kind == "implementation" }
+    var isIsolatedWork: Bool { isPlanning || isImplementation }
+    var permissionSettings: PermissionSettings? {
+        guard let p = permissions, Set(p.keys).isSubset(of: ["profile", "sandbox", "approval", "reviewer", "claudeMode"]) else { return nil }
+        return PermissionSettings(profile: p["profile"] ?? "", sandbox: p["sandbox"] ?? "", approval: p["approval"] ?? "", reviewer: p["reviewer"] ?? "", claudeMode: p["claudeMode"] ?? "")
+    }
     func merging(_ previous: CloudRequest?) -> CloudRequest {
         guard let previous, previous.id == id, previous.campId == campId else { return contentRestricted == true ? restrictingContent() : self }
         let latest = previous.revision > revision ? previous : self
@@ -107,6 +118,7 @@ struct CloudRequest: Codable, Identifiable, Equatable, Sendable {
         var value = self
         value.contentRestricted = true; value.prompt = ""; value.sources = []
         value.quotedSources = nil; value.quotedContextDigest = nil; value.evidence = nil
+        value.providerSessionId = nil; value.executionContext = nil
         return value
     }
     var supportedWork: Bool {
@@ -115,6 +127,12 @@ struct CloudRequest: Codable, Identifiable, Equatable, Sendable {
         let validQuotes = validPlanningQuotes(quoted, sharedCount: sources.count) &&
             (quoted.isEmpty ? quotedContextDigest == nil || quotedContextDigest == "" : quotedContextDigest?.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil)
         if isPlanning { return validQuotes && planId.flatMap(UUID.init(uuidString:)) != nil && (planVersion ?? 0) > 0 && (0..<5).contains(planStep ?? -1) }
+        if isImplementation {
+            return validQuotes && planId.flatMap(UUID.init(uuidString:)) != nil && (planVersion ?? 0) > 0 &&
+                implementationId.flatMap(UUID.init(uuidString:)) != nil && mode == "implementation" && permissionSettings != nil &&
+                (executionLocation != "local" || executionContext?.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil) &&
+                (providerSessionId == nil || providerSessionId == "" || providerSessionId!.utf8.count <= 200 && !providerSessionId!.contains(where: { "/\\\r\n\0".contains($0) }))
+        }
         return quoted.isEmpty && (kind == nil || kind == "chat") && planId == nil
     }
 }

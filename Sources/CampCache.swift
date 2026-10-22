@@ -18,6 +18,9 @@ struct CloudAttempt: Codable, Identifiable, Sendable {
     var evidence: String?
     var output: String?
     var usage: ConversationUsage?
+    var localProviderSessionId: String? = nil
+    var pendingStream: Data? = nil
+    var deliveredControls: [String]? = nil
 }
 
 actor CampCache {
@@ -341,16 +344,66 @@ actor CampCache {
             try checkEpoch(scope, expectedEpoch)
             guard attempt.scope == scope.key, attempt.request.campId == scope.campId,
                   attempt.request.ownerUserId == scope.userId else { throw CampCloudError.invalidResponse }
-            try saveAttempt(attempt)
+            var value = attempt
+            if let old = try workerAttempt(value.id, scope: scope), old.request.isImplementation {
+                value.pendingStream = old.pendingStream
+                value.request.streamSeq = old.request.streamSeq
+                value.deliveredControls = old.deliveredControls
+                if let id = old.request.providerSessionId, !id.isEmpty { value.request.providerSessionId = id }
+            }
+            try saveAttempt(value)
         }
+    }
+    private func workerAttempt(_ id: String, scope: CloudScope) throws -> CloudAttempt? {
+        try rows("SELECT state,body FROM attempts WHERE id=? AND scope=?", [.text(id), .text(scope.key)]) {
+            var result = try CampWire.decoder().decode(CloudAttempt.self, from: blob($0, 1)); result.state = text($0, 0); return result
+        }.first
     }
     func workerClaim(scope: CloudScope, sessions: [String], expectedEpoch: Int64) throws -> CampPublication {
         try transaction {
             try checkEpoch(scope, expectedEpoch)
             let key = "worker-claim:" + scope.key
             if let saved = try metadata(key) { return try CampWire.decoder().decode(CampPublication.self, from: saved) }
-            let command = CampPublication(kind: "claim", method: "POST", path: "/v1/camps/\(scope.campId)/requests/claim", body: try CampWire.body(["session_ids": sessions, "include_planning": true]))
+            let command = CampPublication(kind: "claim", method: "POST", path: "/v1/camps/\(scope.campId)/requests/claim", body: try CampWire.body(["session_ids": sessions, "include_planning": true, "include_implementation": true]))
             try setMetadata(key, CampWire.encoder().encode(command)); return command
+        }
+    }
+    func stageWorkerEvent(_ id: String, event: Data, scope: CloudScope, expectedEpoch: Int64) throws -> Data {
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            guard var attempt = try workerAttempt(id, scope: scope), attempt.request.isImplementation,
+                  attempt.state == "running", event.count <= 128 << 10 else { throw CampCloudError.invalidResponse }
+            if let pending = attempt.pendingStream {
+                guard let value = try JSONSerialization.jsonObject(with: pending) as? [String: Any],
+                      let previous = value["event"], try JSONSerialization.data(withJSONObject: previous, options: .sortedKeys) == event else { throw CampCloudError.invalidResponse }
+                return pending
+            }
+            let seq = (attempt.request.streamSeq ?? 0) + 1
+            guard seq <= 32768 else { throw CampCloudError.responseTooLarge }
+            let body = try CampWire.body(["seq": seq, "event": JSONSerialization.jsonObject(with: event), "lease_token": attempt.request.leaseToken ?? ""])
+            attempt.pendingStream = body; try saveAttempt(attempt); return body
+        }
+    }
+    func acknowledgeWorkerEvent(_ id: String, body: Data, seq: Int64, scope: CloudScope, expectedEpoch: Int64) throws {
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            guard var attempt = try workerAttempt(id, scope: scope), attempt.pendingStream == body,
+                  let value = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+                  (value["seq"] as? NSNumber)?.int64Value == seq else { throw CampCloudError.invalidResponse }
+            if let event = value["event"] as? [String: Any], event["type"] as? String == "session", let providerID = event["sessionID"] as? String {
+                attempt.request.providerSessionId = providerID
+            }
+            attempt.request.streamSeq = seq; attempt.pendingStream = nil; try saveAttempt(attempt)
+        }
+    }
+    func markWorkerControl(_ id: String, control: String, scope: CloudScope, expectedEpoch: Int64) throws -> Bool {
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            guard var attempt = try workerAttempt(id, scope: scope), attempt.state == "running", UUID(uuidString: control) != nil else { throw CampCloudError.invalidResponse }
+            var delivered = attempt.deliveredControls ?? []
+            if delivered.contains(control) { return false }
+            guard delivered.count < 64 else { throw CampCloudError.responseTooLarge }
+            delivered.append(control); attempt.deliveredControls = delivered; try saveAttempt(attempt); return true
         }
     }
     func finishWorkerClaim(_ attempt: CloudAttempt?, scope: CloudScope, expectedEpoch: Int64) throws {

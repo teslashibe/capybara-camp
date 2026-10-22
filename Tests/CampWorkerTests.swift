@@ -15,6 +15,12 @@ actor WorkerFixture: CampPublishingTransport {
     var planningPaused = false
     var finalPayload: [String: String] = [:]
     var streamedText = ""
+    var streamEvents: [Data] = []
+    var controls: [[String: Any]] = []
+    var loseStream = false
+    func loseNextStream() { loseStream = true }
+    func addControl(_ input: [String: Any]) { controls.append(input) }
+    func events() -> [Data] { streamEvents }
     func liveText() -> String { streamedText }
     func resultPayload() -> [String: String] { finalPayload }
     init(request: CloudRequest, session: CloudSession) { self.request = request; self.session = session }
@@ -40,6 +46,25 @@ actor WorkerFixture: CampPublishingTransport {
             held = true; await withCheckedContinuation { gate = $0 }
         }
         let body = try JSONSerialization.jsonObject(with: operation.body) as! [String: Any]
+        if operation.kind == "worker-controls" { return try JSONSerialization.data(withJSONObject: controls) }
+        if operation.kind == "implementation-stream" {
+            guard body["lease_token"] as? String == request.leaseToken, request.state == "started" else { throw CampCloudError.server(409, "invalid_transition") }
+            let seq = (body["seq"] as! NSNumber).int64Value
+            let event = body["event"] as! [String: Any]
+            let raw = try JSONSerialization.data(withJSONObject: event, options: .sortedKeys)
+            if seq <= Int64(streamEvents.count) { precondition(streamEvents[Int(seq)-1] == raw) }
+            else {
+                precondition(seq == Int64(streamEvents.count)+1)
+                streamEvents.append(raw); request.streamSeq = seq
+                if event["type"] as? String == "session" { request.providerSessionId = event["sessionID"] as? String }
+                if event["type"] as? String == "delta" { streamedText += event["text"] as? String ?? "" }
+                if event["type"] as? String == "approvalResolved" || event["type"] as? String == "steerAccepted" {
+                    controls.removeAll { ($0["control"] as? [String: Any])?["id"] as? String == event["requestID"] as? String }
+                }
+            }
+            if loseStream { loseStream = false; throw URLError(.networkConnectionLost) }
+            return try CampWire.body(["seq": seq])
+        }
         if operation.kind == "planning-stream" {
             guard body["lease_token"] as? String == request.leaseToken, request.state == "started" else { throw CampCloudError.server(409, "invalid_transition") }
             let seq = (body["seq"] as! NSNumber).int64Value
@@ -58,7 +83,9 @@ actor WorkerFixture: CampPublishingTransport {
             switch operation.kind {
             case "start":
                 if let digest = request.quotedContextDigest, body["quoted_context_digest"] as? String != digest { throw CampCloudError.server(400, "context_not_acknowledged") }
+                if request.isImplementation, body["execution_context"] as? String != request.executionContext { throw CampCloudError.server(400, "unreviewed_context") }
                 request.state = "started"
+            case "cancel": request.state = "cancelled"
             case "release": request.state = "queued"; request.leaseToken = nil
             case "heartbeat": break
             case "finish", "reconcile":
@@ -118,6 +145,82 @@ actor WorkerFixture: CampPublishingTransport {
         await worker.poll(); await worker.poll()
         check(await api.snapshot().1["claim"]?.count == idleClaims, "Idle polling kept writing claim receipts")
         worker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+
+        // Shared implementations use their own provider identity and deliver
+        // persisted stream events and owner controls through the real pipe.
+        for provider in ["Codex", "Claude"] {
+            let implCache = try CampCache(directory: root.appendingPathComponent("implementation-" + provider))
+            var impl = request(); impl.kind = "implementation"; impl.mode = "implementation"
+            impl.planId = UUID().uuidString; impl.planVersion = 1; impl.implementationId = UUID().uuidString
+            impl.executionLocation = "local"; impl.executionContext = String(repeating: "a", count: 64)
+            impl.permissions = provider == "Codex" ? ["sandbox": "workspace-write", "approval": "on-request"] : ["claudeMode": "manual"]
+            impl.prompt = "Request synthetic approval"
+            let source = CampSession(id: local.id, sessionID: local.sessionID, provider: provider, sourceID: local.sourceID, sourceLabel: local.sourceLabel, root: local.root, title: local.title, cwd: local.cwd, updated: 1, path: "", accountID: "", archived: false)
+            var remoteSource = remote; remoteSource.provider = provider
+            let implAPI = WorkerFixture(request: impl, session: remoteSource)
+            await implAPI.loseNextStream()
+            let implWorker = CampLocalWorker(readFences: { [] }, cache: implCache, automatic: false, heartbeatInterval: 0)
+            implWorker.nativeSession = { _ in source }; implWorker.available = { _ in true }
+            implWorker.readHistory = { _ in preconditionFailure("Implementation adopted the source chat history") }
+            implWorker.inspectExecution = { value, permissions in
+                check(value.sessionID == source.sessionID && permissions.valid(for: provider))
+                return ExecutionContext(fingerprint: String(repeating: "a", count: 64), cwd: value.cwd, profile: value.root, provider: provider, permissionSummary: "Fixture")
+            }
+            var implStarts = 0
+            implWorker.execute = { value, work, prompt, history, contexts, completed in
+                check(value.sessionID != source.sessionID && value.id != source.id && history.isEmpty && work.isImplementation)
+                let run = LocalConversation(session: value, history: [], prompt: prompt)
+                run.completed = completed
+                do { try run.start(prompt: prompt, model: work.model, tuning: .init(), contexts: contexts, mode: .implementation, executionApproved: true, newSession: (work.providerSessionId ?? "").isEmpty, executionContext: work.executionContext!, permissions: work.permissionSettings, makeProcess: { fixtureProcess("ui-audit") }) }
+                catch { preconditionFailure(error.localizedDescription) }
+                implStarts += 1; return run
+            }
+            implWorker.attach(scope: scope, actor: actor, transport: implAPI, sessions: [remoteSource])
+            await implWorker.poll()
+            try await eventually("Implementation approval never reached shared stream") {
+                await implAPI.events().contains { String(decoding: $0, as: UTF8.self).contains("\"type\":\"approval\"") }
+            }
+            check(await implAPI.liveText().contains("Latest synthetic streaming marker"))
+            let journal = try await implCache.attempts(scope).first!
+            check(journal.request.providerSessionId != nil && journal.request.providerSessionId != source.sessionID && journal.pendingStream == nil)
+            check(implStarts == 1, "Lost stream response relaunched the provider")
+            let direction = UUID().uuidString
+            await implAPI.addControl(["id": direction, "control": ["type": "steer", "id": direction, "text": "Keep the test focused"]])
+            await implWorker.poll()
+            try await eventually("Shared steering was not acknowledged") {
+                await implAPI.events().contains { String(decoding: $0, as: UTF8.self).contains("steerAccepted") }
+            }
+            let afterSteer = try await implCache.attempts(scope).first!
+            check(afterSteer.deliveredControls?.contains(direction) == true, "Control intent was not saved before delivery")
+            await implAPI.addControl(["id": UUID().uuidString, "control": ["type": "approval", "id": "e8a1e25a-2b71-4fb9-8122-9ad03a842993", "allow": true, "answers": [:]]])
+            await implWorker.poll()
+            try await eventually("Approved shared implementation did not finish") { try await implCache.attempts(scope).isEmpty }
+            check(await implAPI.snapshot().0.state == "completed" && implStarts == 1)
+            check(await implAPI.events().contains { String(decoding: $0, as: UTF8.self).contains("approvalResolved") })
+            implWorker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+
+            var followup = impl; followup.id = UUID().uuidString; followup.providerSessionId = journal.request.providerSessionId
+            followup.prompt = "complete this follow-up"
+            let followAPI = WorkerFixture(request: followup, session: remoteSource)
+            implWorker.attach(scope: scope, actor: actor, transport: followAPI, sessions: [remoteSource])
+            await implWorker.poll()
+            try await eventually("Implementation follow-up did not finish") { try await implCache.attempts(scope).isEmpty }
+            check(await followAPI.snapshot().0.providerSessionId == journal.request.providerSessionId && implStarts == 2)
+            check(!(await followAPI.events()).contains { String(decoding: $0, as: UTF8.self).contains("\"type\":\"session\"") }, "Follow-up created a new provider conversation")
+            implWorker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+
+            let staleCache = try CampCache(directory: root.appendingPathComponent("stale-permissions-" + provider))
+            let staleAPI = WorkerFixture(request: impl, session: remoteSource)
+            let stale = CampLocalWorker(readFences: { [] }, cache: staleCache, automatic: false)
+            stale.nativeSession = { _ in source }; stale.available = { _ in true }
+            stale.inspectExecution = { value, _ in ExecutionContext(fingerprint: String(repeating: "b", count: 64), cwd: value.cwd, profile: value.root, provider: provider, permissionSummary: "Changed") }
+            stale.execute = { _,_,_,_,_,_ in preconditionFailure("Changed permissions launched provider work") }
+            stale.attach(scope: scope, actor: actor, transport: staleAPI, sessions: [remoteSource])
+            await stale.poll()
+            check(await staleAPI.snapshot().0.state == "cancelled")
+            check(try await staleCache.attempts(scope).isEmpty)
+            stale.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+        }
 
         let planCache = try CampCache(directory: root.appendingPathComponent("planning"))
         var planRequest = request(); planRequest.kind = "planning"; planRequest.planId = UUID().uuidString; planRequest.planVersion = 1; planRequest.planStep = 0
@@ -303,6 +406,6 @@ actor WorkerFixture: CampPublishingTransport {
         await historyWorker.poll()
         check(await historyAPI.snapshot().1["claim"] == nil, "Archived history was included in an execution claim")
         historyWorker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
-        print("PASS: worker claim replay, durable start, heartbeat, finish recovery, unknown-outcome review, revoked-response fencing and history-only exclusion")
+        print("PASS: worker replay and recovery, isolated Codex/Claude implementation streams, owner controls, permission checks, follow-up identity, revocation and history-only exclusion")
     }
 }

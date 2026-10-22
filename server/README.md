@@ -96,6 +96,7 @@ signed revocation webhooks; it exposes no Git token readback endpoint.
 | `GET /v1/camps/{camp}/planning/{plan}/implementation-runs/{id}` | Authorized implementation identity and latest 100 requests |
 | `POST /v1/camps/{camp}/planning/{plan}/implementation-runs/{id}/requests` | Follow-up on the same provider conversation, subject to owner approval |
 | `POST /v1/camps/{camp}/requests/{id}/implementation-events` | Assigned local worker's ordered stream with its current lease |
+| `POST /v1/camps/{camp}/requests/{id}/local-controls` | Assigned implementation worker reads pending owner-approved controls with its current lease |
 
 Every Camp mutation requires a UUID `Idempotency-Key`. Reusing the same key for
 the same operation and payload returns its original result; a changed operation
