@@ -41,6 +41,11 @@ in [cloud accounts](../docs/cloud-accounts.md). Schema 10 includes encrypted
 Claude code delivery without changing existing profile or session rows. Run the
 migration before this binary; keep a compatible schema-10 build as the rollback floor.
 
+The separate `cmd/camp-runner` binary implements installation-scoped sign-in
+only. Its private grant/state setup and container restart contract are documented
+in [cloud accounts](../docs/cloud-accounts.md#auth-only-worker). It does not yet
+execute cloud chat turns.
+
 | Method and path | Input or result |
 | --- | --- |
 | `POST /v1/auth/code` | `{email}`; generic accepted response |

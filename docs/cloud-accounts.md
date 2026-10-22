@@ -2,8 +2,10 @@
 
 The Go service stores owner-bound accounts, installation grants and login
 attempts. Go sign-in adapters now drive the official CLIs inside disposable
-private profiles. The worker control loop, native account setup screen and cloud
-execution are still required. These endpoints alone do not start a cloud session.
+private profiles. An auth-only Go worker now claims those attempts, relays codes
+and persists recovery state. The native account setup screen, workload
+provisioning and cloud execution are still required. These endpoints alone do
+not start a cloud chat session.
 
 ## Ownership and storage
 
@@ -111,8 +113,8 @@ The challenge is fixed once published. Changed challenges conflict, preventing
 an already-submitted code from being rebound to another browser flow. Completion,
 failure, cancellation, expiry, grant replacement and account disconnect all erase
 any pending code. Every take and acknowledgment rechecks ownership, grant, claim,
-epoch and attempt state under the account lock. Runtime delivery and native code
-entry still require the worker and onboarding integration.
+epoch and attempt state under the account lock. The auth-only worker implements
+this delivery protocol. Native code entry still requires onboarding integration.
 
 Waiting reports contain only an allowlisted HTTPS provider URL and optional
 device code. Codex uses the official device verification route. Claude URLs must
@@ -152,10 +154,61 @@ not an independent JWT verification API for caller-supplied credentials.
 Snapshots include only fixed provider credential files, with a 256 KiB total
 limit. Reads reject symlinks, pipes and foreign-owned files. The candidate profile
 is removed on success, cancellation or failure; a cleanup failure is reported.
-The future runner must encrypt and persist a successful snapshot before reporting
-completion and handle uncertain delivery without repeating provider sign-in.
+The auth-only runner encrypts and persists a successful snapshot before reporting
+completion and handles uncertain delivery without repeating provider sign-in.
 
 Tests exercise each adapter with fake CLIs, credential identity checks, inherited
 credential rejection, one-code input, cancellation and profile cleanup. An opt-in
 preflight also exercised the installed Claude CLI's actual authorization URL and
 cancelled before signing in. It proves URL compatibility, not a completed login.
+
+## Auth-only worker
+
+`server/cmd/camp-runner` polls only its installation routes and invokes the fixed
+Go sign-in adapters. It cannot read human Camp history, execute prompts or accept
+shell commands. Configure it through these environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `CAMP_RUNNER_ORIGIN` | HTTPS Camp service origin |
+| `CAMP_RUNNER_GRANT_FILE` | Absolute path to an owner-only regular file containing its installation grant |
+| `CAMP_RUNNER_STATE_DIR` | Existing owner-only directory dedicated to this installation |
+
+Keep the grant file outside the state directory. The worker rejects symlink
+grant files, shared state permissions, concurrent workers using the same state
+directory, redirects and mismatched installation responses. Its API calls have
+bounded deadlines and response sizes. Provider processes receive the adapter's
+restricted environment, not the Camp grant or arbitrary host credentials.
+
+The encrypted journal stores a claim UUID before claiming work and a start fence
+before invoking a provider. A prepared claim can be resumed with the same UUID.
+After restart, a started attempt without a saved result fails and requires a new
+sign-in; it never launches another provider process for that attempt. A saved
+final result is retried with identical content. If the server already committed
+it and the response was lost, the next idle state permits local cleanup.
+
+Claude code delivery persists its delivery UUID and a delivery-intent fence,
+acknowledges server erasure, then writes the code once to the CLI. A restart with
+uncertain code delivery fails the attempt. Cancellation and disconnect cancel
+and join the provider before cleanup or erasure acknowledgment. A lost network
+connection cancels an active login after a bounded interval.
+
+The journal is encrypted with a key derived from the random installation grant
+and bound to the service origin. Grant rotation requires the provisioning
+controller to stop the old workload and remove its journal before replacing the
+grant. Changing a grant in place cannot decrypt the previous journal and fails
+closed. No grant-renewal controller has shipped yet.
+
+Run one worker per isolated installation container. The container supervisor must
+terminate all processes before a replacement worker starts; a filesystem lock
+alone cannot prove that a killed worker's children have stopped. Startup removes
+only this adapter's abandoned scratch profiles, under that container lifecycle
+contract. Host execution after an ungraceful kill is not a supported recovery
+path. The future Kubernetes controller must enforce this lifecycle and handle
+offline workers and expired grants before cloud execution is enabled.
+
+PostgreSQL/HTTPS fixture tests exercise both providers' full worker paths,
+one-time-code delivery, lost acknowledgments, durable result retries, interrupted
+login recovery, cancellation and cleanup ordering. The provider calls in these
+tests are fakes. Real cloud sign-in and runtime/container isolation acceptance
+remain release gates.
