@@ -118,6 +118,7 @@ struct CampPlanningState: Codable, Sendable {
         var input = CloudPlanningInput(title: ticket.title, projectId: ticket.projectId, brief: ticket.version.brief, shared: ticket.shared ?? false,
             planners: ticket.version.planners.sorted { $0.slot < $1.slot }.map { CloudPlannerInput(sessionId: $0.sessionId, model: $0.model, effort: $0.effort, speed: $0.speed) }, sources: ticket.version.sources)
         input.mergeSlot = ticket.version.mergeSlot
+        input.mode = ticket.version.mode
         state.drafts.removeAll { $0.id == ticket.id }
         state.drafts.append(CloudPlanDraft(id: ticket.id, input: input, restartPlanID: ticket.id, baseRevision: revision))
         try await persist(); publish()
@@ -128,8 +129,8 @@ struct CampPlanningState: Codable, Sendable {
         state.drafts[index].input.sources = sources
         let input = state.drafts[index].input
         guard !input.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !input.brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              input.brief.utf8.count <= 8192, input.planners.count == 2, input.planners.allSatisfy({ visibleSessions.contains($0.sessionId) }), input.budgetPolicy == "calls" else {
-            error = "Choose both shared sessions, write a brief and enable the five-turn limit"; return
+              input.brief.utf8.count <= 8192, input.planners.count == input.workflow.plannerCount, input.planners.allSatisfy({ visibleSessions.contains($0.sessionId) }), input.budgetPolicy == "calls" else {
+            error = "Choose the shared planning sessions, write a brief and enable the turn limit"; return
         }
         do {
             saveTask?.cancel()

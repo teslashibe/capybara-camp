@@ -1,6 +1,18 @@
 import Foundation
 import SwiftUI
 
+enum PlanningMode: String, Codable, CaseIterable, Sendable {
+    case single, comparison
+    var title: String { self == .single ? "Plan" : "Plan with comparison" }
+    var plannerCount: Int { self == .single ? 1 : 2 }
+    var turnLimit: Int { self == .single ? 1 : 5 }
+    var resultOrdinal: Int { turnLimit - 1 }
+    var budgetLabel: String { self == .single ? "Limit to one turn" : "Limit to five turns" }
+    func accepts(_ providers: [String]) -> Bool {
+        providers.count == plannerCount && Set(providers).count == plannerCount && providers.allSatisfy { ["Codex", "Claude"].contains($0) }
+    }
+}
+
 struct LocalPlanner: Codable, Equatable {
     var session: CampSession
     var model: String
@@ -28,12 +40,15 @@ struct LocalPlanVersion: Codable, Equatable, Identifiable {
     var mergeSlot = 0
     var state = "draft"
     var steps: [LocalPlanStep] = []
+    var mode: PlanningMode? = nil
+    var workflow: PlanningMode { mode ?? .comparison }
     var id: Int { number }
     var completedCount: Int { steps.filter { $0.state == "completed" }.count }
     var editable: Bool { state == "draft" && steps.isEmpty }
 
     func prompt(for ordinal: Int) -> String {
         let intro = "Plan the following feature. Do not execute project changes. Keep the response concise, under 900 words.\n\nBrief:\n" + brief
+        if workflow == .single { return intro + "\n\nProduce one plan with scope, implementation steps, risks, acceptance tests, and open questions. Do not implement the plan." }
         let outputs = Dictionary(uniqueKeysWithValues: steps.map { ($0.ordinal, $0.output) })
         switch ordinal {
         case 0, 1:
@@ -59,7 +74,7 @@ struct LocalPlan: Codable, Equatable, Identifiable {
     var implementation: LocalImplementation? { implementations?.last { $0.planVersion == current.number } }
     var session: CampSession {
         if let implementation { return implementation.session(id: id, title: title, updated: updated) }
-        return CampSession(id: id, sessionID: id, provider: "Planning", sourceID: "planning", sourceLabel: "Plan together",
+        return CampSession(id: id, sessionID: id, provider: "Planning", sourceID: "planning", sourceLabel: current.workflow.title,
             root: "", title: title, cwd: current.planners.first?.session.cwd ?? "", updated: updated, path: "", accountID: "", archived: false)
     }
     var stage: Stage {
@@ -72,7 +87,7 @@ struct LocalPlan: Codable, Equatable, Identifiable {
     }
 }
 
-// Private, offline plans share the cloud workflow's five steps and immutable
+// Private, offline plans share the cloud workflow's bounded steps and immutable
 // versions. The owning Mac persists before launching an official CLI process.
 @MainActor final class LocalPlanning: ObservableObject {
     @Published private(set) var tickets: [LocalPlan] = []
@@ -154,11 +169,13 @@ struct LocalPlan: Codable, Equatable, Identifiable {
             !plan.versions.isEmpty && plan.versions.count <= 100 &&
             plan.versions.enumerated().allSatisfy({ $0.element.number == $0.offset + 1 }) && plan.versions.allSatisfy { version in
                 version.number > 0 && version.brief.utf8.count <= 8192 && states.contains(version.state) &&
-                ["calls", "strict_tokens"].contains(version.budgetPolicy) && (0...1).contains(version.mergeSlot) &&
+                ["calls", "strict_tokens"].contains(version.budgetPolicy) && (0..<version.workflow.plannerCount).contains(version.mergeSlot) &&
                 version.sources.count <= 20 && Set(version.sources.map(\.id)).count == version.sources.count &&
-                version.planners.count == 2 && Set(version.planners.map { $0.session.provider }) == Set(["Codex", "Claude"]) &&
+                version.planners.count == version.workflow.plannerCount &&
+                Set(version.planners.map { $0.session.provider }).count == version.workflow.plannerCount &&
+                version.planners.allSatisfy { ["Codex", "Claude"].contains($0.session.provider) } &&
                 version.planners.allSatisfy { !$0.session.isCloud && !$0.session.root.isEmpty && $0.model.utf8.count <= 200 } &&
-                (version.steps.isEmpty || version.steps.count == 5) && version.steps.enumerated().allSatisfy { index, step in
+                (version.steps.isEmpty || version.steps.count == version.workflow.turnLimit) && version.steps.enumerated().allSatisfy { index, step in
                     step.ordinal == index && step.slot == (index == 4 ? version.mergeSlot : index % 2) &&
                     step.phase == (index < 2 ? "draft" : index < 4 ? "review" : "combined") &&
                     stepStates.contains(step.state) && step.output.utf8.count <= 8192
@@ -182,16 +199,17 @@ struct LocalPlan: Codable, Equatable, Identifiable {
               let v = values[t].versions.firstIndex(where: { $0.number == (version ?? values[t].current.number) }) else { return false }
         operation(&values[t].versions[v]); values[t].updated = Date().timeIntervalSince1970
         let title = values[t].current.brief.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        values[t].title = title.isEmpty ? "Plan together" : String(title.prefix(160))
+        values[t].title = title.isEmpty ? values[t].current.workflow.title : String(title.prefix(160))
         return commit(values)
     }
-    func create(planners: [LocalPlanner]) -> String? {
-        guard planners.count == 2, Set(planners.map { $0.session.provider }) == Set(["Codex", "Claude"]),
+    func create(planners: [LocalPlanner], mode: PlanningMode = .comparison) -> String? {
+        guard planners.count == mode.plannerCount, Set(planners.map { $0.session.provider }).count == mode.plannerCount,
+              planners.allSatisfy({ ["Codex", "Claude"].contains($0.session.provider) }),
               planners.allSatisfy({ !$0.session.isCloud && !$0.session.root.isEmpty }), tickets.count < 200 else {
-            error = "Choose one local Codex profile and one local Claude profile"; return nil
+            error = mode == .single ? "Choose a local Codex or Claude profile" : "Choose one local Codex profile and one local Claude profile"; return nil
         }
-        let value = LocalPlan(id: "plan:" + UUID().uuidString, title: "Plan together", updated: Date().timeIntervalSince1970,
-            versions: [LocalPlanVersion(number: 1, brief: "", planners: planners)])
+        let value = LocalPlan(id: "plan:" + UUID().uuidString, title: mode.title, updated: Date().timeIntervalSince1970,
+            versions: [LocalPlanVersion(number: 1, brief: "", planners: planners, mode: mode)])
         return commit([value] + tickets) ? value.id : nil
     }
     @discardableResult func edit(_ id: String, _ operation: (inout LocalPlanVersion) -> Void) -> Bool {
@@ -200,7 +218,7 @@ struct LocalPlan: Codable, Equatable, Identifiable {
     }
     func start(_ id: String, sources: [SessionReference]? = nil) {
         guard let plan = ticket(id), ["draft", "paused"].contains(plan.current.state) else { return }
-        guard plan.current.budgetPolicy == "calls" else { error = "These CLI logins cannot enforce a hard token ceiling. Choose the five-turn limit to continue."; return }
+        guard plan.current.budgetPolicy == "calls" else { error = "These CLI logins cannot enforce a hard token ceiling. Choose the turn limit to continue."; return }
         guard !plan.current.brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, plan.current.brief.utf8.count <= 8192 else {
             error = "Write a planning brief under 8 KB"; return
         }
@@ -208,7 +226,7 @@ struct LocalPlan: Codable, Equatable, Identifiable {
         guard update(id, { value in
             if value.steps.isEmpty {
                 value.sources = sources ?? value.sources
-                value.steps = (0..<5).map { LocalPlanStep(ordinal: $0, slot: $0 == 4 ? value.mergeSlot : $0 % 2, phase: $0 < 2 ? "draft" : $0 < 4 ? "review" : "combined") }
+                value.steps = (0..<value.workflow.turnLimit).map { LocalPlanStep(ordinal: $0, slot: $0 == 4 ? value.mergeSlot : $0 % 2, phase: $0 < 2 ? "draft" : $0 < 4 ? "review" : "combined") }
             }
             value.state = "running"
         }) else { return }
@@ -251,7 +269,7 @@ struct LocalPlan: Codable, Equatable, Identifiable {
         guard !unreadable else { return }
         for plan in tickets where plan.current.state == "running" {
             let v = plan.current
-            let eligible = v.completedCount < 2 ? [0, 1] : v.steps.prefix(4).allSatisfy({ $0.state == "completed" }) ? [4] : [2, 3]
+            let eligible = v.workflow == .single ? [0] : v.completedCount < 2 ? [0, 1] : v.steps.prefix(4).allSatisfy({ $0.state == "completed" }) ? [4] : [2, 3]
             for ordinal in eligible {
                 guard let step = v.steps.first(where: { $0.ordinal == ordinal }), step.state == "pending" else { continue }
                 let planner = v.planners[step.slot], provider = planner.session.provider
@@ -309,7 +327,7 @@ struct LocalPlan: Codable, Equatable, Identifiable {
             v.steps[ordinal].error = complete ? "" : result.message.isEmpty ? "No complete planning response was returned" : result.message
             if !["cancelled", "failed", "needs_review"].contains(v.state) {
                 if !complete { v.state = result.state == "uncertain" ? "needs_review" : "failed" }
-                else if v.completedCount == 5 { v.state = "ready" }
+                else if v.completedCount == v.workflow.turnLimit { v.state = "ready" }
             }
         }
         if !success || !complete { stopJobs(id, version: version) }

@@ -70,7 +70,7 @@ prompt queue and live events. The Swift client includes a scoped SQLite cache,
 an offline outbox, Camp connection controls and shared transcript viewing.
 The owner-Mac worker can execute shared chat requests and isolated shared
 planning steps. The native shared-planning workspace includes model settings,
-pinned context, board cards, pause/resume and saved version history. Local five-step plans can
+pinned context, board cards, pause/resume and saved version history. Plan runs one model; Plan with comparison uses two provider drafts, reviews and a combined plan. Local plans can
 continue into implementation with a separate executor choice on the same ticket.
 Completion notifications include a native inbox, foreground toasts, optional
 macOS alerts and server-owned read receipts across a person's devices.
@@ -81,7 +81,7 @@ memory and skills are still in development. These features are not included in v
 [cloud execution scope](docs/cloud-execution.md), and [self-hosting](docs/self-hosting.md)
 for the current implementation boundary and [the V1 epic](https://github.com/teslashibe/capybara-camp/issues/1)
 for release acceptance.
-V1 also includes a [Codex activity observer](docs/codex-activity.md), with live daemon events and verified desktop turn tracking. The [iteration sprint](docs/iteration-2.md) covers single-model planning, client projects, GitHub workspaces and session permission controls.
+V1 also includes a [Codex activity observer](docs/codex-activity.md), with live daemon events and verified desktop turn tracking. The [iteration sprint](docs/iteration-2.md) also covers client projects, GitHub workspaces and session permission controls.
 
 In a V1 development build, connect your Camp from the header, then choose
 **Share with Camp** on a session card. Select its project and whether teammates

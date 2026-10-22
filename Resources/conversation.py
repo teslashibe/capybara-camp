@@ -337,7 +337,7 @@ def codex_turn(c, s, request, controls, emit):
     c.rpc("initialize", {"clientInfo": {"name": "capybara_camp", "title": "Capybara Camp", "version": "0.0.1"}, "capabilities": {"experimentalApi": True}})
     c.write({"method": "initialized", "params": {}})
     merged = c.rpc("config/read", {"includeLayers": False, "cwd": s["cwd"]}).get("config", {})
-    params = {"threadId": s["sessionID"], "cwd": s["cwd"], "sandbox": "read-only", "approvalPolicy": "untrusted",
+    params = {"threadId": s["sessionID"], "cwd": s["cwd"], "sandbox": "read-only", "approvalPolicy": "on-request",
               "config": codex_config(merged, request.get("_camp_mcp")), "developerInstructions": "This is a chat-only preview. Answer directly. Only the Camp context read tool, when configured, is permitted; do not run project tools or delegate work." + request.get("_camp_context_instructions", "")}
     implementing = request.get('mode') == 'implementation'
     if implementing:
@@ -358,7 +358,7 @@ def codex_turn(c, s, request, controls, emit):
         s["sessionID"] = c.rpc("thread/start", params)["thread"]["id"]
     else:
         c.rpc("thread/resume", params)
-    turn_params = {"threadId": s["sessionID"], "input": [{"type": "text", "text": request["prompt"]}], "approvalPolicy": "untrusted"}
+    turn_params = {"threadId": s["sessionID"], "input": [{"type": "text", "text": request["prompt"]}], "approvalPolicy": "on-request"}
     if implementing:
         turn_params.pop('approvalPolicy')
     for key in ("model", "effort"):

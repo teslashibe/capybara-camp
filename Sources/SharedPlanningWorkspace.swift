@@ -1,19 +1,33 @@
 import SwiftUI
 
 extension CampStore {
-    func newSharedPlan() {
+    func newSharedPlan(mode: PlanningMode = .single) {
         guard let scope = cloud.scope, let project = cloud.projects.first else { banner = "Connect to a Camp and add a project first"; return }
-        let planners = ["Codex", "Claude"].map { provider -> CloudPlannerInput in
+        let available = cloud.sessions.filter { $0.ownerUserId == scope.userId || $0.allowRequests }
+        let preferred = available.first { $0.ownerUserId == scope.userId }?.provider ?? available.first?.provider ?? "Codex"
+        let planners = (mode == .single ? [preferred] : ["Codex", "Claude"]).map { provider -> CloudPlannerInput in
             let choices = cloud.sessions.filter { $0.provider == provider && ($0.ownerUserId == scope.userId || $0.allowRequests) }
             let source = choices.first { $0.ownerUserId == scope.userId } ?? choices.first
             return CloudPlannerInput(sessionId: source?.id ?? "", model: source?.model ?? "", effort: "", speed: "standard")
         }
         Task {
             do {
-                let id = try await sharedPlanning.newDraft(input: CloudPlanningInput(title: "New plan", projectId: project.id, brief: "", shared: false, planners: planners))
+                let id = try await sharedPlanning.newDraft(input: CloudPlanningInput(title: "New plan", projectId: project.id, brief: "", shared: false, planners: planners, mode: mode))
                 if let session = sessions.first(where: { $0.id == "camp-plan-draft:" + id }) { open(session) }
             } catch { banner = error.localizedDescription }
         }
+    }
+    func setSharedPlanMode(_ id: String, mode: PlanningMode) {
+        guard let draft = sharedPlanning.draft(id) else { return }
+        let available = cloud.sessions.filter { $0.ownerUserId == cloud.scope?.userId || $0.allowRequests }
+        let old = draft.input.planners
+        let providers = mode == .single ? [available.first { $0.id == old.first?.sessionId }?.provider ?? available.first?.provider ?? "Codex"] : ["Codex", "Claude"]
+        let planners = providers.map { provider -> CloudPlannerInput in
+            if let saved = old.first(where: { item in available.contains { $0.id == item.sessionId && $0.provider == provider } }) { return saved }
+            let source = available.first { $0.provider == provider }
+            return CloudPlannerInput(sessionId: source?.id ?? "", model: source?.model ?? "", effort: "", speed: "standard")
+        }
+        sharedPlanning.edit(id) { $0.mode = mode; $0.planners = planners; $0.mergeSlot = 0 }
     }
     func syncSharedPlans() {
         let names = Dictionary(uniqueKeysWithValues: cloud.projects.map { ($0.id, $0.name) })
@@ -66,8 +80,8 @@ struct SharedPlanningModelMenu: View {
     var body: some View {
         if let draft = planning.draft(id), draft.input.planners.indices.contains(slot) {
             let p = draft.input.planners[slot]
-            let provider = slot == 0 ? "Codex" : "Claude"
             let session = store.sessions.first { $0.id == "camp:" + p.sessionId }
+            let provider = session?.provider ?? (slot == 0 ? "Codex" : "Claude")
             let models = session.map(store.availableModels) ?? []
             ModelSettingsMenu(provider: provider, title: "\(provider) planner", sessionModel: p.model,
                 modelLabel: p.model.isEmpty ? "Session default" : p.model, models: models,
@@ -85,6 +99,7 @@ struct SharedPlanningCard: View {
     let session: CampSession
     var body: some View {
         let id = session.sessionID, draft = planning.draft(id), ticket = planning.tickets.first { $0.id == id }
+        let mode = draft?.input.workflow ?? ticket?.workflow ?? .comparison
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 ProviderMark(provider: "Planning", size: 17)
@@ -99,12 +114,12 @@ struct SharedPlanningCard: View {
                     Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34, alignment: .topLeading)
                     Label(session.project, systemImage: "folder").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
-                    HStack { Text("Plan together"); Spacer(); Text(Date(timeIntervalSince1970: session.updated), style: .relative) }.font(.system(size: 9)).foregroundStyle(campMuted)
+                    HStack { Text(mode.title); Spacer(); Text(Date(timeIntervalSince1970: session.updated), style: .relative) }.font(.system(size: 9)).foregroundStyle(campMuted)
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain)
             Divider().overlay(campInk.opacity(0.04))
-            if draft != nil {
-                ForEach(0..<2) { slot in SharedPlanningModelMenu(store: store, planning: planning, id: id, slot: slot) }
+            if let draft {
+                ForEach(draft.input.planners.indices, id: \.self) { slot in SharedPlanningModelMenu(store: store, planning: planning, id: id, slot: slot) }
             } else if let ticket {
                 ForEach(ticket.planners, id: \.slot) { p in
                     ModelSettingsMenu(provider: p.provider, title: "\(p.provider) planner", sessionModel: p.model, modelLabel: p.model,
@@ -114,7 +129,7 @@ struct SharedPlanningCard: View {
             Spacer(minLength: 0)
             HStack(spacing: 6) {
                 if ticket?.state == "running" || planning.pending(id) { ProgressView().controlSize(.mini).frame(width: 12, height: 12) }
-                Text(draft?.cancelRequested == true ? "Cancellation waiting to sync" : planning.pending(id) ? "Waiting to sync" : ticket?.state == "ready" ? "Plan ready to review" : "\(ticket?.completed ?? 0) of 5 · \(ticket?.state ?? "draft")")
+                Text(draft?.cancelRequested == true ? "Cancellation waiting to sync" : planning.pending(id) ? "Waiting to sync" : ticket?.state == "ready" ? "Plan ready to review" : "\(ticket?.completed ?? 0) of \(mode.turnLimit) · \(ticket?.state ?? "draft")")
                     .font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
                 Spacer()
                 Button { store.open(session) } label: { Image(systemName: "chevron.right").frame(width: 28, height: 28) }.buttonStyle(.plain).help("Open plan")
@@ -134,7 +149,7 @@ struct SharedPlanningWorkspace: View {
                 Divider()
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
-                        Label("Plan together", systemImage: "lightbulb").font(.headline)
+                        Label(draft.input.workflow.title, systemImage: "lightbulb").font(.headline)
                         Text("Shared Camp").foregroundStyle(campMuted)
                         Spacer()
                         Button { store.view = "Board" } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }.buttonStyle(.plain).help("Back to board").accessibilityLabel("Back to board")
@@ -147,11 +162,14 @@ struct SharedPlanningWorkspace: View {
                         Picker("Project", selection: Binding(get: { draft.input.projectId }, set: { value in planning.edit(id) { $0.projectId = value } })) { ForEach(store.cloud.projects) { Text($0.name).tag($0.id) } }.frame(maxWidth: 300)
                         Toggle("Share plan with Camp", isOn: Binding(get: { draft.input.shared }, set: { value in planning.edit(id) { $0.shared = value } })).toggleStyle(.checkbox)
                     }.disabled(planning.pending(id) || draft.restartPlanID != nil)
+                    Picker("Planning mode", selection: Binding(get: { draft.input.workflow }, set: { store.setSharedPlanMode(id, mode: $0) })) {
+                        ForEach(PlanningMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }.frame(maxWidth: 300).disabled(planning.pending(id))
                     Text("Choose shared sessions below. Each provider runs on its session owner's Mac, using that owner's login.").font(.system(size: 11)).foregroundStyle(campMuted)
                     HStack(alignment: .top, spacing: 12) {
-                        ForEach(0..<2) { slot in
+                        ForEach(draft.input.planners.indices, id: \.self) { slot in
                             VStack(alignment: .leading, spacing: 10) {
-                                let provider = slot == 0 ? "Codex" : "Claude"
+                                let provider = store.cloud.sessions.first { $0.id == draft.input.planners[slot].sessionId }?.provider ?? (slot == 0 ? "Codex" : "Claude")
                                 Label { Text(provider) } icon: { ProviderMark(provider: provider, size: 17) }.font(.headline)
                                 Picker("Session", selection: Binding(get: { draft.input.planners[slot].sessionId }, set: { value in
                                     if let source = store.cloud.sessions.first(where: { $0.id == value }) {
@@ -159,20 +177,20 @@ struct SharedPlanningWorkspace: View {
                                     }
                                 })) {
                                     Text("Choose a shared session").tag("")
-                                    ForEach(store.cloud.sessions.filter { $0.provider == provider && ($0.ownerUserId == store.cloud.scope?.userId || $0.allowRequests) }) { source in Text(source.title).tag(source.id) }
+                                    ForEach(store.cloud.sessions.filter { (draft.input.workflow == .single || $0.provider == provider) && ($0.ownerUserId == store.cloud.scope?.userId || $0.allowRequests) }) { source in Text(source.provider + " · " + source.title).tag(source.id) }
                                 }.disabled(planning.pending(id))
                                 SharedPlanningModelMenu(store: store, planning: planning, id: id, slot: slot)
                                 Spacer()
                             }.padding(14).frame(maxWidth: .infinity, maxHeight: .infinity).background(.white.opacity(0.55)).clipShape(RoundedRectangle(cornerRadius: 10))
                         }
                     }
-                    Picker("Combine with", selection: Binding(get: { draft.input.mergeSlot }, set: { value in planning.edit(id) { $0.mergeSlot = value } })) {
+                    if draft.input.workflow == .comparison { Picker("Combine with", selection: Binding(get: { draft.input.mergeSlot }, set: { value in planning.edit(id) { $0.mergeSlot = value } })) {
                         Text("Codex").tag(0); Text("Claude").tag(1)
-                    }.frame(maxWidth: 250).disabled(planning.pending(id))
-                    Toggle("Limit to five turns", isOn: Binding(get: { draft.input.budgetPolicy == "calls" }, set: { value in planning.edit(id) { $0.budgetPolicy = value ? "calls" : "strict_tokens" } })).toggleStyle(.checkbox).disabled(planning.pending(id))
+                    }.frame(maxWidth: 250).disabled(planning.pending(id)) }
+                    Toggle(draft.input.workflow.budgetLabel, isOn: Binding(get: { draft.input.budgetPolicy == "calls" }, set: { value in planning.edit(id) { $0.budgetPolicy = value ? "calls" : "strict_tokens" } })).toggleStyle(.checkbox).disabled(planning.pending(id))
                     if !planning.error.isEmpty { Text(planning.error).font(.caption).foregroundStyle(.orange) }
                     HStack {
-                        Text(planning.pending(id) ? "Waiting to sync" : "CLI token totals are reported when available; five turns is not a hard token or cost ceiling").font(.system(size: 10)).foregroundStyle(campMuted)
+                        Text(planning.pending(id) ? "Waiting to sync" : "CLI token totals are reported when available; the turn limit is not a hard token or cost ceiling").font(.system(size: 10)).foregroundStyle(campMuted)
                         Spacer()
                         Button("Cancel") { Task { await planning.cancelDraft(id) } }
                         Button("Start") { store.startSharedPlan(id) }.buttonStyle(.borderedProminent).tint(campGreen)

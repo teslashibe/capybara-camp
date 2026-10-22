@@ -4,7 +4,7 @@ Approved scope, October 21, 2026. These are implementation tickets; the publishe
 
 ## Delivery order
 
-1. [Fix live Codex state](https://github.com/teslashibe/capybara-camp/issues/9). The external observer currently queries Claude only. Cover external Codex, Camp-owned turns, approval waits, completion and reconnect without relying on transcript age
+1. [Fix live Codex state](https://github.com/teslashibe/capybara-camp/issues/9). The live Codex observer is implemented locally; finish approval-wait, terminal lifecycle and reconnect validation without relying on transcript age
 2. [Add client projects](https://github.com/teslashibe/capybara-camp/issues/10) and [permission controls](https://github.com/teslashibe/capybara-camp/issues/12). They can be developed independently
 3. Extend [planning](https://github.com/teslashibe/capybara-camp/issues/4) and add [GitHub workspaces](https://github.com/teslashibe/capybara-camp/issues/11), then integrate with [local/cloud execution](https://github.com/teslashibe/capybara-camp/issues/8)
 
@@ -37,7 +37,7 @@ This uses the existing Go service and runner. Self-hosters configure their own G
 
 Add a compact Permissions control to the existing card menu, chat and setup views. Persist the selection separately from the model. Show saved and effective policy, capability restrictions and any pending next-turn change. Preserve Inherit as the migration default.
 
-Codex has separate sandbox/profile, approval-policy and reviewer settings. Include supported read-only/workspace/full-access profiles, interactive or never-ask policy, and automatic review. The installed 0.163.0 CLI and [current docs](https://learn.chatgpt.com/docs/agent-approvals-security) retire explicit `untrusted`; replace the bridge's hard-coded use as part of this work. Named [permission profiles](https://learn.chatgpt.com/docs/permissions) must also respect managed restrictions.
+Codex has separate sandbox/profile, approval-policy and reviewer settings. Include supported read-only/workspace/full-access profiles, interactive or never-ask policy, and automatic review. The bridge now uses `on-request` with its read-only planning sandbox instead of hard-coding `untrusted`. The installed 0.163.0 CLI and [current docs](https://learn.chatgpt.com/docs/agent-approvals-security) define the remaining per-session controls. Named [permission profiles](https://learn.chatgpt.com/docs/permissions) must also respect managed restrictions.
 
 Claude's installed 2.1.306 CLI exposes Manual, acceptEdits, plan, auto, dontAsk and bypassPermissions. [Auto and bypass differ](https://code.claude.com/docs/en/permissions): auto evaluates actions, while dontAsk denies operations that would prompt. Availability and managed restrictions are provider-owned. Do not simulate an unavailable mode or assume bypass removes every user question.
 

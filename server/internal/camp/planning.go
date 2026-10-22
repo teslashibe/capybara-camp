@@ -31,6 +31,7 @@ type PlannerInput struct {
 	Speed     string `json:"speed"`
 }
 type PlanningInput struct {
+	Mode         string         `json:"mode,omitempty"`
 	Title        string         `json:"title"`
 	ProjectID    string         `json:"project_id"`
 	Brief        string         `json:"brief"`
@@ -60,6 +61,7 @@ type PlanningStep struct {
 	Usage     *PlanningUsage `json:"usage,omitempty"`
 }
 type PlanningVersion struct {
+	Mode         string         `json:"mode"`
 	Version      int64          `json:"version"`
 	State        string         `json:"state"`
 	Brief        string         `json:"brief"`
@@ -100,7 +102,16 @@ type planningStepLink struct {
 // session owner or permission revision requires a newly approved plan version.
 func (s *Store) preparePlanning(ctx context.Context, tx pgx.Tx, a auth.Actor, campID string, input PlanningInput) (PlanningVersion, error) {
 	input.Brief = strings.TrimSpace(input.Brief)
-	if len(input.Brief) == 0 || len(input.Brief) > 8192 || len(input.Planners) != 2 || len(input.Sources) > 20 || input.MergeSlot < 0 || input.MergeSlot > 1 {
+	if input.Mode == "" {
+		input.Mode = "comparison"
+	}
+	count, calls := 2, 5
+	if input.Mode == "single" {
+		count, calls = 1, 1
+	} else if input.Mode != "comparison" {
+		return PlanningVersion{}, ErrInput
+	}
+	if len(input.Brief) == 0 || len(input.Brief) > 8192 || len(input.Planners) != count || len(input.Sources) > 20 || input.MergeSlot < 0 || input.MergeSlot >= count {
 		return PlanningVersion{}, ErrInput
 	}
 	if input.BudgetPolicy == "" {
@@ -109,7 +120,7 @@ func (s *Store) preparePlanning(ctx context.Context, tx pgx.Tx, a auth.Actor, ca
 	if !oneOf(input.BudgetPolicy, "calls", "strict_tokens") {
 		return PlanningVersion{}, ErrInput
 	}
-	v := PlanningVersion{State: "draft", Brief: input.Brief, Sources: []SourceRef{}, BudgetPolicy: input.BudgetPolicy, CallLimit: 5, InputTarget: 40000, OutputTarget: 8000, MergeSlot: input.MergeSlot, Planners: []Planner{}, Steps: []PlanningStep{}}
+	v := PlanningVersion{Mode: input.Mode, State: "draft", Brief: input.Brief, Sources: []SourceRef{}, BudgetPolicy: input.BudgetPolicy, CallLimit: calls, InputTarget: 40000, OutputTarget: 8000, MergeSlot: input.MergeSlot, Planners: []Planner{}, Steps: []PlanningStep{}}
 	for slot, p := range input.Planners {
 		if p.Speed == "" {
 			p.Speed = "standard"
@@ -132,7 +143,7 @@ func (s *Store) preparePlanning(ctx context.Context, tx pgx.Tx, a auth.Actor, ca
 		}
 		v.Planners = append(v.Planners, Planner{PlannerInput: p, Slot: slot, Provider: session.Provider, ProfileID: session.ProfileID, OwnerUserID: session.OwnerUserID, OwnerDeviceID: session.OwnerDeviceID, PermissionRevision: session.PermissionRevision})
 	}
-	if v.Planners[0].Provider == v.Planners[1].Provider {
+	if count == 2 && v.Planners[0].Provider == v.Planners[1].Provider {
 		return v, ErrInput
 	}
 	seen := map[string]bool{}
@@ -168,7 +179,7 @@ func insertPlanningVersion(ctx context.Context, tx pgx.Tx, id string, v Planning
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO planning_versions(plan_id,version,state,brief,sources,budget_policy,merge_slot) VALUES($1,$2,$3,$4,$5,$6,$7)`, id, v.Version, v.State, v.Brief, source, v.BudgetPolicy, v.MergeSlot)
+	_, err = tx.Exec(ctx, `INSERT INTO planning_versions(plan_id,version,state,brief,sources,budget_policy,merge_slot,mode,call_limit) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, v.Version, v.State, v.Brief, source, v.BudgetPolicy, v.MergeSlot, v.Mode, v.CallLimit)
 	if err != nil {
 		return err
 	}
@@ -262,7 +273,7 @@ func (s *Store) loadPlanning(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 	}
 	v := PlanningVersion{Version: version, Planners: []Planner{}, Steps: []PlanningStep{}}
 	var sources []byte
-	err = tx.QueryRow(ctx, `SELECT state,brief,sources,budget_policy,call_limit,input_target,output_target,merge_slot FROM planning_versions WHERE plan_id=$1 AND version=$2`, id, version).Scan(&v.State, &v.Brief, &sources, &v.BudgetPolicy, &v.CallLimit, &v.InputTarget, &v.OutputTarget, &v.MergeSlot)
+	err = tx.QueryRow(ctx, `SELECT state,brief,sources,budget_policy,call_limit,input_target,output_target,merge_slot,mode FROM planning_versions WHERE plan_id=$1 AND version=$2`, id, version).Scan(&v.State, &v.Brief, &sources, &v.BudgetPolicy, &v.CallLimit, &v.InputTarget, &v.OutputTarget, &v.MergeSlot, &v.Mode)
 	if err != nil {
 		return p, accessError(err)
 	}
@@ -360,6 +371,7 @@ func (s *Store) planningOnce(ctx context.Context, a auth.Actor, campID, id strin
 }
 
 type PlanningSummary struct {
+	Mode          string    `json:"mode"`
 	ID            string    `json:"id"`
 	ProjectID     string    `json:"project_id"`
 	CreatorUserID string    `json:"creator_user_id"`
@@ -385,7 +397,7 @@ func (s *Store) listPlanningOnce(ctx context.Context, a auth.Actor, campID strin
 	if _, err = s.lock(ctx, tx, a, campID, false); err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(ctx, `SELECT p.id,p.project_id,p.creator_user_id,p.title,p.shared,p.revision,p.active_version,p.updated_at,
+	rows, err := tx.Query(ctx, `SELECT p.id,p.project_id,p.creator_user_id,p.title,p.shared,p.revision,p.active_version,p.updated_at,v.mode,
       CASE WHEN v.state IN ('running','paused') AND EXISTS(SELECT 1 FROM prompt_requests r WHERE r.plan_id=p.id AND r.plan_version=p.active_version AND r.state='outcome_unknown') THEN 'needs_review' ELSE v.state END,
       (SELECT count(*) FROM planning_steps x JOIN prompt_requests r ON r.id=x.request_id WHERE x.plan_id=p.id AND x.version=p.active_version AND r.state='completed')
       FROM planning_tickets p JOIN planning_versions v ON v.plan_id=p.id AND v.version=p.active_version
@@ -402,7 +414,7 @@ func (s *Store) listPlanningOnce(ctx context.Context, a auth.Actor, campID strin
 	for rows.Next() {
 		var p PlanningSummary
 		p.Planners = []Planner{}
-		if err = rows.Scan(&p.ID, &p.ProjectID, &p.CreatorUserID, &p.Title, &p.Shared, &p.Revision, &p.ActiveVersion, &p.UpdatedAt, &p.State, &p.Completed); err != nil {
+		if err = rows.Scan(&p.ID, &p.ProjectID, &p.CreatorUserID, &p.Title, &p.Shared, &p.Revision, &p.ActiveVersion, &p.UpdatedAt, &p.Mode, &p.State, &p.Completed); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -451,6 +463,9 @@ func planningStepRole(step, merge int) (int, string) {
 func planningPrompt(v PlanningVersion, ordinal int) string {
 	slot, phase := planningStepRole(ordinal, v.MergeSlot)
 	intro := "Plan the following feature. Do not execute project changes. Keep the response concise, under 900 words.\n\nBrief:\n" + v.Brief
+	if v.Mode == "single" {
+		return intro + "\n\nProduce one plan with scope, implementation steps, risks, acceptance tests, and open questions. Do not implement the plan."
+	}
 	output := map[int]string{}
 	for _, step := range v.Steps {
 		output[step.Ordinal] = step.Output
@@ -499,6 +514,16 @@ func (s *Store) advancePlanning(ctx context.Context, tx pgx.Tx, p PlanningTicket
 		steps[step.Ordinal] = step
 	}
 	next := []int{}
+	if p.Version.Mode == "single" {
+		if len(steps) == 0 {
+			return s.enqueuePlanningStep(ctx, tx, p, 0)
+		}
+		if steps[0].State == "completed" {
+			_, err := tx.Exec(ctx, `UPDATE planning_versions SET state='ready' WHERE plan_id=$1 AND version=$2`, p.ID, p.Version.Version)
+			return err
+		}
+		return nil
+	}
 	if len(steps) == 0 {
 		next = []int{0, 1}
 	} else if steps[0].State == "completed" && steps[1].State == "completed" {

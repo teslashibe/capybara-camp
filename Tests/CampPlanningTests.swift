@@ -28,7 +28,7 @@ actor SharedPlanFixture: CampPublishingTransport {
             creates += 1
             result = CloudPlanningResult(id: UUID().uuidString, title: input.title, projectId: input.projectId,
                 version: .init(version: 1, state: "running", brief: input.brief,
-                    planners: input.planners.enumerated().map { slot, p in .init(slot: slot, sessionId: p.sessionId, provider: slot == 0 ? "Codex" : "Claude", model: p.model, effort: p.effort, speed: p.speed) }, steps: [], sources: input.sources),
+                    planners: input.planners.enumerated().map { slot, p in .init(slot: slot, sessionId: p.sessionId, provider: slot == 0 ? "Codex" : "Claude", model: p.model, effort: p.effort, speed: p.speed) }, steps: [], sources: input.sources, mode: input.mode),
                 campId: scope.campId, creatorUserId: scope.userId, shared: input.shared, revision: 1, activeVersion: 1, updatedAt: Date())
         } else {
             let body = try JSONSerialization.jsonObject(with: op.body) as! [String: Any]
@@ -41,6 +41,8 @@ actor SharedPlanFixture: CampPublishingTransport {
                 let input = try CampWire.decoder().decode(CloudPlanningInput.self, from: JSONSerialization.data(withJSONObject: body["input"]!))
                 current.version.version += 1; current.activeVersion = current.version.version
                 current.version.state = "running"; current.version.brief = input.brief
+                current.version.mode = input.mode
+                current.version.planners = input.planners.enumerated().map { slot, p in .init(slot: slot, sessionId: p.sessionId, provider: slot == 0 ? "Codex" : "Claude", model: p.model, effort: p.effort, speed: p.speed) }
             default: throw CampCloudError.server(400, "invalid_input")
             }
             current.revision = (current.revision ?? 0) + 1; result = current
@@ -119,6 +121,24 @@ actor SharedPlanFixture: CampPublishingTransport {
         check(manager.detail(cancelled.id, version: 1)?.version.version == 1, "Cache eviction discarded a reopened historical version")
         check(try await cache.planning(scope).details.count == 100, "Planning history cache exceeded its bound")
 
+        let singleCache = try CampCache(directory: root.appendingPathComponent("single"))
+        let singleAPI = SharedPlanFixture(scope: scope)
+        let singleManager = CampPlanning(cache: singleCache)
+        singleManager.attach(scope: scope, actor: actor, transport: singleAPI, sessions: [sessions[0]])
+        try await eventually("Single planner cache did not open") { singleManager.ready }
+        var singleInput = input; singleInput.mode = .single; singleInput.planners = [input.planners[0]]
+        let singleID = try await singleManager.newDraft(input: singleInput)
+        await singleManager.start(singleID, sources: [])
+        try await eventually("One shared session could not start a single plan") { singleManager.tickets.count == 1 }
+        let singleResult = await singleAPI.snapshot().0!
+        check(singleResult.valid && singleResult.version.workflow == .single && singleResult.version.planners.count == 1)
+        check(singleManager.tickets[0].valid && singleManager.tickets[0].workflow == .single)
+        var bad = singleResult; bad.version.mode = .comparison
+        check(!bad.valid, "Comparison accepted a missing planner")
+        var claudeOnly = singleResult; claudeOnly.version.planners[0].provider = "Claude"
+        check(claudeOnly.valid, "Single planning incorrectly requires Codex")
+        singleManager.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+
         manager.attach(scope: nil, actor: nil, transport: nil, sessions: [])
         try await cache.clear(scope)
         check(try await cache.planning(scope).tickets.isEmpty, "Sign-out retained shared planning data")
@@ -126,6 +146,6 @@ actor SharedPlanFixture: CampPublishingTransport {
             try await cache.savePlanning(CampPlanningState(revision: 999), scope: scope, expectedEpoch: 0)
             preconditionFailure("Late response recreated a revoked plan cache")
         } catch {}
-        print("PASS: durable shared-plan creation, response-loss replay, queued cancellation, model settings, same-ticket restart and cache isolation")
+        print("PASS: single and comparison shared plans, response-loss replay, queued cancellation, same-ticket restart and cache isolation")
     }
 }

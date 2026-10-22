@@ -125,7 +125,44 @@ import Foundation
         precondition(store.sessions.contains { $0.id == created && $0.provider == "Planning" })
         store.setRecentType("Planning")
         precondition(store.recentSessions.map(\.id) == [created])
+        for (index, planner) in planners.enumerated() {
+            let singleTrace = root.appendingPathComponent("single-\(index)-trace")
+            let single = configured(root.appendingPathComponent("single-\(index)"), trace: singleTrace)
+            let singleID = single.create(planners: [planner], mode: .single)!
+            single.edit(singleID) { $0.brief = "One provider plan"; $0.budgetPolicy = "calls" }
+            single.start(singleID)
+            try await until { single.ticket(singleID)?.current.state == "ready" }
+            let ready = single.ticket(singleID)!
+            precondition(ready.current.steps.count == 1 && ready.current.completedCount == 1 && ready.current.workflow == .single)
+            let calls = try String(contentsOf: singleTrace, encoding: .utf8).split(separator: "\n")
+            precondition(calls.count == 1, "Single planning made an extra provider call")
+            let restoredSingle = configured(root.appendingPathComponent("single-\(index)"), trace: singleTrace)
+            precondition(restoredSingle.ticket(singleID) == ready)
+            let executor = planners[1-index]
+            single.configureExecutor(singleID, source: executor.session, model: executor.model, tuning: executor.tuning)
+            let choice = single.ticket(singleID)!.executorChoices![executor.session.id]!
+            let context = ExecutionContext(fingerprint: String(repeating: "a", count: 64), cwd: choice.session.cwd, profile: choice.session.root, provider: choice.session.provider, permissionSummary: "Fixture")
+            precondition(single.approveImplementation(singleID, expectedVersion: 1, executor: choice, context: context))
+            precondition(single.ticket(singleID)!.implementation!.initialPrompt.contains(ready.current.steps[0].output))
+            precondition(single.ticket(singleID)!.implementation!.executor.session.provider != planner.session.provider)
+            single.restart(singleID)
+            single.edit(singleID) { $0.mode = .comparison; $0.planners = planners }
+            precondition(single.ticket(singleID)!.current.workflow == .comparison)
+            precondition(single.ticket(singleID)!.versions[0].workflow == .single && single.ticket(singleID)!.versions[0].steps.count == 1)
+            single.start(singleID)
+            try await until { single.ticket(singleID)?.current.state == "ready" }
+            precondition(single.ticket(singleID)!.current.completedCount == 5 && single.ticket(singleID)!.versions[0].steps.count == 1)
+        }
+        // Missing mode in old data retains comparison behavior and its output.
+        let legacyFolder = root.appendingPathComponent("legacy")
+        try FileManager.default.createDirectory(at: legacyFolder, withIntermediateDirectories: true)
+        var legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode([engine.ticket(id)!])) as! [[String: Any]]
+        var versions = legacy[0]["versions"] as! [[String: Any]]
+        versions[0].removeValue(forKey: "mode"); legacy[0]["versions"] = versions
+        try JSONSerialization.data(withJSONObject: legacy).write(to: legacyFolder.appendingPathComponent("local-plans.json"))
+        let migrated = configured(legacyFolder, trace: trace)
+        precondition(migrated.ticket(id)?.current.workflow == .comparison && migrated.ticket(id)?.current.steps == result.steps)
         precondition(Bridge.activeProcesses.isEmpty)
-        print("PASS: five isolated planning turns, frozen settings, pause/resume, version fencing, usage, private persistence and unknown-outcome recovery")
+        print("PASS: single and comparison planning, independent implementation choice, preserved old history, settings, cancellation and recovery")
     }
 }

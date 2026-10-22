@@ -77,14 +77,14 @@ extension LocalPlanning {
     @discardableResult
     func approveImplementation(_ id: String, expectedVersion: Int, executor: LocalPlanner, context: ExecutionContext, reviewedUnknown: Bool = false) -> Bool {
         guard let plan = ticket(id), plan.current.number == expectedVersion, plan.current.state == "ready",
-              plan.current.completedCount == 5, plan.implementation?.active != true,
+              plan.current.completedCount == plan.current.workflow.turnLimit, plan.implementation?.active != true,
               plan.selectedExecutor == executor.session.id, plan.executorChoices?[executor.session.id] == executor,
               plan.implementation?.state != "needs_review" || reviewedUnknown,
               context.provider == executor.session.provider, context.fingerprint.count == 64,
               URL(fileURLWithPath: context.cwd).resolvingSymlinksInPath() == URL(fileURLWithPath: executor.session.cwd).resolvingSymlinksInPath(),
               URL(fileURLWithPath: context.profile).resolvingSymlinksInPath() == URL(fileURLWithPath: executor.session.root).resolvingSymlinksInPath() else { return false }
         let digest = (try? CampWire.encoder().encode(plan.current)).map(PublishMessage.hash) ?? ""
-        let combined = plan.current.steps.first { $0.phase == "combined" }!.output
+        guard let combined = plan.current.steps.first(where: { $0.ordinal == plan.current.workflow.resultOrdinal })?.output, !combined.isEmpty else { return false }
         let prompt = "Implement the approved plan, revision \(expectedVersion), in this project. Keep source references and report the changes and validation.\n\nBrief:\n\(plan.current.brief)\n\nApproved plan:\n\(combined)"
         let execution = LocalImplementation(id: UUID().uuidString, planVersion: expectedVersion, planDigest: digest,
             executor: executor, context: context, providerSessionID: UUID().uuidString, initialPrompt: prompt)

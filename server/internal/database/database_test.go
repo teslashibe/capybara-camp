@@ -67,6 +67,22 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if Ready(ctx, pool) == nil {
 		t.Fatal("old schema declared compatible")
 	}
+	if _, err = provider.UpTo(ctx, 6); err != nil {
+		t.Fatal(err)
+	}
+	camp, project, plan := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO camps(id,name) VALUES($1,'Migration fixture')`, camp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO projects(id,camp_id,name) VALUES($1,$2,'Preserved project')`, project, camp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO planning_tickets(id,camp_id,project_id,creator_user_id,title) VALUES($1,$2,$3,$4,'Saved plan')`, plan, camp, project, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO planning_versions(plan_id,version,state,brief,sources,budget_policy) VALUES($1,1,'ready','Retain the old comparison','[]','calls')`, plan); err != nil {
+		t.Fatal(err)
+	}
 	if err = Migrate(ctx, u.String()); err != nil {
 		t.Fatal(err)
 	}
@@ -79,5 +95,10 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	var name string
 	if err = pool.QueryRow(ctx, `SELECT display_name FROM users WHERE id=$1`, id).Scan(&name); err != nil || name != "Preserved user" {
 		t.Fatal("identity data lost", err)
+	}
+	var mode, brief string
+	var limit int
+	if err = pool.QueryRow(ctx, `SELECT mode,brief,call_limit FROM planning_versions WHERE plan_id=$1 AND version=1`, plan).Scan(&mode, &brief, &limit); err != nil || mode != "comparison" || limit != 5 || brief != "Retain the old comparison" {
+		t.Fatal("planning migration lost existing history", err)
 	}
 }

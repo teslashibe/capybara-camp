@@ -33,6 +33,11 @@ if action == 'scan':
 elif action == 'activity':
     sys.stdin.read()
     emit(dict(activity=[], sessions=[], errors={}, models={s['sourceID']: [dict(id=model, label=model, efforts=['low', 'medium', 'high'], speeds=['standard', 'fast'], defaultEffort='medium', showInPicker=True) for model in [s['model'], 'gpt-6-luna' if s['provider']=='Codex' else 'claude-sonnet-5']] for s in sessions()}))
+elif action == 'codex-activity-watch':
+    sys.stdin.readline()
+    emit(dict(activity=[], sessions=[], errors={}))
+    while True:
+        time.sleep(60)
 elif action == 'execution-context':
     request = json.load(sys.stdin)['session']
     emit(dict(fingerprint='a'*64, cwd=request['cwd'], profile=request['root'], provider=request['provider'], permissionSummary='Synthetic CLI rules'))
@@ -76,9 +81,11 @@ elif action == 'conversation':
     phase = 'Review' if 'Review the other proposal once' in prompt else 'Combined plan' if 'Produce one combined plan' in prompt else 'Independent plan'
     with (root / 'fixture-turns.jsonl').open('a') as output:
         output.write(json.dumps(dict(provider=provider, model=request['model'], phase=phase, context_count=len(request['context']))) + '\n')
+    single = 'Produce one plan with scope' in prompt
+    if single: phase = 'Plan'
     text = (phase + ' · ' + provider + '\n\n'
             '1. Keep one ticket with the complete planning history\n\n'
-            '2. Let both providers draft independently, then review each other\n\n'
+            + ('2. Run the selected planner once, then review its result\n\n' if single else '2. Let both providers draft independently, then review each other\n\n') +
             '3. Preserve source links and any unresolved decisions\n\n'
             '4. Ask for approval before implementation\n\n'
             'Synthetic provider response for native UI testing')

@@ -45,7 +45,11 @@ func createAndStartPlanning(t *testing.T, s *Store, a auth.Actor, c Camp, input 
 }
 func claimPlanning(t *testing.T, s *Store, a auth.Actor, c Camp, input PlanningInput) *Request {
 	t.Helper()
-	r, err := s.ClaimPlanningRequest(context.Background(), a, c.ID, uuid.NewString(), []string{input.Planners[0].SessionID, input.Planners[1].SessionID})
+	ids := []string{}
+	for _, planner := range input.Planners {
+		ids = append(ids, planner.SessionID)
+	}
+	r, err := s.ClaimPlanningRequest(context.Background(), a, c.ID, uuid.NewString(), ids)
 	if err != nil {
 		t.Fatal(err)
 	}

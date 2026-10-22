@@ -30,9 +30,12 @@ class PlanningTests(unittest.TestCase):
         self.assertNotIn('thread/resume', [method for method, _ in c.calls])
         params = next(params for method, params in c.calls if method == 'thread/start')
         self.assertTrue(params['ephemeral'])
+        self.assertEqual(params['sandbox'], 'read-only')
+        self.assertEqual(params['approvalPolicy'], 'on-request')
         self.assertNotIn('threadId', params)
         turn = next(params for method, params in c.calls if method == 'turn/start')
         self.assertEqual(turn['threadId'], 'isolated')
+        self.assertEqual(turn['approvalPolicy'], 'on-request')
         self.assertEqual(events[-1]['type'], 'done')
 
     def test_claude_planning_does_not_resume_or_persist(self):

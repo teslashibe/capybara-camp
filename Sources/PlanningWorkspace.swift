@@ -13,13 +13,29 @@ extension CampStore {
         var seen = Set<String>()
         return sessions.filter { $0.provider == provider && !$0.isCloud && !$0.isPlan && !$0.root.isEmpty && seen.insert($0.sourceID).inserted }
     }
-    func newPlan() {
-        let peers = ["Codex", "Claude"].compactMap { provider -> LocalPlanner? in
+    func newPlan(mode: PlanningMode = .single) {
+        let preferred = selected.flatMap { ["Codex", "Claude"].contains($0.provider) ? $0.provider : nil } ?? (planningProfiles("Codex").isEmpty ? "Claude" : "Codex")
+        let peers = (mode == .single ? [preferred] : ["Codex", "Claude"]).compactMap { provider -> LocalPlanner? in
             guard let source = planningProfiles(provider).first else { return nil }
             return LocalPlanner(session: source, model: effectiveModel(source), tuning: tuning(source))
         }
-        if let id = planning.create(planners: peers), let plan = planning.ticket(id) { open(plan.session) }
+        if let id = planning.create(planners: peers, mode: mode), let plan = planning.ticket(id) { open(plan.session) }
         else { banner = planning.error }
+    }
+    func setPlanMode(_ id: String, mode: PlanningMode) {
+        guard let version = planning.ticket(id)?.current, version.editable else { return }
+        let providers = mode == .single ? [version.planners[0].session.provider] : ["Codex", "Claude"]
+        let peers = providers.compactMap { provider -> LocalPlanner? in
+            if let old = version.planners.first(where: { $0.session.provider == provider }) { return old }
+            guard let source = planningProfiles(provider).first else { return nil }
+            return LocalPlanner(session: source, model: effectiveModel(source), tuning: tuning(source))
+        }
+        guard mode.accepts(peers.map { $0.session.provider }) else { banner = "Add a Codex and Claude profile to compare plans"; return }
+        planning.edit(id) { $0.mode = mode; $0.planners = peers; $0.mergeSlot = 0 }
+    }
+    func setPlanProvider(_ id: String, provider: String) {
+        guard let source = planningProfiles(provider).first else { return }
+        planning.edit(id) { $0.planners[0] = LocalPlanner(session: source, model: effectiveModel(source), tuning: tuning(source)) }
     }
     func planModel(_ id: String, slot: Int, model: String) {
         planning.edit(id) { v in
@@ -78,15 +94,15 @@ struct PlanningCard: View {
                         Text(plan.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading)
                             .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34, alignment: .topLeading)
                         Label(plan.session.project, systemImage: "folder").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
-                        HStack { Text("Plan together"); Spacer(); Text(Date(timeIntervalSince1970: plan.updated), style: .relative) }.font(.system(size: 9)).foregroundStyle(campMuted)
+                        HStack { Text(plan.current.workflow.title); Spacer(); Text(Date(timeIntervalSince1970: plan.updated), style: .relative) }.font(.system(size: 9)).foregroundStyle(campMuted)
                     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain)
                 Divider().overlay(campInk.opacity(0.04))
-                ForEach(0..<2) { slot in PlanningModelMenu(store: store, id: id, version: plan.current, slot: slot) }
+                ForEach(plan.current.planners.indices, id: \.self) { slot in PlanningModelMenu(store: store, id: id, version: plan.current, slot: slot) }
                 Spacer(minLength: 0)
                 HStack(spacing: 6) {
                     if plan.current.state == "running" { ProgressView().controlSize(.mini).frame(width: 12, height: 12) }
-                    Text(plan.current.state == "ready" ? "Plan ready to review" : "\(plan.current.completedCount) of 5 · \(plan.current.state.replacingOccurrences(of: "_", with: " "))")
+                    Text(plan.current.state == "ready" ? "Plan ready to review" : "\(plan.current.completedCount) of \(plan.current.workflow.turnLimit) · \(plan.current.state.replacingOccurrences(of: "_", with: " "))")
                         .font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
                     Spacer()
                     Button { store.open(plan.session) } label: { Image(systemName: "chevron.right").frame(width: 28, height: 28) }
@@ -113,9 +129,9 @@ struct PlanningWorkspace: View {
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Planning", systemImage: "lightbulb").font(.system(size: 12, weight: .medium)).padding(.horizontal, 16).padding(.top, 10)
-                    ForEach(["Plans", "Reviews", "Combined plan", "Implementation", "History"], id: \.self) { value in
+                    ForEach(plan.current.workflow == .single ? ["Plans", "Implementation", "History"] : ["Plans", "Reviews", "Combined plan", "Implementation", "History"], id: \.self) { value in
                         Button { section = value } label: {
-                            Label(value, systemImage: value == "History" ? "clock.arrow.circlepath" : value == "Combined plan" ? "doc.text" : "bubble.left.and.bubble.right")
+                            Label(value == "Plans" && plan.current.workflow == .single ? "Plan" : value, systemImage: value == "History" ? "clock.arrow.circlepath" : value == "Combined plan" ? "doc.text" : "bubble.left.and.bubble.right")
                                 .font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading).padding(10)
                                 .background(section == value ? campGreen.opacity(0.10) : .clear).clipShape(RoundedRectangle(cornerRadius: 8))
                         }.buttonStyle(.plain).padding(.horizontal, 10)
@@ -126,8 +142,8 @@ struct PlanningWorkspace: View {
                 Rectangle().fill(campInk.opacity(0.08)).frame(width: 1)
                 VStack(spacing: 0) {
                     HStack {
-                        Label("Plan together", systemImage: "lightbulb").font(.system(size: 13, weight: .medium))
-                        Text("\(plan.current.completedCount) of 5 turns").font(.system(size: 11)).foregroundStyle(campMuted)
+                        Label(plan.current.workflow.title, systemImage: "lightbulb").font(.system(size: 13, weight: .medium))
+                        Text("\(plan.current.completedCount) of \(plan.current.workflow.turnLimit) \(plan.current.workflow == .single ? "turn" : "turns")").font(.system(size: 11)).foregroundStyle(campMuted)
                         Spacer()
                         Button {
                             if plan.current.state == "needs_review" && !reviewedUnknown { section = "History" }
@@ -142,9 +158,12 @@ struct PlanningWorkspace: View {
                             TextEditor(text: $brief).font(.system(size: 13)).scrollContentBackground(.hidden).frame(height: 75)
                                 .padding(8).background(.white).clipShape(RoundedRectangle(cornerRadius: 8)).accessibilityLabel("Planning brief")
                             SessionContextComposer(store: store, mentions: store.mentions, destination: plan.session)
-                            Picker("Combine with", selection: Binding(get: { plan.current.mergeSlot }, set: { slot in planning.edit(id) { $0.mergeSlot = slot } })) {
+                            Picker("Planning mode", selection: Binding(get: { plan.current.workflow }, set: { store.setPlanMode(id, mode: $0) })) {
+                                ForEach(PlanningMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                            }.frame(maxWidth: 300)
+                            if plan.current.workflow == .comparison { Picker("Combine with", selection: Binding(get: { plan.current.mergeSlot }, set: { slot in planning.edit(id) { $0.mergeSlot = slot } })) {
                                 ForEach(0..<2) { slot in Text(plan.current.planners[slot].session.provider).tag(slot) }
-                            }.font(.system(size: 11)).frame(maxWidth: 240)
+                            }.font(.system(size: 11)).frame(maxWidth: 240) }
                         }.padding(.horizontal, 22).padding(.bottom, 12)
                     } else {
                         Text(plan.current.brief).font(.system(size: 12)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.bottom, 10)
@@ -171,15 +190,15 @@ struct PlanningWorkspace: View {
                     else if section == "History" { history(plan) }
                     else {
                         HStack(alignment: .top, spacing: 12) {
-                            ForEach(0..<2) { slot in pane(plan, slot: slot) }
+                            ForEach(plan.current.planners.indices, id: \.self) { slot in pane(plan, slot: slot) }
                         }.padding(.horizontal, 22)
                     }
                     footer(plan)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .task(id: "\(id):\(plan.current.number):\(store.notificationPlanVersion ?? 0)") {
+            .task(id: "\(id):\(plan.current.number):\(plan.current.workflow.rawValue):\(store.notificationPlanVersion ?? 0)") {
                 brief = plan.current.brief
-                section = store.notificationPlanVersion.map { $0 == plan.current.number ? "Combined plan" : "History" } ?? "Plans"
+                section = store.notificationPlanVersion.map { $0 == plan.current.number ? (plan.current.workflow == .single ? "Plans" : "Combined plan") : "History" } ?? "Plans"
                 if let version = store.notificationPlanVersion { expandedVersions.insert(version) }
                 reviewedUnknown = false
                 profiles = ["Codex": store.planningProfiles("Codex"), "Claude": store.planningProfiles("Claude")]
@@ -201,6 +220,11 @@ struct PlanningWorkspace: View {
         return VStack(alignment: .leading, spacing: 10) {
             HStack { ProviderMark(provider: planner.session.provider, size: 17); Text(planner.session.provider).font(.system(size: 13, weight: .medium)); Spacer(); Text("This Mac").font(.system(size: 10)).foregroundStyle(campMuted) }
             if version.editable {
+                if version.workflow == .single {
+                    Picker("Provider", selection: Binding(get: { planner.session.provider }, set: { store.setPlanProvider(id, provider: $0) })) {
+                        ForEach(["Codex", "Claude"].filter { !(profiles[$0] ?? []).isEmpty }, id: \.self) { Text($0).tag($0) }
+                    }.font(.system(size: 11))
+                }
                 Picker("Profile", selection: Binding(get: { planner.session.id }, set: { value in
                     if let source = profiles[planner.session.provider]?.first(where: { $0.id == value }) {
                         planning.edit(id) { $0.planners[slot] = LocalPlanner(session: source, model: store.effectiveModel(source), tuning: store.tuning(source)) }
@@ -230,7 +254,7 @@ struct PlanningWorkspace: View {
     private func output(_ plan: LocalPlan, version: LocalPlanVersion, step: LocalPlanStep) -> some View {
         let live = planning.liveText(id, version: version.number, ordinal: step.ordinal)
         return VStack(alignment: .leading, spacing: 8) {
-            HStack { Text(step.phase == "draft" ? "Independent plan" : step.phase == "review" ? "Review" : "Combined plan").font(.system(size: 12, weight: .medium)); Spacer(); if ["starting", "running"].contains(step.state) { ProgressView().controlSize(.mini) } }
+            HStack { Text(version.workflow == .single ? "Plan" : step.phase == "draft" ? "Independent plan" : step.phase == "review" ? "Review" : "Combined plan").font(.system(size: 12, weight: .medium)); Spacer(); if ["starting", "running"].contains(step.state) { ProgressView().controlSize(.mini) } }
             if !step.output.isEmpty || !live.isEmpty { MessageView(message: Message(id: "\(version.number):\(step.ordinal)", role: "assistant", text: step.output.isEmpty ? live : step.output)) }
             else { Text(step.state == "pending" ? "Waiting" : step.state.replacingOccurrences(of: "_", with: " ").capitalized).font(.system(size: 11)).foregroundStyle(campMuted) }
             if !step.error.isEmpty { Text(step.error).font(.system(size: 11)).foregroundStyle(.orange) }
@@ -243,12 +267,15 @@ struct PlanningWorkspace: View {
                 if let step = plan.current.steps.first(where: { $0.phase == "combined" }) { output(plan, version: plan.current, step: step) }
                 else { Text("The combined plan follows both drafts and reviews").foregroundStyle(campMuted) }
                 if plan.current.state == "ready" {
-                    Button(plan.implementation == nil ? "Continue to implementation" : "Open implementation") {
-                        if plan.implementation == nil { section = "Implementation" } else { store.reviewingPlan = nil }
-                    }.buttonStyle(.borderedProminent).tint(campGreen)
+                    implementationLink(plan)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading).padding(22)
         }
+    }
+    private func implementationLink(_ plan: LocalPlan) -> some View {
+        Button(plan.implementation == nil ? "Continue to implementation" : "Open implementation") {
+            if plan.implementation == nil { section = "Implementation" } else { store.reviewingPlan = nil }
+        }.buttonStyle(.borderedProminent).tint(campGreen)
     }
     private func history(_ plan: LocalPlan) -> some View {
         ScrollView {
@@ -279,10 +306,13 @@ struct PlanningWorkspace: View {
             }
             HStack {
                 if plan.current.editable {
-                    Toggle("Limit to five turns", isOn: Binding(get: { plan.current.budgetPolicy == "calls" }, set: { value in planning.edit(id) { $0.budgetPolicy = value ? "calls" : "strict_tokens" } }))
+                    Toggle(plan.current.workflow.budgetLabel, isOn: Binding(get: { plan.current.budgetPolicy == "calls" }, set: { value in planning.edit(id) { $0.budgetPolicy = value ? "calls" : "strict_tokens" } }))
                         .toggleStyle(.checkbox).font(.system(size: 11))
                 } else { Text(plan.current.state == "running" ? "Planning continues while you browse" : plan.current.state.replacingOccurrences(of: "_", with: " ").capitalized).font(.system(size: 11)).foregroundStyle(campMuted) }
                 Spacer()
+                if plan.current.state == "ready" && plan.current.workflow == .single && section == "Plans" {
+                    implementationLink(plan)
+                }
                 if plan.current.editable || plan.current.state == "paused" {
                     Button(plan.current.state == "paused" ? "Resume" : "Start") {
                         saveTask?.cancel()
@@ -293,7 +323,7 @@ struct PlanningWorkspace: View {
                 if plan.current.state == "running" { Button("Pause") { planning.pause(id) } }
                 if ["running", "paused"].contains(plan.current.state) { Button("Cancel", role: .destructive) { planning.cancel(id) } }
             }
-            Text("CLI token totals are reported when available; five turns is not a hard token or cost ceiling").font(.system(size: 10)).foregroundStyle(campMuted)
+            Text("CLI token totals are reported when available; the turn limit is not a hard token or cost ceiling").font(.system(size: 10)).foregroundStyle(campMuted)
         }.padding(22)
     }
 }

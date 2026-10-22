@@ -1,8 +1,8 @@
 # Planning workflow
 
-The next iteration adds a single-model Plan path alongside Plan with comparison. See [Iteration 2](iteration-2.md); the implementation described below currently uses the two-provider workflow.
+The V1 development app offers **Plan** for one model and **Plan with comparison** for two providers. Both keep their board ticket, version history, context and model settings. A single plan makes one bounded planning turn; comparison makes two independent drafts, two reviews and a combined plan.
 
-The V1 development server has a durable five-step planning queue. The Mac app
+The V1 development server has a durable planning queue for both modes. The Mac app
 also has a private local planning coordinator and paired-chat workspace. Local
 plans persist on the owning Mac and use isolated official CLI turns. The native
 workspace also creates and controls shared planning tickets. The owner-Mac
@@ -24,16 +24,14 @@ restart. A failed save prevents new provider work. Streaming text updates only
 the open planning workspace; board updates occur at state transitions.
 
 One ticket retains every plan version. A version freezes its brief, selected
-source message ranges, two provider profiles, model/effort/speed settings and
-merge provider. Each provider drafts independently, reviews the other draft
-once, and one produces the combined plan. The combined-plan prompt explicitly
+source message ranges, its planning mode, provider profiles and model/effort/speed settings. Comparison also freezes its combining provider. In comparison mode, each provider drafts independently, reviews the other draft once, and one produces the combined plan. The combined-plan prompt explicitly
 retains unresolved disagreements.
 
 ## Local implementation
 
-The combined plan opens an implementation setup step in the same workspace.
+The completed plan opens an implementation setup step in the same workspace.
 Choose an executor profile, model, effort and supported speed independently of
-the two planners. Selecting a different profile retains the plan's original
+the planner or planners. Selecting a different profile retains the plan's original
 project directory. Approve and implement freezes the plan revision, executor and
 local CLI configuration snapshot, then creates a persistent provider session.
 
@@ -63,20 +61,17 @@ brief and bounds visible output to 8 KiB per step.
 
 ## Shared planning in the native app
 
-Use the Plan together menu's In shared Camp action to create a saved draft.
-Choose two already-shared source sessions, their model/effort/speed settings,
-the combining provider and any pinned message ranges. Only the selected
+Use the Plan menu's shared Camp actions to create a saved draft. Choose one already-shared source session for Plan, or two for comparison, then select model/effort/speed settings and pinned message ranges. Comparison also selects the combining provider. Only the selected
 session owner's Mac runs its turns, using that owner's local profile. Plans
 are private by default; publishing a shared plan requires accessible shared
 sources. Camp does not upload private source sessions implicitly.
 
-Start atomically saves the version and queues its first two turns. The Mac
+Start atomically saves the version and queues its single turn or first two comparison turns. The Mac
 persists commands before sending them and reuses their idempotency keys after
 a lost reply. A cancellation made while creation is pending binds to that
 created version. It cannot cancel a later version of the same ticket.
 
-The draft becomes one board card and opens both provider chats in the main
-workspace. Pause and resume control subsequent claims; an in-flight turn can
+The draft becomes one board card and opens one chat for Plan or both provider chats for comparison in the main workspace. Pause and resume control subsequent claims; an in-flight turn can
 finish after a pause. Planning events wake idle workers when a plan resumes.
 Start over retains the ticket, prior versions, pinned context and settings.
 History and source links remain accessible subject to current permissions.
@@ -89,16 +84,16 @@ support both live output and approved implementation on the same ticket.
 
 At most one planning step per provider can be leased to a device, including
 across different tickets and profiles. The two providers may run concurrently.
-The five-step limit bounds durable planning-turn requests, not a provider's
+The one- or five-step limit bounds durable planning-turn requests, not a provider's
 internal network retries or tool-related model calls. Reported token usage is
 preserved when available; missing usage is not reported as zero.
 
 The initial API defaults to strict token ceilings and refuses to start because
 these CLI adapters cannot guarantee those ceilings. Explicit `budget_policy:
-"calls"` enables the five-step workflow with 40,000 input and 8,000 output token
+"calls"` enables the bounded workflow with 40,000 input and 8,000 output token
 targets for reporting only. The release default is awaiting the owner's budget
 choice; these targets must not be described as enforced caps. The native
-workspace requires an explicit five-turn selection and leaves it off by default.
+workspace requires an explicit one- or five-turn selection and leaves it off by default.
 
 Pause prevents another claim or start. Cancellation requests stop active work
 and fences queued steps. Restart creates a new immutable version under the same
@@ -116,6 +111,7 @@ respect the same plan visibility as reads.
 ## API
 
 - `POST /v1/camps/{camp}/planning` creates a draft with an idempotency key;
+  `mode: "single"` selects one planner/turn; `mode: "comparison"` selects two planners/five turns; omission retains comparison for existing clients
   `start: true` also queues the first turns in that transaction
 - `GET /v1/camps/{camp}/planning` returns bounded board summaries
 - `GET /v1/camps/{camp}/planning/{plan}?version=N` reads one saved version
@@ -128,14 +124,14 @@ respect the same plan visibility as reads.
 - Existing request actions acknowledge start, heartbeat, finish and reconciliation
 
 Planning tables were introduced in schema 5; the current server requires schema
-6, including recipient notifications. Older request receipts and session
+7, including recipient notifications and planning mode. Migration 7 retains existing versions as comparison plans with five turns. Deploy the migrated server and updated native client before creating single plans; older clients cannot display those plans. Older request receipts and session
 history are retained. Run migrations before the new server. The public deployment templates use the
 same image for the migration job and API.
 
-Tests cover the five-step sequence, preserved output/settings, private events,
+Tests cover single-turn completion, conversion to a comparison version without changing earlier history, the five-step sequence, preserved output/settings, private events,
 strict-budget refusal, cancellation, paused claims, version restart, late
 completion, source revocation, unknown-outcome recovery and provider concurrency.
-Native tests exercise isolated mode, five-step ordering, independent settings,
+Native tests exercise either provider as the sole planner, independent executor selection from a single plan, old history without a mode field, isolated mode, five-step ordering, independent settings,
 pause/resume, preserved restart history, unknown-outcome recovery, bounded
 outputs and usage parsing. Computer-use checks use a clearly synthetic provider
 fixture in a disposable development app; they do not prove actual provider
@@ -156,3 +152,7 @@ step. The shared workspace walkthrough also creates a plan, pins a message,
 selects model settings, restarts on the same ticket and pauses/resumes it.
 Snapshot reads retry a concurrent database update at most
 three times; those retries never repeat provider work or mutation commands.
+
+The October 21 single-planning check also ran a real ephemeral Codex turn, received streamed output and completion, and confirmed that the temporary project was unchanged. A live Claude attempt returned the provider's weekly-limit error; successful real Claude execution remains a release gate. The bridge uses the current `on-request` approval policy with its existing read-only planning sandbox. Session permission controls remain separate work.
+
+The native single-plan walkthrough used a synthetic Claude turn, pinned Codex context, and a separately selected Codex implementation model. It completed one planning turn, approved one fixture file change, then restarted the same ticket in comparison mode. The saved ticket retained its one-turn first version, five-turn second version, matching context and completed implementation history. Shared single-planning creation, persistence and one-turn completion pass the native unit and real-PostgreSQL suites; a live multi-device walkthrough is still required.

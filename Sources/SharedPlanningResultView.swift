@@ -10,7 +10,7 @@ struct SharedPlanningResultView: View {
             Divider()
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Label("Plan together", systemImage: "lightbulb").font(.headline)
+                    Label(result.version.workflow.title, systemImage: "lightbulb").font(.headline)
                     Text("Version \(result.version.version)").foregroundStyle(campMuted)
                     Spacer()
                     if let maxVersion = result.activeVersion {
@@ -42,9 +42,9 @@ struct SharedPlanningResultView: View {
                         }
                     } }
                 }
-                Picker("View", selection: $section) {
+                if result.version.workflow == .comparison { Picker("View", selection: $section) {
                     ForEach(["Plans", "Reviews", "Combined plan"], id: \.self) { Text($0).tag($0) }
-                }.pickerStyle(.segmented).frame(maxWidth: 400)
+                }.pickerStyle(.segmented).frame(maxWidth: 400) }
                 if section == "Combined plan" {
                     resultMessages(result.version.steps.filter { $0.phase == "merge" })
                 } else {
@@ -62,7 +62,7 @@ struct SharedPlanningResultView: View {
                     }
                 }
                 HStack {
-                    Text("\(result.version.steps.filter { $0.state == "completed" }.count) of 5 · \(result.version.state.replacingOccurrences(of: "_", with: " "))").font(.system(size: 11)).foregroundStyle(campMuted)
+                    Text("\(result.version.steps.filter { $0.state == "completed" }.count) of \(result.version.workflow.turnLimit) · \(result.version.state.replacingOccurrences(of: "_", with: " "))").font(.system(size: 11)).foregroundStyle(campMuted)
                     Spacer()
                     if result.creatorUserId == store.cloud.scope?.userId {
                         if result.version.state == "running" { Button("Pause") { Task { await store.sharedPlanning.act("pause", on: result) } } }
@@ -73,7 +73,8 @@ struct SharedPlanningResultView: View {
                 }.disabled(store.sharedPlanning.pending(result.id))
                 if !store.sharedPlanning.error.isEmpty { Text(store.sharedPlanning.error).font(.caption).foregroundStyle(.orange) }
             }.padding(22).frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.onAppear { if store.notificationPlanVersion != nil { section = "Combined plan" } }
+        }.onAppear { if store.notificationPlanVersion != nil && result.version.workflow == .comparison { section = "Combined plan" } }
+            .onChange(of: result.version.workflow) { _, _ in section = "Plans" }
     }
     private func resultMessages(_ steps: [CloudPlanningResult.Step]) -> some View {
         ScrollViewReader { proxy in

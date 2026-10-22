@@ -1200,9 +1200,12 @@ struct RootView: View {
                 VStack(alignment: .leading, spacing: 5) { Text(store.view == "Board" ? "Your Camp for big ideas" : store.sharedPlanResult?.title ?? store.selected?.title ?? "Choose a session").font(.system(size: 23, weight: .semibold)).lineLimit(1); Text(store.view == "Board" ? "\(store.filtered.count.formatted()) \(store.filtered.count == 1 ? "session" : "sessions") · Pick up where you left off" : store.sharedPlanResult != nil ? "Planning · Shared Camp" : "\(store.selected?.provider ?? "") · \(store.selected?.project ?? "")").font(.system(size: 12)).foregroundStyle(campMuted) }
                 Spacer()
                 Menu {
-                    Button("On this Mac", systemImage: "desktopcomputer") { store.newPlan() }
-                    Button("In shared Camp", systemImage: "person.2") { store.newSharedPlan() }.disabled(!store.sharedPlanning.ready || store.cloud.projects.isEmpty)
-                } label: { Text("Plan together") } primaryAction: { store.newPlan() }
+                    Button("Plan on this Mac", systemImage: "lightbulb") { store.newPlan(mode: .single) }
+                    Button("Plan with comparison", systemImage: "bubble.left.and.bubble.right") { store.newPlan(mode: .comparison) }
+                    Divider()
+                    Button("Plan in shared Camp", systemImage: "person.2") { store.newSharedPlan(mode: .single) }.disabled(!store.sharedPlanning.ready || store.cloud.projects.isEmpty)
+                    Button("Compare in shared Camp", systemImage: "person.2") { store.newSharedPlan(mode: .comparison) }.disabled(!store.sharedPlanning.ready || store.cloud.projects.isEmpty)
+                } label: { Text("Plan") } primaryAction: { store.newPlan(mode: .single) }
                 CampConnectionButton(cloud: store.cloud) { showCamp = true }
                 CampNotificationButton(notices: store.notifications) { store.notificationSheet = true }
             }
