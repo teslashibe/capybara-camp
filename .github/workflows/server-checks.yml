@@ -3,6 +3,24 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  process-isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Enforce Linux process isolation
+        run: ./tools/test-processguard.sh
+      - name: Build installed provider image
+        run: docker build -f server/Dockerfile.runner -t capybara-runner:guard-test .
+      - name: Check installed providers inside the boundary
+        working-directory: server
+        env:
+          CAMP_RUNNER_IMAGE_TEST: capybara-runner:guard-test
+        run: go test ./internal/provisioner -run TestRunnerImageProcessGuard -count=1 -v
   postgres:
     runs-on: ubuntu-latest
     timeout-minutes: 15

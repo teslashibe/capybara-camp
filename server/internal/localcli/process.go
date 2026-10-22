@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/teslashibe/capybara-camp/server/internal/processguard"
 )
 
 // Every invocation chooses one profile. Ambient credentials and tuning must
@@ -49,6 +51,13 @@ func (a *App) runtimeEnvironment(s Session) []string {
 		result = append(result, key+"="+env[key])
 	}
 	return result
+}
+
+func (a *App) providerCommand(path string, args []string, cwd string, write bool) (string, []string, error) {
+	if !a.confined {
+		return path, args[1:], nil
+	}
+	return processguard.Wrap(path, args, processguard.Policy{Home: a.Config.Home, Workspace: cwd, WriteWorkspace: write})
 }
 
 func executable(name string, env []string) (string, error) {
@@ -119,7 +128,11 @@ func (a *App) probeAt(ctx context.Context, s Session, args []string, timeout tim
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	command := exec.CommandContext(ctx, path, args[1:]...)
+	path, commandArgs, err := a.providerCommand(path, args, cwd, false)
+	if err != nil {
+		return nil, err
+	}
+	command := exec.CommandContext(ctx, path, commandArgs...)
 	command.Env = env
 	command.Dir = cwd
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

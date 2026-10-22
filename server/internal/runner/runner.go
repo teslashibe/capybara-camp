@@ -13,6 +13,7 @@ import (
 	"github.com/teslashibe/capybara-camp/server/internal/camp"
 	"github.com/teslashibe/capybara-camp/server/internal/config"
 	"github.com/teslashibe/capybara-camp/server/internal/localcli"
+	"github.com/teslashibe/capybara-camp/server/internal/processguard"
 )
 
 type loginFunc func(context.Context, string, string, func(localcli.ProviderLoginChallenge) error, <-chan string) (localcli.ProviderLoginResult, error)
@@ -26,6 +27,7 @@ type Worker struct {
 	login          loginFunc
 	interval       time.Duration
 	environment    []string
+	guarded        bool
 }
 
 func New(cfg config.Runner, transport *http.Client) (*Worker, error) {
@@ -70,14 +72,21 @@ func New(cfg config.Runner, transport *http.Client) (*Worker, error) {
 	copyClient := *transport
 	copyClient.Timeout = 40 * time.Second
 	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	adapter := localcli.New(config.Local{Environment: cfg.Environment})
-	w := &Worker{stateDir: cfg.StateDir, client: &client{origin: cfg.Origin, token: token, http: &copyClient}, journal: j, login: adapter.LoginProvider, interval: 2 * time.Second, environment: append([]string{}, cfg.Environment...)}
+	w := &Worker{stateDir: cfg.StateDir, client: &client{origin: cfg.Origin, token: token, http: &copyClient}, journal: j, interval: 2 * time.Second, environment: append([]string{}, cfg.Environment...), guarded: true}
+	w.login = func(ctx context.Context, provider, base string, challenge func(localcli.ProviderLoginChallenge) error, codes <-chan string) (localcli.ProviderLoginResult, error) {
+		adapter := localcli.New(config.Local{Environment: w.environment})
+		if w.guarded {
+			adapter = localcli.NewConfined(config.Local{Environment: w.environment})
+		}
+		return adapter.LoginProvider(ctx, provider, base, challenge, codes)
+	}
 	if cfg.WorkspaceDir != "" {
 		w.checkout, err = openCheckout(cfg.WorkspaceDir)
 		if err != nil {
 			j.close()
 			return nil, err
 		}
+		w.checkout.guarded = true
 	}
 	return w, nil
 }
@@ -93,6 +102,11 @@ func (w *Worker) Close() {
 // children before restarting a worker. A started journal never launches again;
 // it fails the interrupted attempt unless its final proof was already saved.
 func (w *Worker) Run(ctx context.Context) error {
+	if w.guarded {
+		if err := processguard.Available(); err != nil {
+			return err
+		}
+	}
 	r, err := w.journal.load()
 	if err != nil {
 		return err

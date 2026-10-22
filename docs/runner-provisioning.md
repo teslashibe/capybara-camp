@@ -80,6 +80,14 @@ that runtime first; the controller does not fall back to the default runtime.
 See the [gVisor Kubernetes guide](https://gvisor.dev/docs/user_guide/quick_start/kubernetes/)
 and [K3s runtime configuration](https://docs.k3s.io/advanced) for node setup.
 
+The runtime must also enforce Landlock ABI 6 or later inside the container.
+Workers refuse to start without it. Check the actual runtime with
+`/camp-runner process-guard-check` and the tests in
+[process isolation](process-isolation.md); host kernel support alone is not
+enough for a user-space kernel. Provider and Git subprocesses cannot read the
+worker's account grant or control files. This requirement has been tested
+locally in Docker and still needs validation on the chosen cluster runtime.
+
 Workers run as UID/GID 10001 with a read-only root filesystem, dropped
 capabilities, no privilege escalation, and bounded CPU, memory and temporary
 storage. Tini reaps child processes. A small init container copies only the

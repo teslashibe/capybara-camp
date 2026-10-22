@@ -61,8 +61,13 @@ func (a *App) connect(ctx context.Context, s Session, args []string, allowReques
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
+	path, commandArgs, err := a.providerCommand(path, args, s.CWD, allowRequests)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
 	c := &nativeConnection{ctx: ctx, cancel: cancel, events: make(chan nativeEvent, 16), allowRequests: allowRequests, waitDone: make(chan struct{})}
-	c.command = exec.Command(path, args[1:]...)
+	c.command = exec.Command(path, commandArgs...)
 	c.command.Env, c.command.Dir = env, s.CWD
 	c.command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if c.stdin, err = c.command.StdinPipe(); err == nil {

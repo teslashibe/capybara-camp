@@ -221,7 +221,11 @@ func (w *Worker) profile(ctx context.Context, state camp.RunnerAccountState) (*l
 			return nil, "", saved, ErrState
 		}
 	}
-	app := localcli.NewIsolated(config.Local{Home: home, Support: filepath.Join(home, "support"), Environment: localcli.IsolatedEnvironment(w.environment, home, root, state.Provider)})
+	configuration := config.Local{Home: home, Support: filepath.Join(home, "support"), Environment: localcli.IsolatedEnvironment(w.environment, home, root, state.Provider)}
+	app := localcli.NewIsolated(configuration)
+	if w.guarded {
+		app = localcli.NewConfined(configuration)
+	}
 	return app, root, saved, nil
 }
 

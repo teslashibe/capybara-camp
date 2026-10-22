@@ -3,6 +3,7 @@ package provisioner
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -59,5 +60,37 @@ func TestRunnerImageBootstrap(t *testing.T) {
 	command := exec.CommandContext(ctx, "docker", "run", "--rm", "--platform", "linux/amd64", "--network", "none", "--read-only", "--tmpfs", "/auth:mode=1777", "--tmpfs", "/state:mode=1777", "--tmpfs", "/workspaces:mode=1777", "--tmpfs", "/tmp", "--mount", "type=bind,source="+file+",target=/grant/token,readonly", "--entrypoint", "/bin/sh", image, "-eu", "-c", script)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("image bootstrap failed: %v (%s)", err, output)
+	}
+}
+
+// Exercise the actual installed CLI binaries within the mandatory process
+// domain. Neither smoke command signs in or sends a provider request.
+func TestRunnerImageProcessGuard(t *testing.T) {
+	image := os.Getenv("CAMP_RUNNER_IMAGE_TEST")
+	if image == "" {
+		t.Skip("CAMP_RUNNER_IMAGE_TEST is required")
+	}
+	policy, _ := json.Marshal(map[string]any{"home": "/tmp/provider", "workspace": "/tmp/project", "write_workspace": true})
+	encoded := base64.RawURLEncoding.EncodeToString(policy)
+	script := `mkdir -m 700 /tmp/provider /tmp/project /tmp/control
+printf private > /tmp/control/grant
+/camp-runner process-guard-check
+export HOME=/tmp/provider TMPDIR=/tmp/provider CODEX_HOME=/tmp/provider/codex CLAUDE_CONFIG_DIR=/tmp/provider/claude
+exec /camp-runner process-guard ` + encoded + ` /bin/sh -eu -c '
+if cat /tmp/control/grant 2>/dev/null; then exit 10; fi
+if printf changed > /tmp/control/journal 2>/dev/null; then exit 11; fi
+printf ok > /tmp/project/allowed
+codex --version
+claude --version
+codex --help >/dev/null
+claude --help >/dev/null
+printf "guarded-provider-smoke-ok\n"
+'`
+	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:mode=1777", "--entrypoint", "/bin/sh", image, "-eu", "-c", script)
+	out, err := command.CombinedOutput()
+	if err != nil || !bytes.Contains(out, []byte("guarded-provider-smoke-ok")) {
+		t.Fatalf("guarded provider image failed: %v (%s)", err, out)
 	}
 }

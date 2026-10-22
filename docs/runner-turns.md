@@ -58,13 +58,12 @@ repeating uncertain work. Additional checks cover shared read versus control
 permissions, event replay, response boundaries, credential revision/identity
 checks and symlink-safe fixed-file restoration.
 
-Before live cloud implementation, separate the provider/project executor from
-the worker's control files and runner grant. They currently share a container
-user. Container isolation between installations does not protect the control
-journal from code within that installation. The final design must isolate the
-control service and its credentials from arbitrary project commands, then test
-that boundary on the target Kubernetes runtime. This is an open release gate,
-not an accepted security boundary.
+Cloud subprocesses now enter a mandatory Linux filesystem and process-control
+domain before executing provider or Git code. It protects the worker's control
+files and grant while preserving the provider's private home and the assigned
+workspace. The local adversarial check has passed; enforcement by the chosen
+Kubernetes runtime and live provider behavior remain release gates. See
+[process isolation](process-isolation.md) for the exact boundary and required checks.
 
 Also pending: native execution location/defaults and cloud steering, reviewed
 transfers, cloud usage presentation, Git publication and actor attribution,

@@ -74,7 +74,7 @@ func (a *App) LoginProvider(ctx context.Context, provider, base string, challeng
 		return challenge(c)
 	}
 	env := loginEnvironment(a.Config.Environment, home, root, provider)
-	candidate := &App{Config: config.Local{Home: home, Environment: env}, commandPath: a.commandPath}
+	candidate := &App{Config: config.Local{Home: home, Environment: env}, commandPath: a.commandPath, confined: a.confined, isolated: a.isolated}
 	s := Session{Provider: provider, Root: root, CWD: home}
 	if provider == "Codex" {
 		if err = os.WriteFile(filepath.Join(root, "config.toml"), []byte("cli_auth_credentials_store = \"file\"\n"), 0600); err != nil {
@@ -350,7 +350,11 @@ func (a *App) claudeProviderLogin(ctx context.Context, s Session, env []string, 
 	if err != nil {
 		return ErrProviderLogin
 	}
-	command := exec.Command(path, "--safe-mode", "auth", "login", "--claudeai")
+	path, commandArgs, err := a.providerCommand(path, []string{"claude", "--safe-mode", "auth", "login", "--claudeai"}, s.CWD, true)
+	if err != nil {
+		return err
+	}
+	command := exec.Command(path, commandArgs...)
 	command.Dir = s.CWD
 	command.Env = env
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

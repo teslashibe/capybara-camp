@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/teslashibe/capybara-camp/server/internal/camp"
+	"github.com/teslashibe/capybara-camp/server/internal/processguard"
 )
 
 var errCheckoutUnsafe = errors.New("Checkout contains unsupported or unsafe paths")
@@ -45,6 +46,7 @@ type checkout struct {
 	// Set only by local transport tests; production always uses GitHub HTTPS.
 	remote    func(camp.Workspace) string
 	gitConfig []string
+	guarded   bool
 }
 
 func openCheckout(dir string) (*checkout, error) {
@@ -371,7 +373,23 @@ func (c *checkout) git(ctx context.Context, w camp.Workspace, credentialFile str
 		options = append(options, "-c", "credential.helper=!"+shellQuote(c.helper)+" git-credential")
 		env = append(env, "CAMP_GIT_CREDENTIAL_FILE="+credentialFile)
 	}
-	command := exec.CommandContext(ctx, "/usr/bin/git", append(options, args...)...)
+	path, commandArgs := "/usr/bin/git", append(options, args...)
+	if c.guarded {
+		home, err := os.MkdirTemp(c.dir, "git-home-")
+		if err != nil {
+			return nil, ErrState
+		}
+		defer os.RemoveAll(home)
+		policy := processguard.Policy{Home: home, Workspace: c.workdir(w), WriteWorkspace: true}
+		if credentialFile != "" {
+			policy.ReadFiles = []string{credentialFile}
+		}
+		path, commandArgs, err = processguard.Wrap(path, append([]string{"git"}, commandArgs...), policy)
+		if err != nil {
+			return nil, err
+		}
+	}
+	command := exec.CommandContext(ctx, path, commandArgs...)
 	command.Dir = c.workdir(w)
 	command.Env = env
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

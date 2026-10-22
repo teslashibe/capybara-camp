@@ -76,6 +76,9 @@ func workerFixture(t *testing.T, provider string, wrap func(http.Handler) http.H
 	}
 	t.Cleanup(w.Close)
 	w.interval = 10 * time.Millisecond
+	// Protocol fixtures run on macOS. Linux confinement is exercised by the
+	// adversarial processguard suite and the real runner-image checks.
+	w.guarded = false
 	return fixture{s, owner, a, g, l, w, api}
 }
 

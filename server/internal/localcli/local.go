@@ -20,6 +20,7 @@ type App struct {
 	commandPath   func(string, []string) (string, error)
 	systemCapture func(context.Context, string, []string, time.Duration, int) (int, []byte, error)
 	isolated      bool
+	confined      bool
 }
 
 func New(c config.Local) *App { return &App{Config: c} }
@@ -27,6 +28,10 @@ func New(c config.Local) *App { return &App{Config: c} }
 // NewIsolated requires the caller to hold the complete provider-home lock.
 // There are no external desktop owners to discover in this dedicated runtime.
 func NewIsolated(c config.Local) *App { return &App{Config: c, isolated: true} }
+
+// NewConfined is for cloud workers. Every provider subprocess inherits an OS
+// filesystem and process-control boundary, including login and capability probes.
+func NewConfined(c config.Local) *App { return &App{Config: c, isolated: true, confined: true} }
 
 type Source struct {
 	ID       string `json:"id"`
