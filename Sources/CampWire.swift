@@ -224,6 +224,10 @@ struct CloudPlanDraft: Codable, Equatable, Identifiable, Sendable {
     var id = UUID().uuidString.lowercased(); var input: CloudPlanningInput
     var updatedAt = Date(); var cancelRequested = false
     var restartPlanID: String? = nil; var baseRevision: Int64? = nil
+    private enum CodingKeys: String, CodingKey {
+        case id, input, updatedAt, cancelRequested, baseRevision, tuningHistory, quotedSources
+        case restartPlanID = "restartPlanId"
+    }
     var tuningHistory: [String: ModelTuning] = [:]
     var quotedSources: [ImportedPlanningSource]? = nil
 }

@@ -22,8 +22,9 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: finish shared implementation executor setup, owner approval, follow-up
-controls and board-card conversion in the native planning workspace, validate the worker against the local API, then finish the remaining transfer cases,
+Next: finish shared implementation follow-up controls and board-card conversion
+in the native planning workspace, validate executor setup, owner approval and
+the worker against the local API, then finish the remaining transfer cases,
 full-history migration and shared skills. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
@@ -33,6 +34,36 @@ together after local end-to-end acceptance. Use independent test users, device
 credentials and isolated native client state against the local API for
 collaboration, permissions, replay and ownership tests. Those checks supplement
 the final two-Mac/cloud acceptance; they do not replace it.
+
+The native shared-plan Implementation step now selects an independent executor,
+model, effort, speed and prepared Local/Cloud target. It reuses existing model
+and permission controls. The owner reviews the frozen plan and approves on the
+assigned Mac after its actual CLI context is inspected; dispatch is a separate
+explicit action. Stale reviews can be withdrawn without exposing their content.
+A narrow API read exposes the executor's prepared location/permissions to the
+creator or executor owner, with project, source and request-access checks.
+
+Native restart testing reproduced cached planning commands losing their plan
+binding when decoding snake-case JSON. Explicit coding keys now preserve plan,
+draft, restart and publication session IDs. Prepare/approve/dispatch retain the
+same persisted command across response loss. A detached coordinator cannot
+restore a late response into a different Camp. Tests also cover another person's
+approval, the wrong device, a changed inspection and stale withdrawal.
+
+The full Go race suite and vet pass against PostgreSQL 17
+(`build/shared-execution-full-suite.log`), including target authorization and
+HTTP coverage; Linux command builds pass. The native module compiles and the
+approval, shared implementation/history, planning, planning-stream, execution
+and sharing suites pass (`build/shared-execution-native-tests.log`). Additional
+wrong-device/inspection checks pass (`build/shared-execution-focused.log`).
+These are synthetic transport checks. Live API/provider and computer-use
+acceptance remain open; computer use still reports a locked Mac and disabled
+browser control. The isolated arm64 development build succeeds and passes
+strict deep signature verification (`build/Capybara Camp Shared Approval.app`,
+`build/shared-approval-build.log`) using Ambient Local Development and the
+separate `com.capybaracamp.shared-approval-review` bundle ID. The staged secret
+scan found no leaks. This is not the universal/notarized release.
+No cloud deployment or release was made.
 
 Shared implementation has durable API approvals at schema 32 and dispatch at
 schema 33.
@@ -116,8 +147,9 @@ This is an arm64 review build with a separate review bundle ID, not a notarized
 universal release. The staged secret scan found no leaks.
 These are synthetic API/native checks; live providers and visual acceptance
 remain open. Computer use currently reports a locked Mac and disabled browser control; this does not
-prevent the remaining implementation and automated checks. Shared executor
-setup, owner approval and the follow-up composer/controls remain unfinished.
+prevent the remaining implementation and automated checks. At this history
+checkpoint, executor setup, owner approval and follow-up controls were unfinished;
+the newer approval checkpoint above records the next implementation slice.
 No deployment or release was made.
 
 The shared implementation review found an existing request-content leak after

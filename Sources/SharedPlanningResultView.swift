@@ -2,24 +2,54 @@ import SwiftUI
 
 struct SharedPlanningResultView: View {
     @ObservedObject var store: CampStore
+    @ObservedObject private var sharedPlanning: CampPlanning
     let result: CloudPlanningResult
     @State private var section = "Plans"
     @State private var focusedSlot: Int?
     @StateObject private var implementationHistory: ImportedImplementationHistory
     @StateObject private var sharedHistory: SharedImplementationHistory
     @State private var showingSharedImplementation = false
+    @StateObject private var executionReview: SharedExecutionReview
+    @State private var showingExecutionSetup = false
     init(store: CampStore, result: CloudPlanningResult) {
-        self.store = store; self.result = result
+        self.store = store; self.result = result; self.sharedPlanning = store.sharedPlanning
         _implementationHistory = StateObject(wrappedValue: ImportedImplementationHistory(planning: store.sharedPlanning))
         _sharedHistory = StateObject(wrappedValue: SharedImplementationHistory(planning: store.sharedPlanning))
+        _executionReview = StateObject(wrappedValue: SharedExecutionReview(planning: store.sharedPlanning))
     }
-    var body: some View {
+    private var workspace: some View {
         HStack(spacing: 0) {
             PlanningNavigation(store: store, title: result.title, mode: result.version.workflow,
                 participants: participants, section: $section, focusedSlot: $focusedSlot,
-                sections: ["Plans", "Combined plan", "History"] + (hasImplementation ? ["Implementation"] : []), canImplement: hasImplementation)
+                sections: ["Plans", "Combined plan", "History"] + (canOpenImplementation ? ["Implementation"] : []), canImplement: canOpenImplementation)
             Divider()
             VStack(alignment: .leading, spacing: 14) {
+                header
+                Text(result.version.brief).font(.system(size: 12)).textSelection(.enabled).lineLimit(4)
+                if let imported = result.version.imported {
+                    Label("Imported history · " + imported.state.replacingOccurrences(of: "_", with: " "), systemImage: "tray.and.arrow.down")
+                        .font(.system(size: 11)).foregroundStyle(campMuted)
+                        .help("Saved local results. Importing did not run the providers")
+                }
+                SharedPlanningSources(store: store, result: result).id("\(result.id):\(result.version.version)")
+                PlanningStageBar(mode: result.version.workflow, section: $section, completed: completedStages, canImplement: canOpenImplementation, showImplementation: canOpenImplementation)
+                resultContent
+                HStack {
+                    Text("\(result.version.steps.filter { $0.state == "completed" }.count) of \(result.version.workflow.turnLimit) · \(result.version.state.replacingOccurrences(of: "_", with: " "))").font(.system(size: 11)).foregroundStyle(campMuted)
+                    Spacer()
+                    if result.creatorUserId == store.cloud.scope?.userId,
+                       result.version.imported == nil, result.activeVersion == result.version.version {
+                        if result.version.state == "running" { Button("Pause") { Task { await store.sharedPlanning.act("pause", on: result) } } }
+                        if result.version.state == "paused" { Button("Resume") { Task { await store.sharedPlanning.act("resume", on: result) } } }
+                        if result.version.state == "draft" { Button("Start") { Task { await store.sharedPlanning.act("start", on: result) } } }
+                        if ["running", "paused", "needs_review"].contains(result.version.state) { Button("Cancel", role: .destructive) { Task { await store.sharedPlanning.act("cancel", on: result) } } }
+                    }
+                }.disabled(store.sharedPlanning.pending(result.id))
+                if !store.sharedPlanning.error.isEmpty { Text(store.sharedPlanning.error).font(.caption).foregroundStyle(.orange) }
+            }.padding(22).frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+    private var header: some View {
                 HStack {
                     ProviderBadge(provider: "Planning")
                     Text(result.version.workflow.title).font(.system(size: 12, weight: .medium))
@@ -37,16 +67,12 @@ struct SharedPlanningResultView: View {
                     Button { store.sharedPlanResult = nil; store.view = "Board" } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }
                         .buttonStyle(.plain).help("Back to board").accessibilityLabel("Back to board")
                 }
-                Text(result.version.brief).font(.system(size: 12)).textSelection(.enabled).lineLimit(4)
-                if let imported = result.version.imported {
-                    Label("Imported history · " + imported.state.replacingOccurrences(of: "_", with: " "), systemImage: "tray.and.arrow.down")
-                        .font(.system(size: 11)).foregroundStyle(campMuted)
-                        .help("Saved local results. Importing did not run the providers")
-                }
-                SharedPlanningSources(store: store, result: result).id("\(result.id):\(result.version.version)")
-                PlanningStageBar(mode: result.version.workflow, section: $section, completed: completedStages, canImplement: hasImplementation, showImplementation: hasImplementation)
+    }
+    @ViewBuilder private var resultContent: some View {
                 if section == "Implementation" {
-                    if showingSharedImplementation || implementationHistory.implementations.isEmpty {
+                    if executionReview.status != nil || canConfigureImplementation && (showingExecutionSetup || !hasImplementation) {
+                        SharedExecutionSetupView(store: store, review: executionReview, plan: result).id("\(result.id):\(result.version.version)")
+                    } else if showingSharedImplementation || implementationHistory.implementations.isEmpty {
                         SharedImplementationView(history: sharedHistory, cloud: store.cloud, sourceIDs: result.referencedSessions) { section = "History" }
                     } else { ImportedImplementationView(history: implementationHistory) { section = "History" } }
                 } else if section == "History" || section == "Combined plan" {
@@ -62,7 +88,10 @@ struct SharedPlanningResultView: View {
                                     ImportedImplementationList(history: implementationHistory) { record in
                                         showingSharedImplementation = false; implementationHistory.select(record); section = "Implementation"
                                     }
-                                    SharedImplementationList(history: sharedHistory) { showingSharedImplementation = true; section = "Implementation" }
+                                    SharedImplementationList(history: sharedHistory) { showingSharedImplementation = true; showingExecutionSetup = false; section = "Implementation" }
+                                    if canConfigureImplementation, result.creatorUserId == store.cloud.scope?.userId {
+                                        Button("Choose executor") { showingExecutionSetup = true; section = "Implementation" }
+                                    }
                                 } else {
                                     messageBlocks(result.version.steps.filter { $0.phase == "merge" }) { proxy.scrollTo("shared-result-bottom", anchor: .bottom) }
                                 }
@@ -74,32 +103,33 @@ struct SharedPlanningResultView: View {
                         .onChange(of: section) { _, _ in proxy.scrollTo("shared-result-bottom", anchor: .bottom) }
                     }
                 } else { plannerPanes }
-                HStack {
-                    Text("\(result.version.steps.filter { $0.state == "completed" }.count) of \(result.version.workflow.turnLimit) · \(result.version.state.replacingOccurrences(of: "_", with: " "))").font(.system(size: 11)).foregroundStyle(campMuted)
-                    Spacer()
-                    if result.creatorUserId == store.cloud.scope?.userId,
-                       result.version.imported == nil, result.activeVersion == result.version.version {
-                        if result.version.state == "running" { Button("Pause") { Task { await store.sharedPlanning.act("pause", on: result) } } }
-                        if result.version.state == "paused" { Button("Resume") { Task { await store.sharedPlanning.act("resume", on: result) } } }
-                        if result.version.state == "draft" { Button("Start") { Task { await store.sharedPlanning.act("start", on: result) } } }
-                        if ["running", "paused", "needs_review"].contains(result.version.state) { Button("Cancel", role: .destructive) { Task { await store.sharedPlanning.act("cancel", on: result) } } }
-                    }
-                }.disabled(store.sharedPlanning.pending(result.id))
-                if !store.sharedPlanning.error.isEmpty { Text(store.sharedPlanning.error).font(.caption).foregroundStyle(.orange) }
-            }.padding(22).frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.onAppear {
+    }
+    private var boundWorkspace: some View {
+        workspace.onAppear {
             if store.notificationPlanVersion != nil && result.version.workflow == .comparison { section = "Combined plan" }
             applyCardNavigation()
         }
-            .task(id: "\(result.id):\(result.version.version)") { implementationHistory.bind(result); sharedHistory.bind(result) }
-            .onDisappear { implementationHistory.cancel(); sharedHistory.clear() }
-            .onChange(of: store.cloud.scope) { _, _ in implementationHistory.cancel(); sharedHistory.clear() }
-            .onChange(of: store.cloud.requests.filter { $0.planId == result.id }) { _, values in sharedHistory.synchronize(values) }
+            .task(id: "\(result.id):\(result.version.version)") { implementationHistory.bind(result); sharedHistory.bind(result); executionReview.bind(result); showingExecutionSetup = false }
+            .onDisappear { implementationHistory.cancel(); sharedHistory.clear(); executionReview.clear() }
+            .onChange(of: store.cloud.scope) { _, _ in implementationHistory.cancel(); sharedHistory.clear(); executionReview.clear() }
+    }
+    private var liveWorkspace: some View {
+        boundWorkspace
+            .onChange(of: sharedPlanning.executionRevision) { _, _ in executionReview.refresh() }
+            .onChange(of: result.revision) { _, _ in executionReview.bind(result) }
+            .onChange(of: store.cloud.requests.filter { $0.planId == result.id }) { _, values in
+                sharedHistory.synchronize(values)
+                if values.contains(where: { $0.isImplementation && ["queued", "claimed", "started"].contains($0.state) }) { showingExecutionSetup = false }
+            }
             .onChange(of: store.cloudSessions.mapValues(\.permissionRevision)) { _, _ in
                 implementationHistory.bind(result)
                 sharedHistory.bind(result)
+                executionReview.refresh()
                 if section == "Implementation" { section = "History" }
             }
+    }
+    var body: some View {
+        liveWorkspace
             .onChange(of: store.planNavigation) { _, _ in applyCardNavigation() }
             .onChange(of: result.version.workflow) { _, _ in section = "Plans"; focusedSlot = nil }
             .onChange(of: result.version.version) { _, _ in section = "Plans"; focusedSlot = nil }
@@ -110,6 +140,8 @@ struct SharedPlanningResultView: View {
             }
     }
     private var hasImplementation: Bool { !implementationHistory.implementations.isEmpty || !sharedHistory.runs.isEmpty }
+    private var canConfigureImplementation: Bool { result.version.state == "ready" && result.version.imported == nil && result.activeVersion == result.version.version }
+    private var canOpenImplementation: Bool { hasImplementation || canConfigureImplementation || executionReview.status != nil }
     private var plannerPanes: some View {
         PlanningPaneRow(slots: result.version.planners.filter { focusedSlot == nil || focusedSlot == $0.slot }.map(\.slot)) { slot in
             if let planner = result.version.planners.first(where: { $0.slot == slot }) {

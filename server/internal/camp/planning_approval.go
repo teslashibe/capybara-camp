@@ -62,6 +62,45 @@ type PlanningApprovalAction struct {
 	ExecutionContext string `json:"execution_context,omitempty"`
 }
 
+// A plan's creator may inspect the requested executor's prepared permissions
+// before proposing consent. This exposes no provider credentials or workspace
+// checkout details and does not grant execution or change its assignment.
+func (s *Store) PlanningExecutorTarget(ctx context.Context, a auth.Actor, campID, planID, sessionID string) (ExecutionTarget, error) {
+	return retryRead(ctx, func() (ExecutionTarget, error) {
+		return s.planningExecutorTargetOnce(ctx, a, campID, planID, sessionID)
+	})
+}
+
+func (s *Store) planningExecutorTargetOnce(ctx context.Context, a auth.Actor, campID, planID, sessionID string) (ExecutionTarget, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	if err != nil {
+		return ExecutionTarget{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = s.lock(ctx, tx, a, campID, false); err != nil {
+		return ExecutionTarget{}, err
+	}
+	p, err := s.loadPlanning(ctx, tx, a, campID, planID, 0)
+	if err != nil {
+		return ExecutionTarget{}, err
+	}
+	if err = s.checkPlanningSources(ctx, tx, a, p); err != nil {
+		return ExecutionTarget{}, err
+	}
+	target, err := s.readSession(ctx, tx, a, campID, sessionID)
+	if err != nil {
+		return ExecutionTarget{}, err
+	}
+	if a.UserID != p.CreatorUserID && a.UserID != target.OwnerUserID || target.ProjectID != p.ProjectID || target.HistoryOnly || target.ExternalOwner || a.UserID != target.OwnerUserID && !target.AllowRequests {
+		return ExecutionTarget{}, ErrDenied
+	}
+	out, err := s.executionTarget(ctx, tx, target)
+	if err != nil {
+		return out, err
+	}
+	return out, tx.Commit(ctx)
+}
+
 func planApprovalHash(p PlanningTicket) (string, error) {
 	raw, err := json.Marshal(p.Version)
 	if err != nil {
@@ -411,27 +450,31 @@ func (s *Store) PlanningApprovalStatuses(ctx context.Context, a auth.Actor, camp
 	if _, err = s.lock(ctx, tx, a, campID, false); err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(ctx, `SELECT id FROM planning_execution_approvals WHERE camp_id=$1 AND plan_id=$2 AND (creator_user_id=$3 OR owner_user_id=$3) ORDER BY created_at DESC,id DESC LIMIT 100`, campID, planID, a.UserID)
+	rows, err := tx.Query(ctx, `SELECT id,state,revision FROM planning_execution_approvals WHERE camp_id=$1 AND plan_id=$2 AND (creator_user_id=$3 OR owner_user_id=$3) ORDER BY created_at DESC,id DESC LIMIT 100`, campID, planID, a.UserID)
 	if err != nil {
 		return nil, err
 	}
-	var ids []string
+	out := []PlanningApprovalStatus{}
 	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
+		var status PlanningApprovalStatus
+		if err = rows.Scan(&status.ID, &status.State, &status.Revision); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		ids = append(ids, id)
+		out = append(out, status)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
 		return nil, err
 	}
-	out := []PlanningApprovalStatus{}
-	for _, id := range ids {
-		v, err := readPlanningApproval(ctx, tx, campID, planID, id)
+	for i := range out {
+		// Only unused consent can require another review. Historical records
+		// must not trigger hundreds of source/runner queries when opening a plan.
+		if out[i].State != "pending" && out[i].State != "approved" {
+			continue
+		}
+		v, err := readPlanningApproval(ctx, tx, campID, planID, out[i].ID)
 		if err != nil {
 			return nil, err
 		}
@@ -439,7 +482,7 @@ func (s *Store) PlanningApprovalStatuses(ctx context.Context, a auth.Actor, camp
 		if check != nil && !errors.Is(check, ErrDenied) && !errors.Is(check, ErrRevision) && !errors.Is(check, ErrTransition) && !errors.Is(check, ErrTransferHeld) {
 			return nil, check
 		}
-		out = append(out, PlanningApprovalStatus{ID: id, State: v.State, Revision: v.Revision, ReviewRequired: check != nil && v.State != "cancelled"})
+		out[i].ReviewRequired = check != nil
 	}
 	return out, tx.Commit(ctx)
 }

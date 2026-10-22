@@ -4,6 +4,28 @@ Reference: the approved [interactive design](http://127.0.0.1:8770/capybara-camp
 The native app has **not passed the full design audit**. This is the working
 discrepancy list, not a release approval.
 
+## Shared executor review
+
+Executor selection and owner approval now live in the existing planning
+Implementation step. It uses the shared model/effort/speed component and
+permission fields, with the prepared Local/Cloud target, a frozen-plan
+expander and separate Review, Approve and Start implementation actions.
+Switching executor sessions keeps their draft settings during setup. Version
+changes reset setup. The assigned Mac checks its actual CLI context before
+approval; changed or revoked consent stays withdrawable without showing its
+saved prompt.
+
+Automated native checks cover independent owners, wrong-device refusal,
+inspection invalidation, lost responses and restart recovery. They are not
+visual acceptance. Computer use still reports a locked Mac and disabled
+browser control. Verify matching-size layout, all action/menu hit areas,
+keyboard order, minimum-width wrapping, remote-owner waiting, unavailable
+executors, pending offline writes, stale consent and the transition to the
+streamed implementation before closing this audit item.
+The signed arm64 review build is `build/Capybara Camp Shared Approval.app`,
+bundle ID `com.capybaracamp.shared-approval-review`; strict deep verification
+passes. It is a development build, not the universal/notarized release.
+
 ## Shared implementation history
 
 The native shared-plan History and Implementation sections now discover saved
@@ -17,7 +39,8 @@ pass. Native discovery, paging, stream and revocation regressions pass. The new
 view still needs matching-size comparison with the approved design,
 pointer-edge and keyboard checks, direct opening of the only run,
 version switching, empty/error/revoked states and stream-following checks. Its
-executor setup, owner approval and follow-up controls are not complete. Do not
+executor setup and owner approval are covered by the newer section above;
+follow-up controls remain unfinished. Do not
 treat the compiled view or API tests as visual acceptance.
 The signed development candidate is `build/Capybara Camp Shared History.app`,
 with the isolated bundle ID `com.capybaracamp.shared-history-review`.

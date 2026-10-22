@@ -6,6 +6,13 @@ struct CampPlanOperation: Codable, Identifiable, Sendable {
     var draftID: String?
     var planID: String?
     var id: String { command.key }
+    // CampWire decodes snake case as planId/draftId, not Swift's ID acronym.
+    // Explicit keys preserve bindings when a saved outbox is reopened.
+    private enum CodingKeys: String, CodingKey {
+        case command
+        case draftID = "draftId"
+        case planID = "planId"
+    }
 }
 struct CampPlanningState: Codable, Sendable {
     var revision: Int64 = 0
@@ -19,6 +26,8 @@ struct CampPlanningState: Codable, Sendable {
     @Published private(set) var drafts: [CloudPlanDraft] = []
     @Published private(set) var tickets: [CloudPlanSummary] = []
     @Published private(set) var ready = false
+    @Published private(set) var executionRevision: UInt64 = 0
+    var implementationDispatched: ((CloudRequest) -> Void)?
     @Published private(set) var error = ""
     @Published var selectedID: String?
     @Published var selectedVersion = 0
@@ -252,6 +261,66 @@ struct CampPlanningState: Codable, Sendable {
         return data
     }
     func implementationSourceVisible(_ id: String) -> Bool { visibleSessions.contains(id) }
+    var currentActor: CloudActor? { context?.actor }
+    var currentScope: CloudScope? { context?.scope }
+    func readExecutionResource(planID: String, approvalID: String? = nil, executorID: String? = nil) async throws -> Data {
+        guard let c = context, UUID(uuidString: planID) != nil,
+              approvalID == nil || approvalID.flatMap(UUID.init(uuidString:)) != nil,
+              executorID == nil || executorID.flatMap(UUID.init(uuidString:)) != nil,
+              approvalID == nil || executorID == nil else { throw CampCloudError.invalidResponse }
+        let access = accessRevision
+        let suffix = executorID.map { "executors/\($0)/execution" } ?? ("execution-approvals" + (approvalID.map { "/\($0)" } ?? ""))
+        let data = try await c.transport.perform(CampPublication(kind: "read", method: "GET",
+            path: "/v1/camps/\(c.scope.campId)/planning/\(planID)/\(suffix)", body: Data()))
+        try check(c)
+        guard access == accessRevision else { throw CancellationError() }
+        return data
+    }
+    func queueExecution(_ action: SharedExecutionAction, planID: String, approvalID: String? = nil, body: Data) async throws {
+        guard let c = context, ready, UUID(uuidString: planID) != nil, !pending(planID),
+              (action == .prepare ? approvalID == nil : approvalID.flatMap(UUID.init(uuidString:)) != nil),
+              body.count <= 16 << 10 else { throw CampCloudError.invalidResponse }
+        let suffix = action == .prepare ? "" : "/\(approvalID!)/\(action.rawValue)"
+        let command = CampPublication(kind: "plan-execution-" + action.rawValue, method: "POST",
+            path: "/v1/camps/\(c.scope.campId)/planning/\(planID)/execution-approvals\(suffix)", body: body)
+        state.operations.append(CampPlanOperation(command: command, planID: planID)); publish()
+        // The queue is durable before wake can submit anything to the server.
+        do { try await persist() }
+        catch { state.operations.removeAll { $0.id == command.key }; publish(); throw error }
+        wake()
+    }
+    private func validateExecutionOperation(_ operation: CampPlanOperation, context c: Context) throws -> SharedExecutionAction {
+        guard let planID = operation.planID, UUID(uuidString: planID) != nil,
+              let action = SharedExecutionAction(rawValue: String(operation.command.kind.dropFirst("plan-execution-".count))),
+              operation.command.method == "POST" else { throw CampCloudError.invalidResponse }
+        let prefix = "/v1/camps/\(c.scope.campId)/planning/\(planID)/execution-approvals"
+        if action == .prepare {
+            guard operation.command.path == prefix else { throw CampCloudError.invalidResponse }
+        } else {
+            let pieces = operation.command.path.dropFirst(prefix.count).split(separator: "/")
+            guard operation.command.path.hasPrefix(prefix + "/"), pieces.count == 2,
+                  UUID(uuidString: String(pieces[0])) != nil, pieces[1] == action.rawValue else { throw CampCloudError.invalidResponse }
+        }
+        return action
+    }
+    private func acceptExecutionReceipt(_ data: Data, operation: CampPlanOperation, context c: Context) throws {
+        let action = try validateExecutionOperation(operation, context: c)
+        let planID = operation.planID!
+        let prefix = "/v1/camps/\(c.scope.campId)/planning/\(planID)/execution-approvals"
+        if action == .cancel { guard data.isEmpty else { throw CampCloudError.invalidResponse }; return }
+        if action == .dispatch {
+            let request = try CampWire.decoder().decode(CloudRequest.self, from: data)
+            guard request.isImplementation, request.campId == c.scope.campId, request.planId == planID,
+                  request.implementationId.flatMap(UUID.init(uuidString:)) != nil, UUID(uuidString: request.id) != nil,
+                  request.requesterUserId == c.actor.userId || request.ownerUserId == c.actor.userId else { throw CampCloudError.invalidResponse }
+            implementationDispatched?(request)
+        } else {
+            let approval = try CampWire.decoder().decode(SharedExecutionApproval.self, from: data)
+            guard approval.valid, approval.campId == c.scope.campId, approval.planId == planID,
+                  approval.creatorUserId == c.actor.userId || approval.ownerUserId == c.actor.userId,
+                  action == .prepare || operation.command.path == prefix + "/\(approval.id)/approve" else { throw CampCloudError.invalidResponse }
+        }
+    }
     func readImplementationRuns(_ ticket: CloudPlanningResult, implementationID: String? = nil, before: String? = nil) async throws -> Data {
         guard let c = context, ticket.valid, ticket.campId == c.scope.campId,
               ticket.referencedSessions.isSubset(of: visibleSessions),
@@ -270,7 +339,7 @@ struct CampPlanningState: Codable, Sendable {
         saveTask?.cancel(); saveTask = nil
         if ready { do { try await persist() } catch { self.error = "The planning draft could not be saved" } }
     }
-    func refresh() { dirty = true; wake() }
+    func refresh() { dirty = true; executionRevision &+= 1; wake() }
     private func wake() {
         guard task == nil, ready, let c = context else { return }
         task = Task { [weak self] in
@@ -284,8 +353,15 @@ struct CampPlanningState: Codable, Sendable {
                         do {
                             try await self.persist()
                             self.error = ""
+                            if op.command.kind.hasPrefix("plan-execution-") { _ = try self.validateExecutionOperation(op, context: c) }
                             let data = try await c.transport.perform(op.command)
                             try self.check(c)
+                            if op.command.kind.hasPrefix("plan-execution-") {
+                                try self.acceptExecutionReceipt(data, operation: op, context: c)
+                                self.state.operations.removeAll { $0.id == op.id }
+                                try await self.persist(); self.executionRevision &+= 1; self.dirty = true; self.publish()
+                                continue
+                            }
                             let result = try CampWire.decoder().decode(CloudPlanningResult.self, from: data)
                             guard result.valid, result.campId == c.scope.campId else { throw CampCloudError.invalidResponse }
                             self.state.operations.removeAll { $0.id == op.id }
@@ -304,7 +380,9 @@ struct CampPlanningState: Codable, Sendable {
                             self.state.operations.removeAll { $0.id == op.id }
                             self.error = status == 409 ? "This plan changed. Review its current version before trying again" : "This planning action is no longer available"
                             try await self.persist(); self.publish()
+                            if op.command.kind.hasPrefix("plan-execution-") { self.executionRevision &+= 1 }
                         } catch {
+                            try self.check(c)
                             if !self.state.operations.contains(where: { $0.id == op.id }) { self.state.operations.insert(op, at: 0) }
                             if let draft = savedDraft, self.draft(draft.id) == nil { self.state.drafts.append(draft) }
                             throw error

@@ -38,6 +38,34 @@ func readyApprovalFixture(t *testing.T, remote bool) (*Store, []auth.Actor, Camp
 	assignment := planningExecution(target)
 	return s, actors, c, plan, target, PlanningApprovalInput{ExpectedRevision: plan.Revision, ExpectedVersion: plan.ActiveVersion, Executor: PlannerInput{SessionID: target.ID, Model: "different-model", Effort: "high", Speed: "standard", Execution: &assignment}, ExpectedSessionRevision: target.Revision, ExpectedTranscriptRevision: target.TranscriptRevision, Permissions: localcli.PermissionSettings{"sandbox": "workspace-write", "approval": "on-request"}}
 }
+
+func TestPlanningExecutorTargetReviewIsScoped(t *testing.T) {
+	s, actors, c, plan, target, _ := readyApprovalFixture(t, true)
+	for _, actor := range actors[:2] {
+		value, err := s.PlanningExecutorTarget(t.Context(), actor, c.ID, plan.ID, target.ID)
+		if err != nil || value.Location != "local" || value.Epoch != target.ExecutionEpoch || len(value.Permissions) != 0 {
+			t.Fatal("executor review", err)
+		}
+	}
+	if _, err := s.PlanningExecutorTarget(t.Context(), actors[2], c.ID, plan.ID, target.ID); !errors.Is(err, ErrDenied) {
+		t.Fatal("unrelated member read executor", err)
+	}
+	if _, err := s.pool.Exec(t.Context(), `UPDATE sessions SET allow_requests=false WHERE id=$1`, target.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PlanningExecutorTarget(t.Context(), actors[0], c.ID, plan.ID, target.ID); !errors.Is(err, ErrDenied) {
+		t.Fatal("read without request permission", err)
+	}
+	if _, err := s.PlanningExecutorTarget(t.Context(), actors[1], c.ID, plan.ID, target.ID); err != nil {
+		t.Fatal("owner cannot inspect target", err)
+	}
+	if _, err := s.pool.Exec(t.Context(), `UPDATE sessions SET shared=false WHERE id=$1`, plan.Version.Planners[0].SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PlanningExecutorTarget(t.Context(), actors[1], c.ID, plan.ID, target.ID); !errors.Is(err, ErrDenied) {
+		t.Fatal("revoked plan context", err)
+	}
+}
 func TestPlanningApprovalBindsIndependentExecutorWithoutStartingWork(t *testing.T) {
 	s, actors, c, plan, target, in := readyApprovalFixture(t, true)
 	creator, owner := actors[0], actors[1]

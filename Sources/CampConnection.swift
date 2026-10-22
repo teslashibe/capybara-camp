@@ -274,7 +274,7 @@ import SwiftUI
         if let id = event.payload.sessionId { live.invalidate(id) }
         if event.kind.hasPrefix("request.") { refreshControls() }
         if event.kind == "transfer.handoff" { worker.scan() }
-        if event.kind == "planning.changed", let id = event.payload.planId { planningChanged?(id) }
+        if ["planning.changed", "planning.execution_approval"].contains(event.kind), let id = event.payload.planId { planningChanged?(id) }
         if event.kind == "notification.changed" || event.kind.hasPrefix("session.") || event.kind.hasPrefix("planning.") || event.kind.hasPrefix("member.") { scheduleNotifications(generation: token) }
         if event.payload.sessionId == nil && event.kind != "notification.changed" {
             let snapshot = try await client.get(CloudSnapshot.self, path: "/v1/camps/\(scope.campId)/snapshot", token: credential.token)

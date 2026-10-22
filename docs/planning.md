@@ -62,8 +62,9 @@ brief and bounds visible output to 8 KiB per step.
 
 ## Shared implementation approvals
 
-The development API can prepare, approve and dispatch an executor selection for
-a completed shared plan. Native approval and implementation views remain
+The development API and native planning workspace can prepare, approve and
+dispatch an executor selection for a completed shared plan. Visual and live-provider
+acceptance, the follow-up composer and board conversion remain
 unfinished. Preparing and approving consent do not enqueue provider work;
 dispatch is a separate action.
 
@@ -88,6 +89,31 @@ stale approval can be withdrawn without revealing its saved prompt. Detail GET
 rechecks access. Events are restricted to those two people. Each write uses the
 normal idempotency key contract, and one plan has at most one pending or approved
 selection.
+
+In the native app, open Implementation, select an executor session from the
+project and choose its model, effort and speed. Review implementation saves the
+proposal. The executor's owner reviews the frozen instructions and permissions,
+then chooses Approve. Start implementation separately consumes that approval.
+The creator can propose use of another person's account but cannot approve it.
+Local approval requires the owning device and inspects its actual CLI profile,
+working directory and permission fingerprint. Cloud approval uses the prepared
+workspace's permissions; the owner changes its location or permissions in Run on.
+The existing model controls and permission fields are shared across these views.
+Switching executor sessions during setup retains each session's draft settings;
+changing the plan version starts a new setup.
+
+Prepare, approve, withdraw and dispatch use the existing durable planning queue.
+Each command is saved before transmission and retains its idempotency key and
+payload across reconnects and restarts. A changed context never restores an old
+in-flight operation into the newly selected Camp. Stale unused consent remains
+withdrawable without fetching its saved prompt. Completed approval records do
+not rerun source and runner checks when loading the approval list.
+
+`GET /planning/{plan}/executors/{session}/execution` exposes the prepared
+location and permissions to the plan creator or executor owner. It requires the
+same project, visible plan context and request permission when using another
+person's session. It exposes no credentials or checkout details and does not
+change the assignment. Prepare and dispatch recheck their exact revisions.
 
 `POST /{approval}/dispatch` consumes approved consent and creates an
 implementation record and queued request in one transaction. The caller supplies
@@ -139,9 +165,10 @@ imported history. Each opens within the same ticket. Request history loads in
 bounded pages and the selected request reuses the chat renderer, stream reader
 and model controls. Opening an implementation never subscribes to the account
 source chat. Provider-reported model, effort and speed remain visible when a
-state refresh returns the original request settings. The shared executor setup,
-owner approval, follow-up composer and controls still need their native flow and
-computer-use acceptance before release.
+state refresh returns the original request settings. Executor setup and owner
+approval are implemented in this workspace; their live API/provider and
+computer-use acceptance remains open. The follow-up composer and controls still
+need their native flow before release.
 
 The Mac worker persists each bounded stream event before sending it and retries
 the same sequence after a lost response. Cumulative text is sent as small deltas;

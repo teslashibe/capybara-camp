@@ -510,6 +510,9 @@ final class TranscriptWatch {
             return self.conversations[local.id]
         }
         cloud.worker.requestUpdated = { [weak cloud] value in Task { await cloud?.acceptWorkerRequest(value) } }
+        sharedPlanning.implementationDispatched = { [weak cloud] value in
+            Task { await cloud?.acceptWorkerRequest(value); cloud?.worker.scan() }
+        }
         codexWatch.changed = { [weak self] value in
             self?.applyCodexActivity(value)
         }

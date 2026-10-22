@@ -77,8 +77,7 @@ struct RunLocationView: View {
         return ["Shared","Saved to Camp"].contains(binding.state)
     }
     var catalog: PermissionCatalog {
-        PermissionCatalog(provider: session.provider, modes: ["manual", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"], profiles: [],
-            sandboxes: ["read-only", "workspace-write", "danger-full-access"], approvals: ["on-request", "never"], reviewers: ["user", "auto_review"], inherited: "Choose explicit cloud permissions", note: "")
+        PermissionCatalog.requested(session.provider, inherited: "Choose explicit cloud permissions")
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {

@@ -50,6 +50,13 @@ func TestPlanningApprovalHTTPReviewAndImplementationDispatch(t *testing.T) {
 	client.token = token
 	path := "/v1/camps/" + c.ID + "/planning/" + plan.ID + "/execution-approvals"
 	anonymous := newJourneyClient(t, server.URL, t.TempDir())
+	executorPath := "/v1/camps/" + c.ID + "/planning/" + plan.ID + "/executors/" + target.ID + "/execution"
+	var execution camp.ExecutionTarget
+	client.call("GET", executorPath, "", nil, &execution, 200)
+	if execution.Location != "local" || execution.Epoch != target.ExecutionEpoch {
+		t.Fatal("executor review route")
+	}
+	anonymous.call("GET", executorPath, "", nil, nil, 401)
 	anonymous.call("POST", path, "", in, nil, 401)
 	var approval camp.PlanningApproval
 	client.call("POST", path, "", in, &approval, 201)

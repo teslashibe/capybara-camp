@@ -30,6 +30,10 @@ struct CampPublication: Codable, Sendable {
     var hashes: [PublishedDigest] = []
     var sent: Bool?
     var publishedSessionID: String?
+    private enum CodingKeys: String, CodingKey {
+        case key, kind, method, path, body, hashes, sent
+        case publishedSessionID = "publishedSessionId"
+    }
 }
 struct LocalShare: Codable, Identifiable, Sendable {
     var id: String
