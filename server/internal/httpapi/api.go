@@ -105,6 +105,9 @@ func (a *API) Handler() http.Handler {
 			if strings.HasSuffix(r.URL.Path, "/transcript") {
 				maximum = 2 << 20
 			}
+			if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/camps/") && strings.HasSuffix(r.URL.Path, "/planning/import") {
+				maximum = camp.MaxPlanningImportBytes
+			}
 			if strings.HasSuffix(r.URL.Path, "/requests") {
 				maximum = 128 << 10
 			}

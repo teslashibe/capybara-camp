@@ -15,7 +15,8 @@ import (
 	"github.com/teslashibe/capybara-camp/server/internal/testdb"
 )
 
-func TestPlanningHTTPAuthenticationAndBudgetRefusal(t *testing.T) {
+func planningHTTPFixture(t *testing.T) (*API, string, camp.Camp, camp.PlanningInput) {
+	t.Helper()
 	pool := testdb.Open(t)
 	ctx := context.Background()
 	token, err := auth.Token()
@@ -50,6 +51,11 @@ func TestPlanningHTTPAuthenticationAndBudgetRefusal(t *testing.T) {
 		}
 		input.Planners = append(input.Planners, camp.PlannerInput{SessionID: session.ID, Model: "fixture"})
 	}
+	return api, token, c, input
+}
+
+func TestPlanningHTTPAuthenticationAndBudgetRefusal(t *testing.T) {
+	api, token, c, input := planningHTTPFixture(t)
 	handler := api.Handler()
 	send := func(method, path, authToken string, body any) *httptest.ResponseRecorder {
 		var data []byte
@@ -75,7 +81,7 @@ func TestPlanningHTTPAuthenticationAndBudgetRefusal(t *testing.T) {
 		t.Fatal(created.Code, created.Body.String())
 	}
 	var plan camp.PlanningTicket
-	if err = json.Unmarshal(created.Body.Bytes(), &plan); err != nil {
+	if err := json.Unmarshal(created.Body.Bytes(), &plan); err != nil {
 		t.Fatal(err)
 	}
 	started := send(http.MethodPost, path+"/"+plan.ID+"/actions", token, camp.PlanningAction{Action: "start", ExpectedRevision: plan.Revision})

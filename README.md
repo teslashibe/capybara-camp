@@ -125,7 +125,11 @@ In a shared draft, **Run on** below each planner's model settings selects its
 Local or Cloud source separately. Choose a prepared cloud workspace or a
 session on this Mac, then apply the selection. Other planner settings and
 attached context stay unchanged. Existing standalone local plans still need
-the planned transfer flow to move into the shared coordinator.
+the native import flow to move into the shared coordinator. The development
+Go API can now preserve their saved planning versions as private history,
+without queuing provider work. The native review/upload flow and preservation
+of existing implementation conversations remain unfinished; see
+[local-plan import](docs/planning.md#local-plan-import-api).
 
 ### Default execution settings
 

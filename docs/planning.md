@@ -137,6 +137,61 @@ respect the same plan visibility as reads.
   offered, available sessions
 - Existing request actions acknowledge start, heartbeat, finish and reconciliation
 
+## Local-plan import API
+
+The development Go API accepts an existing local plan at
+`POST /v1/camps/{camp}/planning/import`. This is the storage portion of local-plan
+promotion. The native review/upload flow is not connected yet. Existing
+implementation conversations are not supported by this endpoint; the native
+flow must preserve them before it can ship. Keep the original local plan.
+
+The request uses the normal native bearer token and an `Idempotency-Key`. It
+contains a `source_id`, `title`, destination `project_id` and `versions`. The
+source ID is a stable, lowercase SHA-256 identity for the local ticket, scoped
+to its owner and destination Camp. Versions are numbered consecutively from
+one, with at most 100 versions and a 16 MiB encoded request limit. Ordinary
+planning requests retain their existing body limit.
+
+Each version supplies its saved `mode`, `state`, `brief`, `budget_policy`,
+`merge_slot`, `planners`, `sources`, `local_sources` and `steps`. Planner session
+IDs must resolve to the importing person's own accessible sessions in that
+Camp. Model, effort and speed remain the saved values; historical execution
+locations are left unrecorded. The destination project must exist and be active.
+
+`sources` are the existing pinned Camp message references, with current access
+checks. `local_sources` carry quoted local messages: an opaque hashed ID and
+revision, a title and ordered messages with their IDs, roles, text and optional
+model settings. A version allows 20 total sources, at most 120 messages per
+quoted source and 256 KiB of quoted message text. Individual messages are
+limited to 48 KiB. Cloud references must remain references so revocation keeps
+working; they must not be converted to quoted copies to avoid access checks.
+
+Steps retain their ordinal, saved state, output, error and reported token usage.
+There are either no steps or all one/five steps for the selected mode. A ready
+version requires every step to have completed with output. Running versions and
+running steps are rejected: stop local work and resolve its outcome first.
+The stored import snapshot preserves paused, draft and uncertain outcomes;
+those versions appear as needing review. Empty drafts remain empty.
+
+An import is private, creates no provider requests and cannot be started or
+resumed. Restart requires a reviewed set of current planner assignments and
+creates a new version through the ordinary workflow. Cancel is also available.
+Import metadata remains attached to the historical version, and its steps have
+no provider request IDs. The API does not assert that a provider produced the
+owner-supplied historical text.
+
+Repeating the same source ID and payload returns the same ticket, including
+after command receipts expire. A different payload for that source ID returns
+`409 request_conflict`; importing never overwrites the first copy. Reads and
+replayed responses recheck current Camp and source permissions. Revoked source
+access hides the affected version and board entry.
+
+Schema 26 stores these snapshots and import identities. Migrate with the
+normal [self-hosting procedure](self-hosting.md). Downgrading an empty import
+table is supported; once imports exist, retain an import-aware server. The
+migration refuses to discard them. This backend increment is not a released
+native transfer feature.
+
 Planning tables were introduced in schema 5. The current required schema is
 defined by `SchemaVersion` in [the database package](../server/internal/database/database.go).
 Schema 19 stores each planner's execution binding. Older history remains

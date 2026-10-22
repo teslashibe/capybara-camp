@@ -7,6 +7,16 @@ import (
 )
 
 func (a *API) planningRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /v1/camps/{camp}/planning/import", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		var input camp.PlanningImportInput
+		if !decode(w, r, &input) {
+			return
+		}
+		value, err := a.Camps.ImportPlanning(r.Context(), u, r.PathValue("camp"), r.Header.Get("Idempotency-Key"), input)
+		if !fail(w, err) {
+			write(w, 201, value)
+		}
+	}))
 	mux.HandleFunc("GET /v1/camps/{camp}/planning-sources", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		value, err := a.Camps.PlanningSources(r.Context(), u, r.PathValue("camp"), r.URL.Query().Get("project_id"), r.URL.Query().Get("account_id"))
 		if !fail(w, err) {

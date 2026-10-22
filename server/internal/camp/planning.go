@@ -79,18 +79,19 @@ type PlanningStep struct {
 	Usage     *PlanningUsage `json:"usage,omitempty"`
 }
 type PlanningVersion struct {
-	Mode         string         `json:"mode"`
-	Version      int64          `json:"version"`
-	State        string         `json:"state"`
-	Brief        string         `json:"brief"`
-	Sources      []SourceRef    `json:"sources"`
-	BudgetPolicy string         `json:"budget_policy"`
-	CallLimit    int            `json:"call_limit"`
-	InputTarget  int64          `json:"input_target"`
-	OutputTarget int64          `json:"output_target"`
-	MergeSlot    int            `json:"merge_slot"`
-	Planners     []Planner      `json:"planners"`
-	Steps        []PlanningStep `json:"steps"`
+	Mode         string                  `json:"mode"`
+	Version      int64                   `json:"version"`
+	State        string                  `json:"state"`
+	Brief        string                  `json:"brief"`
+	Sources      []SourceRef             `json:"sources"`
+	BudgetPolicy string                  `json:"budget_policy"`
+	CallLimit    int                     `json:"call_limit"`
+	InputTarget  int64                   `json:"input_target"`
+	OutputTarget int64                   `json:"output_target"`
+	MergeSlot    int                     `json:"merge_slot"`
+	Planners     []Planner               `json:"planners"`
+	Steps        []PlanningStep          `json:"steps"`
+	Imported     *PlanningImportSnapshot `json:"imported,omitempty"`
 }
 type PlanningTicket struct {
 	ID            string          `json:"id"`
@@ -301,8 +302,8 @@ func (s *Store) loadPlanning(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 		version = p.ActiveVersion
 	}
 	v := PlanningVersion{Version: version, Planners: []Planner{}, Steps: []PlanningStep{}}
-	var sources []byte
-	err = tx.QueryRow(ctx, `SELECT state,brief,sources,budget_policy,call_limit,input_target,output_target,merge_slot,mode FROM planning_versions WHERE plan_id=$1 AND version=$2`, id, version).Scan(&v.State, &v.Brief, &sources, &v.BudgetPolicy, &v.CallLimit, &v.InputTarget, &v.OutputTarget, &v.MergeSlot, &v.Mode)
+	var sources, imported []byte
+	err = tx.QueryRow(ctx, `SELECT state,brief,sources,budget_policy,call_limit,input_target,output_target,merge_slot,mode,import_snapshot FROM planning_versions WHERE plan_id=$1 AND version=$2`, id, version).Scan(&v.State, &v.Brief, &sources, &v.BudgetPolicy, &v.CallLimit, &v.InputTarget, &v.OutputTarget, &v.MergeSlot, &v.Mode, &imported)
 	if err != nil {
 		return p, accessError(err)
 	}
@@ -363,6 +364,22 @@ func (s *Store) loadPlanning(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 				v.State = "needs_review"
 				break
 			}
+		}
+	}
+	if len(imported) > 0 {
+		if err = json.Unmarshal(imported, &v.Imported); err != nil {
+			return p, err
+		}
+		if v.State == "failed" && oneOf(v.Imported.State, "draft", "paused", "needs_review") {
+			v.State = "needs_review"
+		}
+		for _, step := range v.Imported.Steps {
+			slot, phase := planningStepRole(step.Ordinal, v.MergeSlot)
+			state := step.State
+			if state == "unknown" {
+				state = "outcome_unknown"
+			}
+			v.Steps = append(v.Steps, PlanningStep{Ordinal: step.Ordinal, Slot: slot, Phase: phase, State: state, Output: step.Output, Usage: step.Usage})
 		}
 	}
 	p.Version = v
@@ -433,8 +450,10 @@ func (s *Store) listPlanningOnce(ctx context.Context, a auth.Actor, campID strin
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `SELECT p.id,p.project_id,p.creator_user_id,p.title,p.shared,p.revision,p.active_version,p.updated_at,v.mode,
-      CASE WHEN v.state IN ('running','paused') AND EXISTS(SELECT 1 FROM prompt_requests r WHERE r.plan_id=p.id AND r.plan_version=p.active_version AND r.state='outcome_unknown') THEN 'needs_review' ELSE v.state END,
-      (SELECT count(*) FROM planning_steps x JOIN prompt_requests r ON r.id=x.request_id WHERE x.plan_id=p.id AND x.version=p.active_version AND r.state='completed')
+      CASE WHEN v.import_snapshot IS NOT NULL AND v.state='failed' AND v.import_snapshot->>'state' IN ('draft','paused','needs_review') THEN 'needs_review'
+      WHEN v.state IN ('running','paused') AND EXISTS(SELECT 1 FROM prompt_requests r WHERE r.plan_id=p.id AND r.plan_version=p.active_version AND r.state='outcome_unknown') THEN 'needs_review' ELSE v.state END,
+      (SELECT count(*) FROM planning_steps x JOIN prompt_requests r ON r.id=x.request_id WHERE x.plan_id=p.id AND x.version=p.active_version AND r.state='completed')+
+      (SELECT count(*) FROM jsonb_array_elements(COALESCE(v.import_snapshot->'steps','[]'::jsonb)) step WHERE step->>'state'='completed')
       FROM planning_tickets p JOIN planning_versions v ON v.plan_id=p.id AND v.version=p.active_version
       WHERE p.camp_id=$1 AND (p.creator_user_id=$2 OR p.shared OR EXISTS(SELECT 1 FROM planning_participants x WHERE x.plan_id=p.id AND x.version=p.active_version AND x.owner_user_id=$2))
       AND NOT EXISTS(SELECT 1 FROM planning_participants x JOIN sessions z ON z.id=x.session_id WHERE x.plan_id=p.id AND x.version=p.active_version AND NOT(z.shared OR z.owner_user_id=$2))
@@ -678,6 +697,9 @@ func (s *Store) ActOnPlanning(ctx context.Context, a auth.Actor, campID, id, key
 	}
 	if p.CreatorUserID != a.UserID {
 		return p, ErrDenied
+	}
+	if p.Version.Imported != nil && input.Action != "restart" && input.Action != "cancel" {
+		return p, ErrTransition
 	}
 	var saved PlanningTicket
 	if hit, err := s.beginCommand(ctx, tx, a, key, "planning.action:"+id, input, &saved); err != nil {

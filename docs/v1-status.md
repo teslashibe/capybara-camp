@@ -9,7 +9,7 @@ and acceptance are separate milestones.
 | Area | Implemented locally | Still required for V1 |
 | --- | --- | --- |
 | Local sessions | Automatic multi-profile import, board/chat, model/effort/speed controls, sub-agents, streaming, dictation, steering and queues | Finish live provider/recovery and performance validation after the Go migration; complete the final design comparison below |
-| Planning and projects | Single-model plan, provider comparison, saved versions, per-Camp execution defaults, shared-draft per-planner destination selection, pinned execution assignments, same-ticket local implementation, project assignment across repositories | Standalone local-plan promotion, shared implementation and owner-routed approval completion; cross-device validation |
+| Planning and projects | Single-model plan, provider comparison, saved versions, per-Camp execution defaults, shared-draft per-planner destination selection, pinned execution assignments, same-ticket local implementation, project assignment across repositories, private saved-version import API | Native local-plan promotion and implementation-history import, shared implementation and owner-routed approval completion; cross-device validation |
 | Shared Camps | Go/PostgreSQL auth, membership, sessions, events, requests, native cache/outbox and owner-Mac worker | Real independent users on two Macs, remaining permission/recovery cases, production deployment |
 | Onboarding | Automatic profile discovery before full import, optional Camp sign-in, owner-only cloud account setup, GitHub connections, projects, execution defaults, notifications, skip/resume | Final onboarding validation after remaining services land |
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
@@ -24,6 +24,22 @@ implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
 the two-Mac acceptance run follow that deployment. Hardware has not been bought
 or provisioned for this goal.
+
+The local-plan import backend preserves saved versions, planner settings,
+step outputs/errors/usage and bounded quoted local context. It creates private
+history without creating provider requests. A stable source identity prevents
+duplicate tickets after a lost response; changed payloads conflict instead of
+overwriting history. Non-ready imports require review and a new planning
+version before execution. Source permissions are rechecked on reads and receipt
+replays. Schema 26 retains import snapshots and blocks a downgrade that would
+discard them. Native import review, implementation-history preservation and
+computer-use acceptance remain open. The contract is in
+[planning](planning.md#local-plan-import-api).
+The full Go race suite and vet pass with disposable PostgreSQL at schema 26.
+Tests cover private imports, replay deduplication, source revocation, input
+bounds, empty drafts, reviewed restart and migration retention. Linux server,
+runner, controller, helper and migration builds pass; the staged secret scan
+is clean. This does not complete the native import flow or live acceptance.
 
 The current Local-to-Cloud increment adds native working-file selection, exact
 captured-file previews, a pinned Git base, destination preparation, source
