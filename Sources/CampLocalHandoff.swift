@@ -20,7 +20,10 @@ struct CloudTransferSource: Codable, Sendable {
 // Only the original source Mac consumes these jobs. Its durable claim excludes
 // credentials and payloads; reviewed files stay in memory for the live guard.
 @MainActor final class CampLocalHandoff {
-    private struct Journal: Codable { var id: String; var claim: String; var device: String }
+    private struct Journal: Codable {
+        var id: String; var claim: String; var device: String
+        var local: Data?; var handoff: CloudHandoff?; var commitStarted: Bool?
+    }
     private struct Context {
         var scope: CloudScope; var actor: CloudActor; var transport: any CampPublishingTransport; var generation = UUID()
     }
@@ -35,7 +38,13 @@ struct CloudTransferSource: Codable, Sendable {
     var nativeSession: ((CloudSession) -> CampSession?)?
     var available: ((CampSession) -> Bool)?
     var acceptSession: ((CloudSession, CloudScope, Int64) async throws -> Void)?
-    var makeGuard: (CampSession, Data, Date) -> any LocalSourceGuard = { LocalTransferHold(session: $0, payload: $1, deadline: $2) }
+    var makeGuard: (CampSession, Data, Date, String) -> any LocalSourceGuard = { LocalTransferHold(session: $0, payload: $1, deadline: $2, handoffID:$3) }
+    var resolveFence: (CampSession, String) async throws -> Void = { session, handoffID in
+        let body = try CampWire.body(["session": JSONSerialization.jsonObject(with:JSONEncoder().encode(session)), "handoffID":handoffID])
+        struct Result: Decodable { var ok: Bool }
+        let result = try JSONDecoder().decode(Result.self,from:await Bridge.call("transfer-resolve",input:body))
+        guard result.ok else { throw CampCloudError.invalidResponse }
+    }
     private(set) var status = ""
 
     init(cache: CampCache?) { self.cache = cache }
@@ -72,17 +81,30 @@ struct CloudTransferSource: Codable, Sendable {
         guardProcess?.stop(); guardProcess = nil; source = nil
         try await save(nil, c); status = ""
     }
-    private func validate(_ h: CloudHandoff, _ j: Journal, _ c: Context) throws {
+    private func validate(_ h: CloudHandoff, _ j: Journal, _ c: Context, terminal: Bool = false) throws {
         guard [h.id,h.transferId,h.sessionId,h.workspaceId].allSatisfy({ UUID(uuidString: $0) != nil }),
               h.id == j.id, h.campId == c.scope.campId, h.ownerUserId == c.actor.userId,
               h.sourceDeviceId == c.actor.deviceId, h.sourceLocation == "local", h.sourceWorkspaceId == nil,
               h.claimId == j.claim, h.sourceEpoch > 0, h.workspaceRevision > 0, h.revision > 0,
-              ["claimed","acknowledged","committed"].contains(h.state) else { throw CampCloudError.invalidResponse }
+              ["claimed","acknowledged","committed"].contains(h.state) || (terminal && ["released","expired","invalidated"].contains(h.state)) else { throw CampCloudError.invalidResponse }
+        if terminal && ["released","expired","invalidated"].contains(h.state) { return }
         if h.state == "committed" {
             guard h.executionEpoch == h.sourceEpoch + 1, UUID(uuidString:h.commitNonce ?? "") != nil else { throw CampCloudError.invalidResponse }
         } else {
             guard h.expiresAt > Date(), h.expiresAt.timeIntervalSinceNow <= 301 else { throw CampCloudError.invalidResponse }
         }
+    }
+    private func reconcileCancelled(_ h: CloudHandoff, _ j: Journal, _ c: Context) async throws {
+        try validate(h,j,c,terminal:true)
+        guard ["released","expired","invalidated"].contains(h.state), let localData = j.local else { throw CampCloudError.invalidResponse }
+        let local = try JSONDecoder().decode(CampSession.self,from:localData)
+        let value = try await call(CloudSession.self,"GET","/v1/camps/\(c.scope.campId)/sessions/\(h.sessionId)",c)
+        guard value.id == h.sessionId, value.campId == c.scope.campId, value.ownerUserId == c.actor.userId,
+              value.executionEpoch == h.sourceEpoch, value.executionLocation == "local", value.executionWorkspaceId == nil else { throw CampCloudError.invalidResponse }
+        guardProcess?.stop(); guardProcess = nil
+        try await resolveFence(local,j.id)
+        try await checkAuthority(c)
+        try await clear(c)
     }
     private func acceptCommitted(_ h: CloudHandoff, _ c: Context) async throws {
         guard let epoch, let acceptSession, let completedEpoch = h.executionEpoch else { throw CampCloudError.invalidResponse }
@@ -118,7 +140,9 @@ struct CloudTransferSource: Codable, Sendable {
         }
         guard PublishMessage.hash(payload) == t.payloadSha256 else { throw CampCloudError.invalidResponse }
         try check(c)
-        let guardProcess = makeGuard(local,payload,h.expiresAt)
+        var saved = j; saved.local = try JSONEncoder().encode(local); saved.handoff = h
+        try await save(saved,c)
+        let guardProcess = makeGuard(local,payload,h.expiresAt,h.id)
         self.guardProcess?.stop(); self.guardProcess = guardProcess; source = value
     }
 
@@ -150,21 +174,37 @@ struct CloudTransferSource: Codable, Sendable {
             }
             guard let j = journal else { return false }
             let body = try CampWire.body(["claim_id":j.claim]), base = "/v1/handoffs/"+j.id
+            if j.commitStarted == true, let saved = j.handoff {
+                let status = try await call(CloudHandoff.self,"GET","/v1/camps/\(c.scope.campId)/sessions/\(saved.sessionId)/handoffs/\(j.id)",c)
+                try validate(status,j,c,terminal:true)
+                if status.state == "committed" { try await acceptCommitted(status,c); return true }
+                if ["released","expired","invalidated"].contains(status.state) { try await reconcileCancelled(status,j,c); return true }
+            }
             let h = try await call(CloudHandoff.self,"POST",base+"/claim",c,body:body)
             try validate(h,j,c)
             if h.state == "committed" { try await acceptCommitted(h,c); return true }
             if guardProcess?.active != true { try await prepare(h,j,c) }
             guard let guardProcess, let source else { throw CampCloudError.invalidResponse }
+            if h.commitNonce != nil {
+                guard var saved = journal, saved.local != nil else { throw CampCloudError.invalidResponse }
+                saved.handoff = h; saved.commitStarted = true
+                try await save(saved,c)
+            }
             let receipt: SourceVerification
-            do { receipt = try await guardProcess.verify(); try check(c) }
+            do {
+                if h.commitNonce == nil { receipt = try await guardProcess.verify() }
+                else { receipt = try await guardProcess.prepareCommit() }
+                try check(c)
+            }
             catch {
                 guard context?.generation == c.generation else { guardProcess.stop(); throw CancellationError() }
                 self.guardProcess?.stop(); self.guardProcess = nil
                 // A definitive local verification failure invalidates this
                 // source claim. Cancellation or connection loss retains it.
                 if !(error is CancellationError) {
-                    _ = try await call(CloudHandoff.self,"POST",base+"/reject",c,body:body)
-                    try await clear(c)
+                    let rejected = try await call(CloudHandoff.self,"POST",base+"/reject",c,body:body)
+                    if let saved = journal, saved.commitStarted == true { try await reconcileCancelled(rejected,saved,c) }
+                    else { try await clear(c) }
                 }
                 throw error
             }
@@ -188,7 +228,7 @@ struct CloudTransferSource: Codable, Sendable {
             return true
         } catch {
             if context?.generation == c.generation {
-                if case CampCloudError.server(let code, _) = error, [400,403,404,409,422].contains(code) { try await clear(c) }
+                if journal?.commitStarted != true, case CampCloudError.server(let code, _) = error, [400,403,404,409,422].contains(code) { try await clear(c) }
                 status = "Transfer paused · " + error.localizedDescription
             }
             throw error

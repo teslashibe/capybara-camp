@@ -8,6 +8,7 @@ struct SourceVerification: Decodable, Equatable, Sendable {
 @MainActor protocol LocalSourceGuard: AnyObject {
     var active: Bool { get }
     func verify() async throws -> SourceVerification
+    func prepareCommit() async throws -> SourceVerification
     func stop()
 }
 
@@ -18,6 +19,7 @@ struct SourceVerification: Decodable, Equatable, Sendable {
     private let session: CampSession
     private var payload: Data?
     private let deadline: Date
+    private let handoffID: String?
     private let makeProcess: () throws -> Process
     private var process: Process?
     private var input: ConversationInput?
@@ -25,12 +27,20 @@ struct SourceVerification: Decodable, Equatable, Sendable {
     private var closed = false
     var active: Bool { !closed && process?.isRunning == true && Date() < deadline }
 
-    init(session: CampSession, payload: Data, deadline: Date, makeProcess: @escaping () throws -> Process = { try Bridge.process("transfer-source") }) {
-        self.session = session; self.payload = payload; self.deadline = deadline; self.makeProcess = makeProcess
+    init(session: CampSession, payload: Data, deadline: Date, handoffID: String? = nil, makeProcess: @escaping () throws -> Process = { try Bridge.process("transfer-source") }) {
+        self.session = session; self.payload = payload; self.deadline = deadline; self.handoffID = handoffID; self.makeProcess = makeProcess
     }
     deinit { if process?.isRunning == true { process?.terminate() } }
 
     func verify() async throws -> SourceVerification {
+        try await command("verify")
+    }
+    func prepareCommit() async throws -> SourceVerification {
+        guard UUID(uuidString:handoffID ?? "") != nil else { throw CampCloudError.invalidResponse }
+        if process == nil { _ = try await verify() }
+        return try await command("prepareCommit")
+    }
+    private func command(_ kind: String) async throws -> SourceVerification {
         guard !closed, pending == nil, Date() < deadline else { throw CampError.message("Source verification expired") }
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
@@ -45,7 +55,7 @@ struct SourceVerification: Decodable, Equatable, Sendable {
                     else {
                         guard active, let input else { throw CampError.message("Source verification stopped") }
                         Task.detached { [weak self] in
-                            do { try input.write(Data("{\"type\":\"verify\"}\n".utf8)) }
+                            do { try input.write(Data("{\"type\":\"\(kind)\"}\n".utf8)) }
                             catch { await self?.fail("Source verification stopped") }
                         }
                     }
@@ -56,12 +66,14 @@ struct SourceVerification: Decodable, Equatable, Sendable {
 
     private func start() async throws {
         guard let payload else { throw CampError.message("Source review is no longer available") }
-        let sessionData = try JSONEncoder().encode(session), expires = Int64(deadline.timeIntervalSince1970)
+        let sessionData = try JSONEncoder().encode(session), expires = Int64(deadline.timeIntervalSince1970), handoffID = self.handoffID
         let initial = try await Task.detached {
-            var data = try JSONSerialization.data(withJSONObject: [
-                "session": JSONSerialization.jsonObject(with: sessionData),
+            var object: [String:Any] = [
+                "session": try JSONSerialization.jsonObject(with: sessionData),
                 "payload": payload.base64EncodedString(), "expiresAt": expires
-            ])
+            ]
+            if let handoffID { object["handoffID"] = handoffID }
+            var data = try JSONSerialization.data(withJSONObject:object)
             guard data.count <= 66 << 20 else { throw CampCloudError.responseTooLarge }
             data.append(10); return data
         }.value

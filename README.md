@@ -230,8 +230,10 @@ response from its journal.
 The server retains the committed receipt and removes the temporary upload chunks.
 These internal operations do not yet provide the native transfer review flow,
 child-session and attachment migration, or cloud-to-local transfer acceptance.
-Durable local fencing across a hold timeout or app restart remains required
-before enabling native transfer commits.
+The bundled helper now blocks the original local session across a hold timeout
+or app restart. Confirmed cancellation restores local execution; a completed
+move keeps the old source blocked. Recovery after sign-out or cache erasure
+and the native transfer review remain unfinished.
 See the [transfer contract](docs/transfer-payload.md) for ownership, limits,
 recovery and the remaining handoff work.
 

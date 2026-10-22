@@ -19,6 +19,7 @@ type transferHoldInput struct {
 	Session   Session `json:"session"`
 	Payload   []byte  `json:"payload"`
 	ExpiresAt int64   `json:"expiresAt"`
+	HandoffID string  `json:"handoffID,omitempty"`
 }
 
 // HoldTransferSource owns the native conversation lock until release, EOF,
@@ -76,7 +77,8 @@ func (a *App) HoldTransferSource(ctx context.Context, input io.ReadCloser, outpu
 		return err
 	}
 	defer locks.close()
-	if err = locks.acquire(session.Provider + ":" + session.Root + ":" + session.SessionID); err != nil {
+	key := session.Provider + ":" + session.Root + ":" + session.SessionID
+	if err = locks.acquireForHandoff(key, in.HandoffID); err != nil {
 		return err
 	}
 	verify := func() error {
@@ -114,7 +116,7 @@ func (a *App) HoldTransferSource(ctx context.Context, input io.ReadCloser, outpu
 			}
 			decoder := json.NewDecoder(bytes.NewReader(scanner.Bytes()))
 			decoder.DisallowUnknownFields()
-			if len(scanner.Bytes()) > 1024 || decoder.Decode(&command) != nil || decoder.Decode(new(any)) != io.EOF || (command.Type != "verify" && command.Type != "release") {
+			if len(scanner.Bytes()) > 1024 || decoder.Decode(&command) != nil || decoder.Decode(new(any)) != io.EOF || (command.Type != "verify" && command.Type != "release" && command.Type != "prepareCommit") {
 				return
 			}
 			select {
@@ -140,6 +142,11 @@ func (a *App) HoldTransferSource(ctx context.Context, input io.ReadCloser, outpu
 			}
 			if err = verify(); err != nil {
 				return err
+			}
+			if command == "prepareCommit" {
+				if err = locks.fence(key, in.HandoffID); err != nil {
+					return err
+				}
 			}
 			if err = emit(); err != nil {
 				return err

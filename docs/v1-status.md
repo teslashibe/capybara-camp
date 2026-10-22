@@ -18,8 +18,8 @@ and acceptance are separate milestones.
 | Memory and skills | Approved Cortex/shared Markdown design | Actual native and Go integrations, provider/model consolidation, memory inspection, skill editing/version rollout and permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: add durable local transfer fencing, finish native transfer review and
-local-plan promotion, then memory/skills
+Next: finish transfer-marker recovery after sign-out, native transfer review
+and local-plan promotion, then memory/skills
 and shared execution. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
@@ -102,8 +102,10 @@ committed receipt. Completion changes the execution epoch once, retires the old
 cloud token and removes temporary upload chunks in the same transaction.
 The cloud worker retains its claim through response loss. Within its timed
 source hold, the Mac waits for saved and published routing before releasing
-the lock. Durable local fencing across an expired hold or app restart must
-land before enabling native transfer commits. Native review UI,
+the lock. The bundled helper now persists a handoff marker before confirmation
+so an expired hold or app restart cannot start the old source locally. It
+restores Local only after an authenticated cancellation and unchanged assignment.
+Orphaned-marker recovery after sign-out or cache erasure, native review UI,
 child histories, attachments, unpushed commits, cloud-to-local transfer and
 live two-user acceptance remain open.
 The full Go race suite and vet pass at schema 23 with disposable PostgreSQL 17.
@@ -111,7 +113,15 @@ Both provider fixtures continue in the destination after a lost completion
 response while retaining the source files. Native handoff, cloud and worker
 regressions pass, including failed routing persistence and late file changes.
 Linux command builds and the staged secret scan pass. These checks do not
-replace the pending durable local fence, native transfer UI or live deployment.
+replace native transfer UI or live deployment acceptance.
+
+The persistent local marker now passes the full native regression suite and
+the complete Go race suite and vet. Tests refuse local execution after helper
+exit or expiry, allow the same handoff to recheck, reject other handoffs and
+malformed markers, and restore a cancelled source across coordinator restart.
+The actual bundled Go helper persists the marker before final confirmation.
+Linux command builds and the staged secret scan also pass. Sign-out/cache-erasure
+recovery and the native transfer walkthrough remain unaccepted.
 
 The native account form and synthetic provider walkthrough now pass locally.
 The Go controller provisions per-installation workers, renews managed grants,

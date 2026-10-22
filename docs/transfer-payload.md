@@ -353,11 +353,28 @@ keeps the completion journal for retry. The cloud worker keeps its journal until
 it reads the committed receipt. Neither client starts a model turn to complete
 a transfer.
 
-The local process lock still expires with the hold or app exit. A durable local
-start fence is required before enabling native transfer commits: an ambiguous
-completion must prevent local execution after that deadline and across an app
-restart until the server's assignment has been reconciled. The transfer review
-UI is not enabled yet.
+Before posting final confirmation, the native coordinator saves its recovery
+journal and asks the source helper to verify the files and persist a transfer
+marker in the existing session lock. The helper flushes the marker and its
+directory before returning. The marker contains only the handoff UUID; the
+filename is a hash of the provider, canonical profile path and session ID.
+Camp's normal conversation helper refuses a marked source after timeout,
+app exit or restart. A partial or malformed marker also blocks execution.
+
+Only the same handoff can reopen a marked source for verification. After a
+restart, the coordinator checks its saved handoff through the authenticated
+API before retrying. A committed move keeps the old local source marked. A
+released, expired or invalidated move clears the marker only after the server
+also confirms that the original execution epoch is still Local. Loss of
+connectivity or access preserves the marker and recovery journal.
+
+The local `transfer-resolve` helper clears a matching marker under the session
+lock; the native coordinator owns the server authorization check. This controls
+Camp's bundled CLI, not a provider CLI launched independently. Recovery after
+sign-out or cache erasure still needs an orphaned-marker recovery flow because
+those actions remove the scoped journal. The marker remains safe but can no
+longer be reconciled automatically from that journal. The native transfer review
+UI stays disabled until that recovery and the remaining integration are ready.
 
 ## Remaining integration
 
@@ -426,3 +443,7 @@ the upload expires. Both provider fixtures resume from the transferred files
 after a dropped completion response. The native source tests retain the lock
 through lost completion and session-read responses and a failed cache write;
 they reject files changed after the first acknowledgement.
+Persistent-marker tests cover helper exit, hold expiry, same-handoff retries,
+wrong-handoff resolution, malformed markers and symlinks. Native tests exercise
+the real helper's final-verification command and a cancelled confirmation across
+coordinator restart.
