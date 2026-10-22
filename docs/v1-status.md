@@ -22,8 +22,7 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: validate executor setup, initial owner approval and
-the worker against the local API, then finish the remaining transfer cases,
+Next: complete native executor-setup visual acceptance, then finish the remaining transfer cases,
 full-history migration and shared skills. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
@@ -33,6 +32,21 @@ together after local end-to-end acceptance. Use independent test users, device
 credentials and isolated native client state against the local API for
 collaboration, permissions, replay and ownership tests. Those checks supplement
 the final two-Mac/cloud acceptance; they do not replace it.
+
+The repeatable native/API implementation journey now passes for both Codex and
+Claude (`build/native-api-integration.log`, with an earlier focused pass in
+`build/native-api-integration-focused.log`). It runs the actual Swift
+review coordinator and worker through the real Go API/PostgreSQL with separate
+users and device credentials. It checks creator/executor separation, owner-only
+provider approvals, isolated conversations, HTTP transcript streaming, reported
+effort/speed and same-ticket completion without modifying account-source history.
+Lost prepare, approve, dispatch and stream responses replay the same saved IDs;
+a lost finish response reconciles the committed completion. Each journey starts
+its provider process once. The provider subprocess and local inspection are
+synthetic, so this does not close live CLI or two-Mac acceptance.
+Run `tools/test-native-api.sh` for a fresh disposable fixture. October 22
+computer-use rechecking confirmed native accessibility works; pointer actions
+still report no available window and browser control is disabled.
 
 The native shared-plan Implementation step now selects an independent executor,
 model, effort, speed and prepared Local/Cloud target. It reuses existing model

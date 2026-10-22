@@ -347,6 +347,7 @@ findings through the process in [SECURITY.md](SECURITY.md).
 ```sh
 ./test.sh
 ./tools/test-server.sh
+./tools/test-native-api.sh
 ./tools/test-processguard.sh
 ./tools/test-release.sh
 ./build.sh --universal
@@ -366,6 +367,15 @@ replays events after restarting the API. It checks private-session isolation,
 idempotent prompt retries and membership/device revocation. PostgreSQL and HTTP
 are real; worker completion is synthetic and no provider is called. Native
 client, live-provider and two-Mac/cloud acceptance remain separate checks.
+`tools/test-native-api.sh` runs the Swift execution-review coordinator and local
+worker against a fresh loopback Go API and disposable PostgreSQL. Two users with
+separate device credentials complete Codex and Claude implementation journeys.
+It verifies owner-only approvals, isolated provider conversations, streamed
+responses and settings, approval replies, recovery after lost responses, and
+completion on the original ticket. Provider subprocesses and local permission
+inspection are synthetic; personal profiles are never used. The script removes
+its temporary credentials, caches and database on exit. The native suite skips
+this journey during ordinary `test.sh` runs unless the explicit fixture is set.
 `tools/test-processguard.sh` exercises the required
 Linux process boundary; on macOS it uses Docker.
 `tools/test-release.sh` checks notarization recovery and packaging with synthetic
