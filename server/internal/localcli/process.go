@@ -99,6 +99,10 @@ func killGroup(pid int) error {
 // Run only Camp's child process group, with bounded output and time. No provider
 // PID discovered in a registry or transcript is ever signalled here.
 func (a *App) probe(ctx context.Context, s Session, args []string, timeout time.Duration) ([]byte, error) {
+	return a.probeAt(ctx, s, args, timeout, a.Config.Home)
+}
+
+func (a *App) probeAt(ctx context.Context, s Session, args []string, timeout time.Duration, cwd string) ([]byte, error) {
 	if len(args) == 0 {
 		return nil, errors.New("Missing provider command")
 	}
@@ -115,7 +119,7 @@ func (a *App) probe(ctx context.Context, s Session, args []string, timeout time.
 	defer cancel()
 	command := exec.CommandContext(ctx, path, args[1:]...)
 	command.Env = env
-	command.Dir = a.Config.Home
+	command.Dir = cwd
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout := &boundedOutput{limit: 2 << 20}
 	stderr := &boundedOutput{limit: 64 << 10}

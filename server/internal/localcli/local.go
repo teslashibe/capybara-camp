@@ -55,10 +55,11 @@ type Message struct {
 }
 
 type request struct {
-	Session Session `json:"session"`
-	Limit   *int    `json:"limit"`
-	After   *int64  `json:"after"`
-	Live    bool    `json:"live"`
+	Session     Session            `json:"session"`
+	Permissions PermissionSettings `json:"permissions"`
+	Limit       *int               `json:"limit"`
+	After       *int64             `json:"after"`
+	Live        bool               `json:"live"`
 }
 
 func (a *App) Run(ctx context.Context, action string, input io.Reader) (any, error) {
@@ -100,6 +101,10 @@ func (a *App) Run(ctx context.Context, action string, input io.Reader) (any, err
 		return nil, errors.New("Unexpected data after local helper request")
 	}
 	switch action {
+	case "permissions":
+		return a.permissionCatalog(ctx, r.Session)
+	case "execution-context":
+		return a.executionContext(ctx, r.Session, r.Permissions)
 	case "transcript":
 		limit := 120
 		if r.Limit != nil {
