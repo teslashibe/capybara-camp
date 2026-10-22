@@ -112,6 +112,23 @@ timing acceptance remains open; computer use is still blocked by the locked Mac.
 The final shared-module build and child suite pass after adding automatic
 reload when a saved child returns to a live state. The staged secret scan passes.
 
+The next child-view refinement paints an already cached catalog and message
+page before the network check finishes. It uses the same scope, permission and
+invalidation checks as offline reads, and replaces the preview with the verified
+response. Loading an earlier page uses one captured message base so the cache
+preview and network response do not append that page twice. The child, native
+state, cloud and session-context suites pass; visual latency acceptance remains open. Parent
+navigation also cancels the previous child-list request, so rapid switching
+does not accumulate network reads. The regression test observes cancellation
+of the earlier request and still rejects its late response. The staged secret
+scan passes.
+
+The next migration gap is the final history check. The existing source hold
+verifies the idle local process and reviewed files, but it does not yet prove
+that the imported main and child histories match the source at handoff. The
+fix must preserve independent activity in other conversations on the same
+profile and reject edits between publication, review and commit.
+
 The transfer work includes a read-only Go capture layer for selected Git
 changes and owner-bound, encrypted, resumable upload storage. Completion checks
 payload and review hashes against the pinned source revisions. The staging

@@ -37,10 +37,13 @@ actor ChildReadGate {
         let page=CloudChildTranscript(parentRevision:2,permissionRevision:1,child:child,transcript:CloudTranscript(revision:1,messages:[message],before:0,hasMore:false))
         try await cache.saveChildPage(page,scope:scope,parent:parent.id,before:0,expectedEpoch:0,expectedChildEpoch:historyEpoch)
         await connection.restore()
-        let savedCatalog=try await connection.childHistories(session:parent)
+        var projectedCatalogs:[CloudChildHistoryList]=[],projectedPages:[CloudChildTranscript]=[]
+        let savedCatalog=try await connection.childHistories(session:parent,onCached:{projectedCatalogs.append($0)})
         check(savedCatalog.cachedAt != nil && savedCatalog.displayChildren.first?.status=="saved","Offline catalog reported live activity")
-        let savedPage=try await connection.childTranscript(session:parent,childID:child.id)
+        check(projectedCatalogs.count==1 && projectedCatalogs[0].cachedAt != nil,"Saved child catalog was not projected before the network result")
+        let savedPage=try await connection.childTranscript(session:parent,childID:child.id,onCached:{projectedPages.append($0)})
         check(savedPage.cachedAt != nil && savedPage.transcript.messages.first?.id=="offline","Connection failure did not return the saved page")
+        check(projectedPages.count==1 && projectedPages[0].transcript.messages.first?.id=="offline","Saved child messages were not projected before the network result")
         do {_=try await connection.childMessage(session:parent,childID:child.id,revision:2,messageID:"offline");preconditionFailure("Exact citation silently fell back to a cached page")}catch{}
         print("PASS: real connection failure restores saved child history without claiming live activity")
     }
@@ -146,11 +149,13 @@ actor ChildReadGate {
         precondition(store.children.count==1 && store.selectedChildID==first.children[0].id,"Refresh dropped the selected child")
         await gate.finish(first);await until{!store.childrenLoading}
         let race=ChildReadGate()
-        store.cloudChildReader={value in if value.id==parent.id{return await race.read()};return second}
+        var oldReadCancelled=false
+        store.cloudChildReader={value in if value.id==parent.id{let result=await race.read();oldReadCancelled=Task.isCancelled;return result};return second}
         store.loadChildren(local);await until{await race.waiting()}
         store.selectedID=otherLocal.id;store.loadChildren(otherLocal);await until{!store.childrenLoading}
         await race.finish(first);try await Task.sleep(for:.milliseconds(20))
         precondition(store.children.first?.id==second.children.first?.id,"Late response replaced another parent's children")
+        precondition(oldReadCancelled,"Parent navigation left the previous child read running")
         let navigation=ChildReadGate();store.cloudChildReader={_ in await navigation.read()}
         store.loadChildren(otherLocal);await until{await navigation.waiting()}
         let plan=CampSession(id:"plan:"+UUID().uuidString,sessionID:UUID().uuidString,provider:"Planning",sourceID:"fixture",sourceLabel:"Fixture",root:"",title:"Plan",cwd:"",updated:1,path:"",accountID:"",archived:false)

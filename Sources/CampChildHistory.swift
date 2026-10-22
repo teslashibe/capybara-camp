@@ -78,10 +78,13 @@ enum ChildHistoryBridge {
 }
 
 extension CampConnection {
-    func childHistories(session:CloudSession) async throws->CloudChildHistoryList {
+    func childHistories(session:CloudSession,onCached:((CloudChildHistoryList)->Void)?=nil) async throws->CloudChildHistoryList {
         guard let scope,let client,let credential,let cache else{throw CampCloudError.cacheUnavailable}
         let epoch=try await cache.epoch(scope)
         let historyEpoch=try await cache.childEpoch(scope,parent:session.id)
+        if let onCached,let saved=try? await cache.childCatalog(scope,parent:session.id,permission:session.permissionRevision),
+           self.scope==scope,self.credential?.token==credential.token,childReadAllowed(session),!Task.isCancelled,
+           try await cache.epoch(scope)==epoch,try await cache.childEpoch(scope,parent:session.id)==historyEpoch {onCached(saved)}
         let value:CloudChildHistoryList
         do {value=try await client.get(CloudChildHistoryList.self,path:"/v1/camps/\(scope.campId)/sessions/\(session.id)/children",token:credential.token)}
         catch {
@@ -97,17 +100,20 @@ extension CampConnection {
         guard self.scope==scope,self.credential?.token==credential.token,childReadAllowed(session),!Task.isCancelled,try await cache.epoch(scope)==epoch,try await cache.childEpoch(scope,parent:session.id)==historyEpoch else{throw CancellationError()}
         return value
     }
-    func childTranscript(session:CloudSession,childID:String,before:Int64=0,revision:Int64=0) async throws->CloudChildTranscript {
-        try await readChildResponse(session:session,childID:childID,before:before,revision:revision,messageID:nil)
+    func childTranscript(session:CloudSession,childID:String,before:Int64=0,revision:Int64=0,onCached:((CloudChildTranscript)->Void)?=nil) async throws->CloudChildTranscript {
+        try await readChildResponse(session:session,childID:childID,before:before,revision:revision,messageID:nil,onCached:onCached)
     }
     func childMessage(session:CloudSession,childID:String,revision:Int64,messageID:String)async throws->CloudChildTranscript {
         guard revision>0,!messageID.isEmpty,messageID.utf8.count<=256 else{throw CampCloudError.invalidResponse}
         return try await readChildResponse(session:session,childID:childID,before:0,revision:revision,messageID:messageID)
     }
-    private func readChildResponse(session:CloudSession,childID:String,before:Int64,revision:Int64,messageID:String?)async throws->CloudChildTranscript {
+    private func readChildResponse(session:CloudSession,childID:String,before:Int64,revision:Int64,messageID:String?,onCached:((CloudChildTranscript)->Void)?=nil)async throws->CloudChildTranscript {
         guard UUID(uuidString:childID) != nil,before>=0,revision>=0,let scope,let client,let credential,let cache else{throw CampCloudError.invalidResponse}
         let epoch=try await cache.epoch(scope)
         let historyEpoch=try await cache.childEpoch(scope,parent:session.id)
+        if messageID==nil,let onCached,let saved=try? await cache.childPage(scope,parent:session.id,child:childID,permission:session.permissionRevision,before:before,revision:revision),
+           self.scope==scope,self.credential?.token==credential.token,childReadAllowed(session),!Task.isCancelled,
+           try await cache.epoch(scope)==epoch,try await cache.childEpoch(scope,parent:session.id)==historyEpoch {onCached(saved)}
         let path="/v1/camps/\(scope.campId)/sessions/\(session.id)/children/\(childID)"
         let raw:Data
         do {

@@ -75,15 +75,18 @@ struct ChildTranscriptView: View {
         defer{if requestID==token{loading=false}}
         do {
             guard let remote=store.cloudSessions[parent.id] else{throw CampCloudError.invalidResponse}
-            let result=try await store.cloud.childTranscript(session:remote,childID:child.id,before:more ? cloudBefore : 0,revision:more ? cloudRevision : 0)
-            guard !Task.isCancelled,requestID==token else{return}
-            let values=result.transcript.messages.map(\.transcriptMessage)
-            messages=more ? values+messages : values
-            cachedAt=result.cachedAt
-            cloudBefore=result.transcript.before;cloudRevision=result.parentRevision;cloudHasMore=result.transcript.hasMore
+            let before=more ? cloudBefore : 0,revision=more ? cloudRevision : 0,base=more ? messages : []
+            func apply(_ result:CloudChildTranscript) {
+                guard !Task.isCancelled,requestID==token else{return}
+                messages=result.transcript.messages.map(\.transcriptMessage)+base
+                cachedAt=result.cachedAt
+                cloudBefore=result.transcript.before;cloudRevision=result.parentRevision;cloudHasMore=result.transcript.hasMore
+            }
+            let result=try await store.cloud.childTranscript(session:remote,childID:child.id,before:before,revision:revision,onCached:apply)
+            apply(result)
         } catch {
             if !Task.isCancelled,requestID==token {
-                if childHistoryAccessDenied(error) {messages=[];cloudHasMore=false;cachedAt=nil}
+                if !childHistoryTransportUnavailable(error) {messages=[];cloudHasMore=false;cachedAt=nil}
                 self.error=error.localizedDescription
             }
         }

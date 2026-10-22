@@ -323,6 +323,7 @@ final class TranscriptWatch {
     @Published var children: [ChildSession] = []
     @Published var childrenLoading = false
     private var childrenRequestID = UUID()
+    private var childrenTask:Task<Void,Never>?
     private var observing = false
     private let codexWatch = CodexActivityWatch()
     private var polledActivity = ActivityResult(activity: [], sessions: [], models: [:], errors: [:])
@@ -628,6 +629,7 @@ final class TranscriptWatch {
         }
         if let selectedID, selectedID.hasPrefix("camp:"), cloudSessions[selectedID] == nil {
             self.selectedID = nil; messages = []; cloudHistory = [:]; readGeneration = UUID()
+            childrenTask?.cancel();childrenTask=nil
             children=[];selectedChildID=nil;subagentsParent=nil;childrenRequestID=UUID();childrenLoading=false
         }
     }
@@ -719,7 +721,7 @@ final class TranscriptWatch {
             }
         }
     }
-    deinit { backgroundPoll?.cancel() }
+    deinit { backgroundPoll?.cancel();childrenTask?.cancel() }
     func observeHistory() {
         guard view == "Chat", let s = selected else { transcriptWatch.stop(); return }
         guard !s.isCloud, s.provider != "Planning" else { transcriptWatch.stop(); return }
@@ -820,30 +822,39 @@ final class TranscriptWatch {
         planning.drain()
     }
     func loadChildren(_ s: CampSession) {
+        childrenTask?.cancel();childrenTask=nil
         let requestID=UUID();childrenRequestID=requestID
         if subagentsParent?.id != s.id {children = activity[s.id]?.children ?? []}
         subagentsParent = s; childrenLoading = true
         if s.isCloud {
-            Task {
-                defer {if childrenRequestID==requestID{childrenLoading=false}}
+            childrenTask=Task {
+                defer {if childrenRequestID==requestID{childrenLoading=false;childrenTask=nil}}
                 do {
                     guard let remote=cloudSessions[s.id] else{throw CampCloudError.invalidResponse}
                     let result:CloudChildHistoryList
-                    if let cloudChildReader {result=try await cloudChildReader(remote)} else {result=try await cloud.childHistories(session:remote)}
+                    if let cloudChildReader {result=try await cloudChildReader(remote)} else {
+                        result=try await cloud.childHistories(session:remote,onCached:{[weak self] saved in
+                            guard let self,self.childrenRequestID==requestID,self.subagentsParent?.id==s.id else{return}
+                            self.children=saved.displayChildren
+                        })
+                    }
                     guard childrenRequestID==requestID,subagentsParent?.id==s.id else{return}
                     guard result.valid(parent:remote.id) else{throw CampCloudError.invalidResponse}
                     children=result.displayChildren
                     if result.cachedAt != nil {banner="Offline · Showing saved subagents"}
                     else if banner=="Offline · Showing saved subagents" {banner=""}
-                } catch {if childrenRequestID==requestID{banner=error.localizedDescription}}
+                } catch {if childrenRequestID==requestID{
+                    if !childHistoryTransportUnavailable(error) {children=[];selectedChildID=nil}
+                    banner=error.localizedDescription
+                }}
             }
             return
         }
         if s.provider == "Codex", let live = activityFor(s) {
             children = live.children; childrenLoading = false; return
         }
-        Task {
-            defer {if childrenRequestID==requestID{childrenLoading = false}}
+        childrenTask=Task {
+            defer {if childrenRequestID==requestID{childrenLoading = false;childrenTask=nil}}
             do {
                 let input = try JSONSerialization.data(withJSONObject: ["session": object(s), "live": activity[s.id]?.state == "running"])
                 let result = try decoder.decode(ChildrenResult.self, from: await Bridge.call("children", input: input))
@@ -936,6 +947,7 @@ final class TranscriptWatch {
         reviewingPlan = nil
         planNavigation = nil
         selectedChildID = nil
+        childrenTask?.cancel();childrenTask=nil
         childrenRequestID=UUID();childrenLoading=false;subagentsParent=nil
         notificationPlanVersion = nil; notificationMessageID = nil
         if selectedID != session.id {

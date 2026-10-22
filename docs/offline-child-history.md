@@ -26,10 +26,16 @@ open it; keep the current build when resuming pending work.
 ## Offline behavior
 
 A saved transcript is labelled **Offline copy** with its saved time available
-on the label. The sidebar reports that it is showing saved subagents. Only
+on the label. Opening a previously read child paints its saved catalog and
+messages before waiting for the network. The update request then replaces the
+saved content; denial or an invalid/security response clears the preview. The
+sidebar reports that it is showing saved subagents. Only
 connection failures such as an unreachable host, timeout or lost network can
 use this fallback. Cancellation, an invalid response, a certificate error or a
 server error does not silently switch to cached content.
+Changing the selected parent cancels its previous child-list request. Cached
+and refreshed versions of an earlier page replace the same visible page rather
+than appending it twice.
 
 An authorization failure or a missing parent/child clears the parent's saved
 child history. A fetched catalog replaces the prior catalog and invalidates

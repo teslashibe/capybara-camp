@@ -544,6 +544,15 @@ The capture and upload layers do not complete any destination handoff. Its
 lifecycle and permissions remain under the existing Camp, runner and
 local-client ownership boundaries.
 
+The current source hold verifies process ownership and the selected working
+files. It does not yet bind a final local main/child history snapshot to the
+imported cloud revision. Complete migration acceptance requires that check
+at the final source handoff, including changes during publication, other active
+conversations in the same profile, and changes between review and commit. Use
+evidence for the selected conversations: the current import fingerprint includes
+shared Codex database files, so treating that fingerprint alone as a permanent
+transfer seal would also reject unrelated conversations' writes.
+
 ## Validation
 
 ```sh
