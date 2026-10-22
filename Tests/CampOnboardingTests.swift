@@ -46,6 +46,14 @@ import Foundation
         let integrated = root.appendingPathComponent("integrated")
         let store = CampStore(stateDirectory: integrated)
         precondition(store.onboarding.presented, "Detect first launch before the cache creates its directory")
+        let known = CampSource(id: "known", provider: "Codex", root: "/fixture/.codex", label: "Known", count: 28)
+        let found = CampSource(id: "found", provider: "Claude", root: "/fixture/.claude", label: "Found automatically", count: 0)
+        store.sources = [known]
+        store.applyProfileDiscovery([CampSource(id: known.id, provider: known.provider, root: known.root, label: known.label, count: 0), found, found])
+        precondition(store.sources.count == 2 && store.sources.first(where: { $0.id == known.id })?.count == 28,
+                     "Automatic discovery must preserve cached counts and deduplicate profiles")
+        store.applyProfileDiscovery([])
+        precondition(store.sources.count == 2, "A fast directory check cannot discard a prior source")
         for _ in 0..<300 where !store.projects.ready { try await Task.sleep(for: .milliseconds(10)) }
         precondition(store.projects.ready)
         let count = store.projects.projects.count

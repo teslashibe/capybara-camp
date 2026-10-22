@@ -2,7 +2,7 @@
 
 V1 development builds observe Codex profiles without starting or resuming their sessions. The published v0.0.1 does not include this observer.
 
-One supervised helper watches the selected profiles. When a profile has a private local daemon socket, the helper reads loaded-thread metadata and subscribes to status events. Active turns appear in In progress; approval and user-input waits appear in Needs you. The observer never answers provider requests.
+One supervised Go helper watches the selected profiles. When a profile has a private local daemon socket, the helper reads loaded-thread metadata and subscribes to status events. Active turns appear in In progress; approval and user-input waits appear in Needs you. The observer never answers provider requests.
 
 Codex Desktop can run a separate private stdio server. For those sessions, Camp checks which Codex process holds the exact rollout inode open for writing, then reads the turn lifecycle markers incrementally. A transcript's age, a process ID, or an unfinished saved turn alone cannot establish live activity. Discovery runs every two seconds; known files are checked every 100 milliseconds, and only changed snapshots cross into the app. Large existing rollouts show unknown until the initial scan catches up.
 
@@ -13,6 +13,18 @@ Session identity includes the profile. Saved child edges group subagents under t
 Frames, snapshots and incremental read buffers have size limits. Disconnects clear reliable running state, and profile removal invalidates callbacks from the previous helper. Probe subprocesses are reaped on cancellation. The helper does not retain transcript text or read login credentials.
 
 ## Validation
+
+The current native observer runs through `camp-local codex-activity-watch`.
+Go tests in `server/internal/localcli/codex_observer_test.go` cover partial and
+oversized socket frames, read-only RPCs, private socket permissions, approval-ID
+collisions, inode ownership, partial rollout records, repeated shutdown and
+bounded unfinished-record buffers. The Python reference remains temporarily
+for the conversation ownership check while that execution code is migrated.
+
+A ten-second comparison on October 21 found the same 12 live Codex session IDs
+and states in both implementations: eleven idle and one running, with no decode
+or observer errors. Both observer processes exited cleanly on cancellation.
+No model turn was started for this check.
 
 `Tests/test_codex_activity.py` covers the socket protocol, bounded frames, fragmented messages, read-only calls, turn transitions, partial writes, changed inodes, ownership checks, subprocess cleanup and an end-to-end helper stream. `Tests/CodexActivityTests.swift` covers board transitions, independent Claude polling, removed profiles, helper replacement and unexpected EOF. These checks supplement the full Python and native regression suites.
 

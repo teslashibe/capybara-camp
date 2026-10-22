@@ -138,7 +138,7 @@ enum Bridge {
     }()
     static func process(_ action: String) throws -> Process {
         let p = Process()
-        if ["scan", "transcript", "export-page", "add-source", "children", "activity", "permissions", "execution-context"].contains(action) {
+        if ["discover", "scan", "transcript", "export-page", "add-source", "children", "activity", "permissions", "execution-context", "codex-activity-watch"].contains(action) {
             let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/camp-local")
             guard FileManager.default.isExecutableFile(atPath: helper.path) else { throw CampError.message("The bundled Go session helper is missing. Rebuild the app.") }
             p.executableURL = helper; p.arguments = [action]
@@ -822,6 +822,14 @@ final class TranscriptWatch {
                 if refreshPending { refreshPending = false; refresh() }
             }
             do {
+                if !hasImportedSessions {
+                    // Show automatically found profiles without waiting for a
+                    // large transcript library to finish its initial import.
+                    if let data = try? await Bridge.call("discover"),
+                       let discovery = try? decoder.decode(ProfileDiscovery.self, from: data) {
+                        applyProfileDiscovery(discovery.sources)
+                    }
+                }
                 // Large profile libraries are decoded off the UI thread.
                 let result = try await Task.detached {
                     try JSONDecoder().decode(ImportResult.self, from: await Bridge.call("scan"))

@@ -75,7 +75,7 @@ continue into implementation with a separate executor choice on the same ticket.
 Completion notifications include a native inbox, foreground toasts, optional
 macOS alerts and server-owned read receipts across a person's devices.
 Client projects group tickets across repositories without changing their working directories. The sidebar and card menus support assignment, rename and archive, with private SQLite storage and shared Go/PostgreSQL state. See [projects](docs/projects.md) for the current contract.
-New installations open a four-step [setup flow](docs/onboarding.md) for local profiles, optional shared Camp connection, a project and desktop notifications. Existing users can open **Capybara Camp → Set up Capybara Camp**. Optional steps can be skipped, and setup can be resumed later.
+New installations open a four-step [setup flow](docs/onboarding.md) that automatically finds local profiles before importing their histories, then offers a shared Camp connection, a project and desktop notifications. A collapsed fallback accepts unusual profile locations. Existing users can open **Capybara Camp → Set up Capybara Camp**. Optional steps can be skipped, and setup can be resumed later.
 See [notifications](docs/notifications.md) for the current delivery
 and cross-device boundaries.
 Shared implementation, streamed partial shared-plan output, cloud runners,
@@ -83,6 +83,7 @@ memory and skills are still in development. These features are not included in v
 [cloud execution scope](docs/cloud-execution.md), and [self-hosting](docs/self-hosting.md)
 for the current implementation boundary and [the V1 epic](https://github.com/teslashibe/capybara-camp/issues/1)
 for release acceptance.
+The [V1 delivery status](docs/v1-status.md) separates the implemented local features from unfinished cloud, memory, skills and release work.
 V1 also includes a [Codex activity observer](docs/codex-activity.md), with live daemon events and verified desktop turn tracking. The [iteration sprint](docs/iteration-2.md) also covers client projects, GitHub workspaces and session permission controls.
 
 In a V1 development build, connect your Camp from the header, then choose

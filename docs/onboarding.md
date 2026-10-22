@@ -4,9 +4,12 @@ V1 development adds a four-step native setup sheet. It opens for a new local
 installation. Existing installations keep their board; anyone can reopen setup
 from **Capybara Camp → Set up Capybara Camp**.
 
-1. **Sessions** shows the profiles found by the normal background import, their
-   paths and session counts. Add profile folder uses the existing directory
-   picker and Go importer. Read failures stay visible; zero profiles does not
+1. **Sessions** automatically finds local profiles before reading their session
+   histories. The Go discovery pass checks `.codex*` and `.claude*` folders in
+   accessible Mac home directories, configured provider homes and previously
+   saved custom locations. No folder selection is required for those profiles.
+   A collapsed **Missing a profile?** section provides the directory picker for
+   unusual locations. Read failures stay visible; zero profiles does not
    block access to the app. Sign in through the provider CLI first. A profile
    folder is not a verified account identity.
 2. **Camp** is optional. Enable Connect a shared Camp, enter the server and email,
@@ -40,6 +43,12 @@ The sheet adds no polling loop, background task or second import cache. The
 source list is lazy, and the existing source, connection and project components
 are shared with their settings screens.
 
+The initial discovery pass reads directory/store markers rather than transcript
+contents. The UI shows these profiles while the full import runs and preserves
+previously cached session counts. A profile is a local store; several account
+identities can have history in one store. The verified account connection work
+must not equate the number of folders with the number of provider logins.
+
 ## Validation
 
 `CampOnboardingTests` covers new installation, upgrade detection, step bounds,
@@ -70,3 +79,10 @@ The final board kept the imported card visible after project creation. The
 walkthrough used synthetic profiles and accounts; no provider prompt was sent.
 Existing notification permission/denial behavior passed its native suite; the
 walkthrough kept desktop notifications off.
+
+The follow-up automatic-discovery fixture finds four Codex and two Claude
+profiles across separate user homes without a saved folder list, deduplicates
+symlinks and reads no transcript content. Native computer use verified that the
+real build shows three discovered profile stores while their histories are
+still importing. No folder picker was used; the custom-path control stayed
+collapsed. These three stores are not a count of verified provider accounts.

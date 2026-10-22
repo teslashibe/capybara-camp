@@ -23,7 +23,15 @@ func main() {
 	}
 	var result any
 	if err == nil {
-		result, err = localcli.New(cfg).Run(ctx, os.Args[1], os.Stdin)
+		app := localcli.New(cfg)
+		if os.Args[1] == "codex-activity-watch" {
+			err = app.WatchCodex(ctx, os.Stdin, os.Stdout)
+			if err == nil {
+				return
+			}
+		} else {
+			result, err = app.Run(ctx, os.Args[1], os.Stdin)
+		}
 	}
 	if err != nil {
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"type": "error", "message": err.Error()})

@@ -109,6 +109,7 @@ struct CampOnboardingView: View {
     private var projectID: String { setup.projectID }
     @State private var projectName = ""
     @State private var repositories = ""
+    @State private var showProfileFallback = false
     private var busy: Bool { setup.savingProject || cloud.busy }
     private var canContinue: Bool {
         if busy { return false }
@@ -171,14 +172,19 @@ struct CampOnboardingView: View {
     private var profiles: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Your Codex and Claude sessions, together on this Mac").font(.system(size: 14))
-            if store.importing { HStack { ProgressView().controlSize(.small); Text("Finding local profiles…").font(.system(size: 12)) } }
-            LocalProfileList(sources: store.sources)
+            if store.importing { HStack { ProgressView().controlSize(.small); Text(store.sources.isEmpty ? "Finding local profiles…" : "Importing sessions…").font(.system(size: 12)) } }
+            LocalProfileList(sources: store.sources, loading: store.importing)
             if store.sources.isEmpty && !store.importing {
                 Label("No local profiles found yet", systemImage: "folder").font(.system(size: 13, weight: .medium))
             }
-            Text("Already use Codex or Claude Code? Camp finds their local profiles automatically. For another account, choose its CODEX_HOME or CLAUDE_CONFIG_DIR folder.")
+            Text("Camp finds your Codex and Claude profiles automatically, including separate profiles in accessible Mac user folders. New sessions appear without refreshing.")
                 .font(.system(size: 12)).foregroundStyle(campMuted)
-            Button("Add profile folder", systemImage: "folder.badge.plus") { store.addSource() }.disabled(store.importing)
+            DisclosureGroup("Missing a profile?", isExpanded: $showProfileFallback) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Profiles in a custom location can be added here. Camp cannot read another Mac user's locked folders.").font(.system(size: 12)).foregroundStyle(campMuted)
+                    Button("Add a custom profile folder", systemImage: "folder.badge.plus") { store.addSource() }.disabled(store.importing)
+                }.padding(.top, 8)
+            }.font(.system(size: 12))
             Text("Sign in through each provider's CLI first. Importing a folder does not verify its current login, and credentials stay with that CLI.")
                 .font(.system(size: 12)).foregroundStyle(campMuted)
             HStack(spacing: 18) {
@@ -247,11 +253,12 @@ struct CampOnboardingView: View {
 
 struct LocalProfileList: View {
     let sources: [CampSource]
+    var loading = false
     var body: some View {
         LazyVStack(spacing: 10) {
             ForEach(sources) { source in
                 VStack(alignment: .leading, spacing: 5) {
-                    HStack { Text(source.provider + " · " + source.label).fontWeight(.medium); Spacer(); Text(source.count.formatted()).foregroundStyle(campMuted) }
+                    HStack { Text(source.provider + " · " + source.label).fontWeight(.medium); Spacer(); Text(loading && source.count == 0 ? "Reading sessions…" : source.count.formatted()).foregroundStyle(campMuted) }
                     Text(source.root).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).foregroundStyle(campMuted)
                 }.font(.system(size: 12)).padding(13).frame(maxWidth: .infinity, alignment: .leading).background(.white.opacity(0.75)).clipShape(RoundedRectangle(cornerRadius: 10))
             }

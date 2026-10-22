@@ -16,8 +16,9 @@ import (
 )
 
 type App struct {
-	Config      config.Local
-	commandPath func(string, []string) (string, error)
+	Config        config.Local
+	commandPath   func(string, []string) (string, error)
+	systemCapture func(context.Context, string, []string, time.Duration, int) (int, []byte, error)
 }
 
 func New(c config.Local) *App { return &App{Config: c} }
@@ -63,6 +64,13 @@ type request struct {
 }
 
 func (a *App) Run(ctx context.Context, action string, input io.Reader) (any, error) {
+	if action == "discover" {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		sources, _, err := a.sources()
+		return map[string]any{"sources": sources}, err
+	}
 	if action == "scan" {
 		return a.Scan(ctx)
 	}

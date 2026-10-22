@@ -74,6 +74,50 @@ func TestTitleBoundAndInstructionFiltering(t *testing.T) {
 	}
 }
 
+func TestAutomaticProfileDiscoveryNeedsNoSavedPaths(t *testing.T) {
+	a := fixture(t)
+	other := filepath.Join(a.Config.UsersDir, "teammate")
+	for _, root := range []string{
+		filepath.Join(a.Config.Home, ".codex"), filepath.Join(a.Config.Home, ".codex-work"),
+		filepath.Join(other, ".codex"), filepath.Join(other, ".codex-client"),
+	} {
+		write(t, filepath.Join(root, "sessions", "2026", "large.jsonl"), "{unfinished")
+	}
+	for _, root := range []string{filepath.Join(a.Config.Home, ".claude"), filepath.Join(other, ".claude-team")} {
+		write(t, filepath.Join(root, "projects", "demo", "large.jsonl"), "{unfinished")
+	}
+	alias := filepath.Join(a.Config.Home, ".codex-alias")
+	if err := os.Symlink(filepath.Join(a.Config.Home, ".codex"), alias); err != nil {
+		t.Fatal(err)
+	}
+	value, err := a.Run(context.Background(), "discover", strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := value.(map[string]any)["sources"].([]Source)
+	counts := map[string]int{}
+	for _, source := range sources {
+		counts[source.Provider]++
+		if source.Count != 0 {
+			t.Fatal("Discovery read transcript counts")
+		}
+	}
+	if counts["Codex"] != 4 || counts["Claude"] != 2 {
+		t.Fatal(counts)
+	}
+	if _, err := os.Stat(filepath.Join(a.Config.Support, "sources.json")); !os.IsNotExist(err) {
+		t.Fatal("Automatic discovery must not require or create a manual source list")
+	}
+	if _, err := os.Stat(filepath.Join(a.Config.Support, "import-cache.json")); !os.IsNotExist(err) {
+		t.Fatal("Fast discovery must not import transcripts")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := a.Run(ctx, "discover", strings.NewReader("")); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+}
+
 func TestCodexStoresAreReadOnlyAndProfilesStaySeparate(t *testing.T) {
 	a := fixture(t)
 	root := filepath.Join(a.Config.Home, ".codex")
