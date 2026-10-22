@@ -159,7 +159,7 @@ struct LocalPlan: Codable, Equatable, Identifiable {
         try data.write(to: file, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
     }
-    private static func valid(_ values: [LocalPlan]) -> Bool {
+    nonisolated static func valid(_ values: [LocalPlan]) -> Bool {
         let states = Set(["draft", "running", "paused", "ready", "cancelled", "failed", "needs_review"])
         let stepStates = Set(["pending", "starting", "running", "completed", "cancelled", "failed", "unknown"])
         return values.count <= 200 && Set(values.map(\.id)).count == values.count && values.allSatisfy { plan in
@@ -191,14 +191,18 @@ struct LocalPlan: Codable, Equatable, Identifiable {
     @discardableResult func modifyTicket(_ id: String, _ operation: (inout LocalPlan) -> Void) -> Bool {
         var values = tickets
         guard let index = values.firstIndex(where: { $0.id == id }) else { return false }
-        operation(&values[index]); values[index].updated = Date().timeIntervalSince1970
+        operation(&values[index])
+        if values[index] == tickets[index] { error = ""; return true }
+        values[index].updated = Date().timeIntervalSince1970
         return commit(values)
     }
     @discardableResult private func update(_ id: String, version: Int? = nil, _ operation: (inout LocalPlanVersion) -> Void) -> Bool {
         var values = tickets
         guard let t = values.firstIndex(where: { $0.id == id }),
               let v = values[t].versions.firstIndex(where: { $0.number == (version ?? values[t].current.number) }) else { return false }
-        operation(&values[t].versions[v]); values[t].updated = Date().timeIntervalSince1970
+        operation(&values[t].versions[v])
+        if values[t].versions[v] == tickets[t].versions[v] { error = ""; return true }
+        values[t].updated = Date().timeIntervalSince1970
         let title = values[t].current.brief.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         values[t].title = title.isEmpty ? values[t].current.workflow.title : String(title.prefix(160))
         return commit(values)

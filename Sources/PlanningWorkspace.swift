@@ -121,6 +121,7 @@ struct PlanningCard: View {
                     Spacer()
                     Menu {
                         Button("Open plan") { store.open(plan.session) }
+                        Button("Save to Camp", systemImage: "icloud.and.arrow.up") { store.planPromotionSheet = plan.session }
                         ProjectAssignmentMenu(store:store,session:plan.session)
                         Button("Start over") { planning.restart(id); store.open(plan.session) }
                         Button("Cancel planning") { planning.cancel(id) }.disabled(plan.current.state == "ready" || plan.current.state == "cancelled")
@@ -178,6 +179,8 @@ struct PlanningWorkspace: View {
                         Text(plan.current.workflow.title).font(.system(size: 12, weight: .medium))
                         Text("\(plan.current.completedCount) of \(plan.current.workflow.turnLimit) \(plan.current.workflow == .single ? "turn" : "turns")").font(.system(size: 11)).foregroundStyle(campMuted)
                         Spacer()
+                        Button { store.planPromotionSheet = plan.session } label: { Image(systemName: "icloud.and.arrow.up").frame(width: 28, height: 28) }
+                            .help("Save this ticket to Camp").accessibilityLabel("Save this ticket to Camp")
                         Button {
                             if plan.current.state == "needs_review" && !reviewedUnknown { section = "History" }
                             else { planning.restart(id, reviewedUnknown: reviewedUnknown); section = "Plans" }

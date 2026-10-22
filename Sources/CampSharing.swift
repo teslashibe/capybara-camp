@@ -92,6 +92,17 @@ struct LocalShareStatus {
     }
     func localChanged() { if !shares.isEmpty { wake() } }
     func retry() { retryDelay = 1; wake() }
+    func historyTranscript(for localID: String) async throws -> ImportedTranscriptBinding {
+        let token = generation
+        guard var value = shares.first(where: { $0.local.id == localID }), let snapshot = value.historySnapshot,
+              let saved = value.publishedHistory, saved.valid, saved.mainRevision == snapshot.revision,
+              value.remote != nil else { throw CampError.message("The history copy has not finished") }
+        value.remote?.transcriptRevision = saved.transcriptRevision
+        let messages = try await historyMessages(value, generation: token)
+        guard messages.count == snapshot.messages.count, snapshot.matchesPrefix(messages), let remote = value.remote else { throw CampCloudError.invalidResponse }
+        try check(token)
+        return ImportedTranscriptBinding(session: remote, revision: saved.transcriptRevision, messages: messages)
+    }
     private func set(_ value: LocalShare) {
         if let index = shares.firstIndex(where: { $0.id == value.id }) { shares[index] = value } else { shares.append(value) }
         changed?()

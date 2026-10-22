@@ -23,9 +23,15 @@ import Foundation
         let trace = root.appendingPathComponent("trace")
         let engine = configured(root.appendingPathComponent("state"), trace: trace)
         let id = engine.create(planners: planners)!
+        let unchanged = engine.ticket(id)
+        precondition(engine.edit(id) { _ in })
+        precondition(engine.modifyTicket(id) { _ in })
+        precondition(engine.ticket(id) == unchanged, "Opening an unchanged draft changed its saved identity")
         engine.edit(id) { $0.brief = "A bounded plan" }
         precondition(!engine.edit(id) { $0.brief = String(repeating: "x", count: 8193) })
         precondition(engine.ticket(id)?.current.brief == "A bounded plan")
+        precondition(engine.edit(id) { $0.brief = "A bounded plan" })
+        precondition(engine.error.isEmpty, "A valid unchanged draft retained a stale error")
         engine.start(id)
         precondition(engine.ticket(id)?.current.state == "draft")
         precondition(!FileManager.default.fileExists(atPath: trace.path), "Strict token limits must fail before launching")

@@ -124,34 +124,26 @@ drafts. Start over creates a new revision with reviewed locations.
 In a shared draft, **Run on** below each planner's model settings selects its
 Local or Cloud source separately. Choose a prepared cloud workspace or a
 session on this Mac, then apply the selection. Other planner settings and
-attached context stay unchanged. Existing standalone local plans still need
-the native import flow to move into the shared coordinator. The development
-Go API can now preserve their saved planning versions as private history,
-without queuing provider work. The native reader displays imported sources,
-saved errors and unconfirmed outcomes. The native review/upload flow and preservation
-of existing implementation conversations in the native flow remain unfinished; see
-[local-plan import](docs/planning.md#local-plan-import-api).
-Start over retains quoted context in the new draft. Removing a source there
-does not alter the saved planning history.
-The development API can attach copied implementation transcripts and saved
-attempt records to their original plan versions. Open them from the plan's
-History view to inspect the chat or attempts in the same workspace. Paged reads
-preserve the copied revision and current permissions. Native import and
-publication controls remain pending.
+attached context stay unchanged.
 
-The native import preparation and upload controller preserve every saved plan
-revision, quoted source, implementation attempt and historical model setting.
-Preparation requires published source bindings and an exact match between the
-saved implementation transcript and its pinned cloud copy. The controller saves
-the reviewed request before submission, reuses its key after a lost response,
-and checks source access again before accepting the result. Profile paths and
-local execution directories are excluded. The saved-history publisher copies
-frozen transcripts through the existing Camp session API and verifies their
-complete content before import. The native review screen and coordinator still
-need to be connected before this becomes an end-to-end app flow.
-Copied history sources use an immutable read-only marker. The server refuses
-execution against them, and the native board keeps them under their parent
-plan instead of adding another ordinary session card.
+In the development build, choose **Save to Camp** from a local planning or
+implementation card's menu, or the cloud icon in the plan window. Review the
+destination project and choose **Save privately**. Camp copies the saved plan
+revisions, quoted context, implementation chats, attempts and model settings
+without starting a provider turn. Progress continues after closing the review
+window. **Retry** resumes a failed upload; restarting the app restores the
+approved import. See [local-plan import](docs/planning.md#native-import-preparation-and-recovery).
+
+The original ticket remains on this Mac. Once the same snapshot is saved, its
+Camp card takes its place in the board. Newer local work remains visible, and
+signing out restores the local view. Open the saved plan's **History** view to
+inspect implementation chats and attempts. Start over retains quoted context
+in a new draft; removing a source there leaves the saved version intact.
+
+Source copies are read-only and stay under their parent plan. Profile paths,
+credentials and project files are excluded from this history import. Continuing
+with an agent requires a new, reviewed execution assignment. Native visual
+acceptance and two-Mac validation remain release gates.
 
 ### Default execution settings
 

@@ -140,10 +140,10 @@ respect the same plan visibility as reads.
 ## Local-plan import API
 
 The development Go API accepts an existing local plan at
-`POST /v1/camps/{camp}/planning/import`. This is the storage portion of local-plan
-promotion. The native review/upload flow is not connected yet. The endpoint
-can also attach implementation histories already copied to private Camp
-sessions. Keep the original local plan until the complete native flow ships.
+`POST /v1/camps/{camp}/planning/import`. The native **Save to Camp** review
+publishes private source copies and submits this request. The endpoint also
+accepts implementation histories already copied to private Camp sessions.
+The original local plan remains on the Mac after import.
 
 The request uses the normal native bearer token and an `Idempotency-Key`. It
 contains a `source_id`, `title`, destination `project_id` and `versions`. The
@@ -197,6 +197,27 @@ native transfer feature.
 
 ### Native import preparation and recovery
 
+Open a local planning or implementation card's menu and choose **Save to Camp**,
+or use the cloud icon in the planning workspace. The review shows the ticket,
+version and implementation-chat counts, the destination project and its private
+visibility. **Save privately** authorizes a frozen copy. It does not run a
+provider, move project files or upload login credentials.
+
+The coordinator saves the approved snapshot before publishing its sources.
+The review can be closed while copying continues. It shows copying progress,
+then the plan upload. **Retry** resumes an interrupted operation. If the app
+exits, reconnecting to the same Camp restores the approved job. **Start over**
+can discard an unsubmitted review; a submitted request must be reconciled first.
+Successful imports open in the shared planning workspace, with all earlier
+versions and implementation history available through its normal navigation.
+
+The source ticket remains in `local-plans.json`. A scoped link replaces an
+unchanged local card with the saved Camp card. The link records the source
+revision timestamp and fingerprint; newer local work stays visible and is
+labelled as having an earlier saved copy. Signing out restores the local view.
+The coordinator and its link index are scoped to the person, server and Camp;
+clearing the Camp cache removes both. Neither changes the original local file.
+
 `LocalPlanImport.prepare` maps a local ticket into the import contract. It
 requires an owned, published planner binding for each participant and a pinned,
 complete cloud transcript for each implementation. Message IDs, order, text and
@@ -224,10 +245,12 @@ route. Other requests retain the 2 MiB limit. The final response must match the
 reviewed owner, Camp, project, version and saved planning snapshot before the
 controller installs it.
 
-These components are tested independently of the UI. The saved-history
-publisher is implemented; the coordinator and native review screen remain
-unfinished. The current app does not yet expose a complete local-plan import
-action.
+`CampPlanPromotion` owns the saved approval, publication progress and the link
+to the resulting plan. It reuses `CampSharing` for source publication and
+`CampPlanImport` for the final request. Its recovery tests use the real local
+cache and a synthetic Camp transport, including lost responses and cache
+clearing. Native computer-use and real two-Mac acceptance remain separate
+release gates.
 
 ### Read-only history sources
 

@@ -234,6 +234,7 @@ final class TranscriptWatch {
     let planning: LocalPlanning
     let notifications: CampNotifications
     let sharedPlanning: CampPlanning
+    let planPromotion: CampPlanPromotion
     @Published var notificationSheet = false
     @Published var notificationPlanVersion: Int?
     @Published var notificationMessageID: String?
@@ -245,6 +246,7 @@ final class TranscriptWatch {
     private var externalRuns: [String: String] = [:]
     private var backgroundPoll: Task<Void, Never>?
     @Published var shareSheet: CampSession?
+    @Published var planPromotionSheet: CampSession?
     @Published var executionSheet: CampSession?
     @Published var contextInspection: ContextInspection?
     @Published var reviewingPlan: String?
@@ -434,6 +436,14 @@ final class TranscriptWatch {
         projects = LocalProjects(cache: cloud.cache)
         sharing = CampSharing(cache: cloud.cache)
         sharedPlanning = CampPlanning(cache: cloud.cache)
+        planPromotion = CampPlanPromotion(cache: cloud.cache, sharing: sharing)
+        planPromotion.upload.installed = { [weak sharedPlanning] result in try await sharedPlanning?.install(result) }
+        planPromotion.changed = { [weak self] in self?.syncPlans() }
+        planPromotion.completed = { [weak self] localID, remoteID in
+            guard let self else { return }
+            if self.selectedID == localID, let local = self.planning.ticket(localID), !self.isBusy(local.session) { self.openSharedPlan(remoteID) }
+            self.banner = "Saved to Camp"
+        }
         sharing.localChildren = { [weak self] session in self?.activityFor(session)?.children ?? [] }
         projects.changed = { [weak self] in self?.projectsChanged() }
         sharedPlanning.changed = { [weak self] in self?.syncSharedPlans() }
@@ -525,10 +535,12 @@ final class TranscriptWatch {
                 self.sharing.attach(scope: scope, actor: actor, transport: transport)
                 self.cloud.worker.attach(scope: scope, actor: actor, transport: transport, sessions: sessions)
                 self.sharedPlanning.attach(scope: scope, actor: actor, transport: transport, sessions: sessions)
+                self.planPromotion.attach(scope: scope, actor: actor, transport: transport, sessions: sessions)
             } else {
                 self.sharing.attach(scope: nil, actor: nil, transport: nil)
                 self.cloud.worker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
                 self.sharedPlanning.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+                self.planPromotion.attach(scope: nil, actor: nil, transport: nil, sessions: [])
             }
         }
         cloud.transcriptChanged = { [weak self] id in
@@ -583,7 +595,8 @@ final class TranscriptWatch {
     }
     private func syncPlans() {
         guard !planning.tickets.isEmpty else { return }
-        let plans = planning.tickets.map(\.session)
+        let current = stateSnapshot()
+        let plans = planning.tickets.filter { !planPromotion.replaces($0) || current.busy($0.session) }.map(\.session)
         sessions = (plans + sessions.filter { !$0.isPlan || $0.isSharedPlan }).sorted { $0.updated > $1.updated }
         for plan in planning.tickets { stages[plan.id] = plan.stage }
     }
@@ -1369,6 +1382,7 @@ struct RootView: View {
         .sheet(item: $store.permissionSheet) { SessionPermissionsView(store: store, session: $0).campWindowBehavior() }
         .sheet(isPresented: $showCamp) { CampConnectionView(cloud: store.cloud).campWindowBehavior() }
         .sheet(item: $store.shareSheet) { session in CampShareView(store: store, cloud: store.cloud, sharing: store.sharing, session: session).campWindowBehavior() }
+        .sheet(item: $store.planPromotionSheet) { session in PlanPromotionView(store: store, localID: session.id).campWindowBehavior() }
         .sheet(item: $store.executionSheet) { session in RunLocationView(store:store,session:session).campWindowBehavior() }
         .sheet(item: $store.contextInspection) { value in ContextInspectionView(store: store, inspection: value).campWindowBehavior() }
         .onOpenURL { store.openContextLink($0) }
@@ -1511,6 +1525,7 @@ struct SessionCard: View {
                 Menu {
                     ForEach(Stage.allCases, id: \.self) { dest in Button("Move to \(dest.rawValue)") { store.move(session.id, dest) } }
                     ProjectAssignmentMenu(store:store,session:session)
+                    if store.planning.ticket(session.id) != nil { Button("Save to Camp", systemImage: "icloud.and.arrow.up") { store.planPromotionSheet = session } }
                     if !session.isCloud && session.provider != "Planning" { Button("Permissions…") { store.permissionSheet = session } }
                     if let local = store.shareSource(session) { Divider(); Button("Share with Camp…") { store.shareSheet = local } }
                 } label: { Image(systemName: "ellipsis").foregroundStyle(campMuted).frame(width: 28, height: 28) }

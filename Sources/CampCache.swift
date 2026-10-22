@@ -130,6 +130,13 @@ actor CampCache {
             else { try execute("DELETE FROM metadata WHERE key=?", [.text("planning-import:" + scope.key)]) }
         }
     }
+    func savePlanPromotion(_ data: Data, scope: CloudScope, expectedEpoch: Int64) throws {
+        guard data.count <= 24 << 20 else { throw CampCloudError.responseTooLarge }
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            try setMetadata("plan-promotion:" + scope.key, data)
+        }
+    }
     func saveHandoffJournal(_ data: Data, scope: CloudScope, expectedEpoch: Int64) throws {
         try transaction {
             try checkEpoch(scope, expectedEpoch)
@@ -470,6 +477,7 @@ actor CampCache {
             try execute("DELETE FROM metadata WHERE key=?", [.text("notifications:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("planning:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("planning-import:" + scope.key)])
+            try execute("DELETE FROM metadata WHERE key=?", [.text("plan-promotion:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("worker-claim:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("execution-setup:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("source-handoff:" + scope.key)])

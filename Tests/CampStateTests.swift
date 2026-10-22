@@ -1,5 +1,9 @@
 import Foundation
 
+private struct NoPromotionWork: CampPublishingTransport {
+    func perform(_ operation: CampPublication) async throws -> Data { preconditionFailure("A saved board link started network work") }
+}
+
 @main struct CampStateTests {
     @MainActor static func main() async throws {
         do { _ = try Bridge.process("unsupported-fixture-action"); preconditionFailure("Unsupported helper action accepted") }
@@ -180,6 +184,21 @@ import Foundation
         precondition(store.sessions.contains { $0.id == "camp:" + visible.id })
         precondition(!store.sessions.contains { $0.id == "camp:" + history.id }, "Archived source became an ordinary board or recent-session card")
         precondition(store.cloudSessions["camp:" + history.id]?.isHistoryOnly == true, "Archived history lost its access/provenance record")
+        let localPlanID = store.planning.create(planners: [.init(session: a, model: "fixture-model", tuning: .init())], mode: .single)!
+        let localPlan = store.planning.ticket(localPlanID)!
+        precondition(store.sessions.contains { $0.id == localPlanID })
+        let linkScope = CloudScope(origin: "https://camp.example", userId: visible.ownerUserId, campId: visible.campId)
+        let linkActor = CloudActor(userId: visible.ownerUserId, deviceId: visible.ownerDeviceId, email: "fixture@example.com", name: "Fixture")
+        let savedLink = PlanPromotionLink(planId: UUID().uuidString, localUpdated: localPlan.updated, fingerprint: try LocalPlanImport.fingerprint(localPlan))
+        try await store.cloud.cache!.savePlanPromotion(JSONEncoder().encode(PlanPromotionState(links: [localPlanID: savedLink])), scope: linkScope, expectedEpoch: 0)
+        store.planPromotion.attach(scope: linkScope, actor: linkActor, transport: NoPromotionWork(), sessions: [])
+        for _ in 0..<100 where !store.planPromotion.ready { try await Task.sleep(for: .milliseconds(10)) }
+        precondition(store.planPromotion.ready && !store.sessions.contains { $0.id == localPlanID }, "A saved local snapshot stayed duplicated on the board")
+        precondition(store.planning.ticket(localPlanID) == localPlan, "Linking deleted the local recovery copy")
+        store.planning.edit(localPlanID) { $0.brief = "New local work after the copy" }
+        precondition(store.sessions.contains { $0.id == localPlanID }, "Newer local work disappeared behind an old saved copy")
+        store.planPromotion.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+        precondition(store.sessions.contains { $0.id == localPlanID })
         print("PASS: native state, transcript notifications, queues, rejected prompt recovery and archived history visibility")
     }
 }

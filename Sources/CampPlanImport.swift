@@ -21,6 +21,7 @@ struct PlanImportJournal: Codable, Sendable {
     @Published private(set) var ready = false
     @Published private(set) var error = ""
     @Published private(set) var imported: CloudPlanningResult?
+    @Published private(set) var completedFingerprint: String?
     var installed: ((CloudPlanningResult) async throws -> Void)?
     private let cache: CampCache?
     private var context: Context?
@@ -38,7 +39,7 @@ struct PlanImportJournal: Codable, Sendable {
             if let journal, !hasAccess(journal.prepared) { pause(); error = "Source access changed. Reconnect it before retrying the saved import" }
             return
         }
-        task?.cancel(); operation = UUID(); editing = false; task = nil; context = nil; journal = nil; imported = nil; error = ""; ready = false; working = false; visible = permissions
+        task?.cancel(); operation = UUID(); editing = false; task = nil; context = nil; journal = nil; imported = nil; completedFingerprint = nil; error = ""; ready = false; working = false; visible = permissions
         guard let scope, let actor, actor.userId == scope.userId, let transport, let cache else { return }
         let c = Context(scope: scope, actor: actor, transport: transport)
         context = c
@@ -79,7 +80,7 @@ struct PlanImportJournal: Codable, Sendable {
         let value = PlanImportJournal(prepared: prepared)
         try await cache.savePlanImport(value, scope: c.scope, expectedEpoch: c.epoch)
         try await authority(c, prepared: prepared)
-        journal = value; imported = nil; error = ""
+        journal = value; imported = nil; completedFingerprint = nil; error = ""
     }
     func submit(current plan: LocalPlan) async throws {
         guard ready, !working, !editing, let c = context, let cache, var value = journal else { throw CampCloudError.cacheUnavailable }
@@ -120,7 +121,7 @@ struct PlanImportJournal: Codable, Sendable {
                 try await self.authority(c, prepared: value.prepared)
                 try await self.cache?.savePlanImport(nil, scope: c.scope, expectedEpoch: c.epoch)
                 try self.check(c)
-                self.imported = result; self.journal = nil; self.working = false; self.task = nil
+                self.imported = result; self.completedFingerprint = value.prepared.localFingerprint; self.journal = nil; self.working = false; self.task = nil
             } catch { if self.operation == work { self.finish(error, context: c) } }
         }
     }

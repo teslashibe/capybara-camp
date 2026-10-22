@@ -9,16 +9,16 @@ and acceptance are separate milestones.
 | Area | Implemented locally | Still required for V1 |
 | --- | --- | --- |
 | Local sessions | Automatic multi-profile import, board/chat, model/effort/speed controls, sub-agents, streaming, dictation, steering and queues | Finish live provider/recovery and performance validation after the Go migration; complete the final design comparison below |
-| Planning and projects | Single-model plan, provider comparison, saved versions, per-Camp execution defaults, shared-draft per-planner destination selection, pinned execution assignments, same-ticket local implementation, project assignment across repositories, private plan and implementation-history import APIs, native imported-implementation reader, import preparation and durable upload controller | Connect native import review and automatic implementation-history publication, shared implementation and owner-routed approval completion; cross-device validation |
+| Planning and projects | Single-model plan, provider comparison, saved versions, per-Camp execution defaults, shared-draft per-planner destination selection, pinned execution assignments, same-ticket local implementation, project assignment across repositories, native private history-import review and resumable source publication, imported-implementation reader | Native import visual acceptance, shared implementation and owner-routed approval completion; cross-device validation |
 | Shared Camps | Go/PostgreSQL auth, membership, sessions, events, requests, native cache/outbox and owner-Mac worker | Real independent users on two Macs, remaining permission/recovery cases, production deployment |
 | Onboarding | Automatic profile discovery before full import, optional Camp sign-in, owner-only cloud account setup, GitHub connections, projects, execution defaults, notifications, skip/resume | Final onboarding validation after remaining services land |
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
-| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments and new-plan defaults, native Run on controls, reviewed Local-to-Cloud file capture and private transcript copy, multi-ticket per-account scheduling, native steering/queue/stop controls, durable approval/control delivery, a shared request queue, provider subprocess consumption, event streaming and credential revision fencing, mandatory Linux child-process isolation | Standalone local-plan promotion, remaining signed-in recovery states, target-runtime isolation validation, complete history/attachment and reverse transfers, complete reported runtime settings and usage states, live sandbox/network/login/control validation and disconnected-Mac execution |
+| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments and new-plan defaults, native Run on controls, reviewed Local-to-Cloud file capture and private transcript copy, multi-ticket per-account scheduling, native steering/queue/stop controls, durable approval/control delivery, a shared request queue, provider subprocess consumption, event streaming and credential revision fencing, mandatory Linux child-process isolation | Native plan-import acceptance, remaining signed-in recovery states, target-runtime isolation validation, complete history/attachment and reverse transfers, complete reported runtime settings and usage states, live sandbox/network/login/control validation and disconnected-Mac execution |
 | Git | Project repository links, local CLI project execution, owner-bound GitHub App authorization, native repository browsing, encrypted tokens, signed revocation, exact-commit and scoped read-token adapters, workspace records, exclusive claims and isolated runner checkouts with restart/cancellation recovery | Execution grants, Git actor attribution in execution, branch/push/PR recovery and live two-user GitHub validation |
 | Memory and skills | Approved Cortex/shared Markdown design | Actual native and Go integrations, provider/model consolidation, memory inspection, skill editing/version rollout and permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: validate the native transfer review, finish full-history migration and local-plan promotion, then memory/skills
+Next: validate the native transfer and plan-import reviews, finish full-history migration, then memory/skills
 and shared execution. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
@@ -34,14 +34,25 @@ The source-copy publisher now uses frozen snapshots, deterministic identities,
 durable publication requests and a full server-content comparison. It can
 recover completed copies after a cache reset and let the same owner finish an
 incomplete copy from another Mac without changing execution ownership. The
-native review screen and coordinator are still the next integration step.
+native review screen and coordinator are now connected. The new action appears
+in plan and implementation card menus and in the planning workspace. It saves
+the approved snapshot, publishes source copies, imports the plan and opens the
+shared planning view. A scoped saved-copy link avoids duplicate cards while
+preserving newer local work and the original local record.
+Six focused native suites pass: promotion, import, sharing, shared planning,
+local planning and store state. They cover restarting a persisted import,
+manual Retry after a lost response, cache erasure, empty drafts, retained local
+history and newer local edits. Both synthetic audit apps have been rebuilt
+and pass strict signature verification with the existing development identity.
+These checks use synthetic transports; the native visual audit and real
+two-Mac/cloud acceptance remain open.
 The saved-snapshot publisher and import binding tests pass for long Unicode
 messages, lost responses, a cleared local cache, conflicting remote content,
 and a partial copy completed on another device. Publisher writes recheck the
 cache epoch. Normal live-session writes remain device-bound; the history-only
 exception requires the same human owner. Full Go race tests and vet pass, as
-do Linux command builds and the focused native suites. This does not complete
-the import screen or two-Mac acceptance.
+do Linux command builds and the focused native suites. Native visual and
+two-Mac acceptance remain open.
 Native state, worker, import and planning suites pass. Full Go race tests and
 vet pass at schema 29, with additional targeted history/board checks after the
 last guard change. Tests cover private context, immutable source type,
@@ -58,8 +69,8 @@ local installation failure, revoked sources, sign-out and cache epochs. The
 HTTP upload allowance is limited to the exact import route. Historical model,
 effort and speed strings survive the import without becoming executable
 settings. The focused native suites and full Go race suite pass; Go vet and
-Linux builds pass. Automatic source publication and the native review screen
-still need to be connected. This is not yet an end-to-end import action.
+Linux builds pass. Source publication and the native review screen now use this
+journal through the coordinator described above. Live acceptance remains open.
 
 Schema 28 adds historical implementations and paged attempt records to plan
 imports. The transcript stays in the existing versioned session store, pinned
@@ -69,7 +80,8 @@ Metadata, attempts and transcript reads check both plan and source access.
 The full Go race suite and vet pass, followed by targeted checks for batched
 attempt writes, long-message preservation, pagination, revoked access and
 oversized histories. Linux builds pass. The native reader now opens saved
-implementations from the planning History view; publication remains next.
+implementations from the planning History view; the native importer now supplies
+the private source copies for that reader.
 The Mac is still locked for computer use.
 The native reader has separate Chat and Attempts views within the planning
 workspace, using the existing model controls and transcript layout. Its pages
@@ -78,7 +90,7 @@ implementations cancels stale reads, and sign-out or observed permission changes
 clear the displayed history. The focused native implementation, planning and
 import suites pass, including 230 messages, a 300,000-byte Unicode response,
 paged attempts, malformed data, cancellation and revoked access. Visual
-acceptance and the native publication flow remain open.
+acceptance remains open; the native publication flow is now connected.
 The signed synthetic audit apps are rebuilt with this reader and pass strict
 signature verification. The final staged secret scan is clean.
 
@@ -89,20 +101,20 @@ duplicate tickets after a lost response; changed payloads conflict instead of
 overwriting history. Non-ready imports require review and a new planning
 version before execution. Source permissions are rechecked on reads and receipt
 replays. Schema 26 retains import snapshots and blocks a downgrade that would
-discard them. Native import review, implementation-history preservation and
-computer-use acceptance remain open. The contract is in
+discard them. Native import review and implementation-history preservation are
+now connected; computer-use acceptance remains open. The contract is in
 [planning](planning.md#local-plan-import-api).
 The full Go race suite and vet pass with disposable PostgreSQL at schema 26.
 Tests cover private imports, replay deduplication, source revocation, input
 bounds, empty drafts, reviewed restart and migration retention. Linux server,
 runner, controller, helper and migration builds pass; the staged secret scan
-is clean. This does not complete the native import flow or live acceptance.
+is clean. These backend checks do not establish live acceptance.
 
 The native reader retains imported source metadata and displays saved
 errors and unconfirmed outcomes in the existing planning workspace. Source
 inspection rechecks the plan and source access, including late responses after
 sign-out or revocation. Restarted drafts now carry selected quotes into a new
-immutable version; the upload/review flow remains unfinished.
+immutable version. The native upload/review flow now feeds this reader.
 The focused native import, planning and context suites pass. They exercise
 metadata/cache round trips, invalid snapshots, blocked historical execution,
 and a read held across revocation or sign-out. The shared app module compiles;
@@ -470,7 +482,7 @@ recorded implementation and acceptance evidence, not just an updated spec.
    and the claim/token protocol, checkout worker, assignments, provider turns,
    streaming, approval transport, Linux child isolation and native location
    controls and durable cloud steering are implemented; remaining signed-in setup validation,
-   recovery, standalone local-plan promotion and reviewed session transfers remain.
+   recovery, native plan-import acceptance and complete reviewed session transfers remain.
 3. **Pending — shared project capabilities**: Cortex consolidation and memory
    inspection, shared Markdown skills, Git publication and actor attribution,
    owner-routed shared implementation and permissions.
