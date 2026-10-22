@@ -90,6 +90,7 @@ func (a *API) Handler() http.Handler {
 	a.requestRoutes(mux)
 	a.planningRoutes(mux)
 	a.planningApprovalRoutes(mux)
+	a.implementationRoutes(mux)
 	a.notificationRoutes(mux)
 	a.accountRoutes(mux)
 	a.gitRoutes(mux)

@@ -62,9 +62,10 @@ brief and bounds visible output to 8 KiB per step.
 
 ## Shared implementation approvals
 
-The development API can prepare and approve an executor selection for a completed
-shared plan. Dispatch and the native approval interface are still pending. These
-endpoints save consent only; they never enqueue a provider turn.
+The development API can prepare, approve and dispatch an executor selection for
+a completed shared plan. Native approval and implementation views remain
+unfinished. Preparing and approving consent do not enqueue provider work;
+dispatch is a separate action.
 
 `POST /v1/camps/{camp}/planning/{plan}/execution-approvals` freezes the plan's
 version, revision and content hash, its final implementation prompt, and an
@@ -88,16 +89,40 @@ rechecks access. Events are restricted to those two people. Each write uses the
 normal idempotency key contract, and one plan has at most one pending or approved
 selection.
 
-The remaining dispatcher must atomically consume approved consent and establish
-the implementation session, then recheck its bindings before provider submission.
-The native worker must verify the approved CLI context against its actual project
-and profile. Ordinary chat requests do not grant implementation permission.
+`POST /{approval}/dispatch` consumes approved consent and creates an
+implementation record and queued request in one transaction. The caller supplies
+the approved revision and an idempotency key. Repeating the same command returns
+the existing request; a different command cannot reuse consumed consent.
 
-Implementation must start a separate persistent provider conversation while
-keeping the same logical planning ticket. The selected source identifies the
-account and project; implementation must not append to that source's unrelated
-chat or overwrite its cloud runtime identity. Worker claims must explicitly
-advertise support for this execution mode before receiving implementation work.
+Each implementation owns a separate persistent provider conversation under the
+same planning ticket and version. Its source identifies the account and project.
+Implementation streams do not change that source's transcript, activity or cloud
+runtime identity. The provider conversation ID is write-once and cannot adopt
+an imported source chat, the workspace's ordinary conversation or another
+implementation using the same profile.
+
+Workers opt in with `include_implementation: true`. Existing native workers do
+not opt in yet. The updated cloud runner does; initial implementation turns start
+a new provider conversation and follow-ups resume its saved identity. Local
+start requires the exact approved CLI context fingerprint. The native worker
+still needs to obtain and verify that fingerprint against its actual project
+and profile before this path can be enabled.
+
+`GET /implementation-runs/{id}` returns the saved provider identity and latest
+100 requests. `POST /implementation-runs/{id}/requests` queues a follow-up;
+another person's prompt needs the executor owner's ordinary approval. Reads
+are currently limited to the plan creator and executor owner and recheck the
+plan and pinned source grants. Follow-ups preserve the original plan context.
+The usual request stream endpoint supplies ordered output; local workers publish
+through `/requests/{id}/implementation-events` with their lease.
+
+An expired started lease becomes outcome unknown and prevents another claim.
+Restart is refused while implementation work is queued, active or uncertain.
+After reconciliation, restart retains earlier implementation streams and
+provider identities, but old consent cannot start work against a new plan
+revision. Schema 33 refuses destructive downgrade while any implementation
+record remains. These contracts have local synthetic integration tests; native
+and live-provider implementation acceptance remain open.
 
 ## Shared planning in the native app
 

@@ -207,6 +207,26 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO planning_execution_approvals(id,camp_id,plan_id,plan_version,plan_revision,plan_sha256,creator_user_id,owner_user_id,owner_device_id,session_id,profile_id,session_revision,transcript_revision,permission_revision,provider,model,effort,speed,execution_location,execution_epoch,permissions,prompt) VALUES($1,$2,$3,1,1,$4,$5,$5,$6,$7,$8,1,0,1,'Codex','fixture','high','standard','local',1,'{}','Preserved execution approval')`, approval, camp, plan, strings.Repeat("a", 64), id, device, session, profile); err != nil {
 		t.Fatal(err)
 	}
+	implementation := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO planning_implementations(id,approval_id,camp_id,plan_id,plan_version,provider_session_id) VALUES($1,$2,$3,$4,1,'retained-provider-session')`, implementation, approval, camp, plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE planning_execution_approvals SET state='dispatched' WHERE id=$1`, approval); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 32); err == nil {
+		t.Fatal("Downgrade discarded an implementation conversation")
+	}
+	var retainedIdentity string
+	if err = pool.QueryRow(ctx, `SELECT provider_session_id FROM planning_implementations WHERE id=$1`, implementation).Scan(&retainedIdentity); err != nil || retainedIdentity != "retained-provider-session" {
+		t.Fatal("Implementation identity changed on refused downgrade", err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM planning_implementations WHERE id=$1`, implementation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE planning_execution_approvals SET state='pending' WHERE id=$1`, approval); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = provider.DownTo(ctx, 31); err == nil {
 		t.Fatal("Downgrade discarded implementation approval")
 	}

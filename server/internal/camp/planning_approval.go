@@ -237,7 +237,7 @@ func (s *Store) PreparePlanningApproval(ctx context.Context, a auth.Actor, campI
 	// A Camp lock serializes attempts; return an ordinary conflict instead of a
 	// database uniqueness error when a second approval is already outstanding.
 	var active bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM planning_execution_approvals WHERE plan_id=$1 AND state IN ('pending','approved'))`, planID).Scan(&active); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM planning_execution_approvals WHERE plan_id=$1 AND state IN ('pending','approved')) OR EXISTS(SELECT 1 FROM prompt_requests WHERE plan_id=$1 AND kind='implementation' AND state IN ('pending_approval','queued','claimed','started','cancel_requested','outcome_unknown'))`, planID).Scan(&active); err != nil {
 		return out, err
 	}
 	if active {
@@ -373,7 +373,7 @@ func (s *Store) CancelPlanningApproval(ctx context.Context, a auth.Actor, campID
 	if out.Revision != revision {
 		return ErrRevision
 	}
-	if out.State == "cancelled" {
+	if oneOf(out.State, "cancelled", "dispatched") {
 		return ErrTransition
 	}
 	if _, err = tx.Exec(ctx, `UPDATE planning_execution_approvals SET state='cancelled',revision=revision+1 WHERE id=$1`, id); err != nil {

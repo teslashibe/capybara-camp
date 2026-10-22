@@ -90,8 +90,12 @@ signed revocation webhooks; it exposes no Git token readback endpoint.
 | `POST /v1/camps/{camp}/sessions/{id}/requests` | Prompt, model, effort, speed and pinned source references |
 | `GET /v1/camps/{camp}/requests` | Latest 100 requests created by or addressed to this user |
 | `GET /v1/camps/{camp}/requests/{id}` | Current request state; excludes its worker lease token |
-| `POST /v1/camps/{camp}/requests/claim` | Claim one eligible request on its owning device; `include_planning: true` with explicit `session_ids` opts into isolated planning work |
+| `POST /v1/camps/{camp}/requests/claim` | Claim one eligible request on its owning device; explicit `session_ids` plus `include_planning: true` opts into planning, or `include_implementation: true` into all supported work |
 | `POST /v1/camps/{camp}/requests/{id}/actions` | Approve, start, heartbeat, cancel, finish or reconcile |
+| `POST /v1/camps/{camp}/planning/{plan}/execution-approvals/{approval}/dispatch` | Consume the approved revision and queue one implementation conversation |
+| `GET /v1/camps/{camp}/planning/{plan}/implementation-runs/{id}` | Authorized implementation identity and latest 100 requests |
+| `POST /v1/camps/{camp}/planning/{plan}/implementation-runs/{id}/requests` | Follow-up on the same provider conversation, subject to owner approval |
+| `POST /v1/camps/{camp}/requests/{id}/implementation-events` | Assigned local worker's ordered stream with its current lease |
 
 Every Camp mutation requires a UUID `Idempotency-Key`. Reusing the same key for
 the same operation and payload returns its original result; a changed operation

@@ -56,7 +56,7 @@ func (g *GitStore) RunnerHistory(ctx context.Context, token, workspaceID, reques
 	if err != nil {
 		return out, err
 	}
-	if !live || !oneOf(r.State, "claimed", "started") || r.ContextRevision < 1 {
+	if r.Kind == "implementation" || !live || !oneOf(r.State, "claimed", "started") || r.ContextRevision < 1 {
 		return out, ErrTransition
 	}
 	if _, err = g.store.requestAccess(ctx, tx, r); err != nil {

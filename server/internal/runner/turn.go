@@ -269,7 +269,7 @@ func (w *Worker) turnTick(ctx context.Context, state camp.RunnerAccountState, wo
 	}
 	if r.Phase == "claim" {
 		var request *camp.Request
-		err = w.client.call(ctx, "POST", "/v1/runner/workspaces/"+workspace.ID+"/requests/claim", map[string]string{"claim_id": r.ClaimID}, &request)
+		err = w.client.call(ctx, "POST", "/v1/runner/workspaces/"+workspace.ID+"/requests/claim", map[string]any{"claim_id": r.ClaimID, "include_implementation": true}, &request)
 		if errors.Is(err, ErrRejected) {
 			return w.checkout.clearTurn()
 		}

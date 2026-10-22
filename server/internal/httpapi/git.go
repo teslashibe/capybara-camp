@@ -74,12 +74,13 @@ func (a *API) gitRoutes(mux *http.ServeMux) {
 	}))
 	mux.HandleFunc("POST /v1/runner/workspaces/{workspace}/requests/claim", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
 		var in struct {
-			ClaimID string `json:"claim_id"`
+			ClaimID               string `json:"claim_id"`
+			IncludeImplementation bool   `json:"include_implementation"`
 		}
 		if !decode(w, r, &in) {
 			return
 		}
-		out, err := a.Git.ClaimRunnerRequest(r.Context(), token(r), r.PathValue("workspace"), in.ClaimID)
+		out, err := a.Git.ClaimRunnerWork(r.Context(), token(r), r.PathValue("workspace"), in.ClaimID, in.IncludeImplementation)
 		if !fail(w, err) {
 			write(w, 200, out)
 		}

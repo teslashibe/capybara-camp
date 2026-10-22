@@ -69,7 +69,7 @@ func (s *Store) executionTarget(ctx context.Context, tx pgx.Tx, session Session)
 }
 
 func (s *Store) cloudActivity(ctx context.Context, tx pgx.Tx, r Request) error {
-	if r.ExecutionLocation != "cloud" {
+	if r.ExecutionLocation != "cloud" || r.Kind == "implementation" {
 		return nil
 	}
 	state, stage := "", ""

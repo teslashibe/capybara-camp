@@ -10,7 +10,7 @@ import (
 	"github.com/teslashibe/capybara-camp/server/internal/localcli"
 )
 
-func TestPlanningApprovalHTTPReviewDoesNotExecute(t *testing.T) {
+func TestPlanningApprovalHTTPReviewAndImplementationDispatch(t *testing.T) {
 	api, token, c, input := planningHTTPFixture(t)
 	actor, err := api.Auth.Authenticate(t.Context(), token)
 	if err != nil {
@@ -69,9 +69,24 @@ func TestPlanningApprovalHTTPReviewDoesNotExecute(t *testing.T) {
 	if claimed != nil {
 		t.Fatal("metadata approval started provider work")
 	}
-	client.call("POST", detail+"/cancel", "", map[string]int64{"expected_revision": approval.Revision}, nil, 204)
-	client.call("GET", detail, "", nil, &approval, 200)
-	if approval.State != "cancelled" {
-		t.Fatal("cancellation missing")
+	var dispatched, replay camp.Request
+	key := uuid.NewString()
+	client.call("POST", detail+"/dispatch", key, map[string]int64{"expected_revision": approval.Revision}, &dispatched, 201)
+	client.call("POST", detail+"/dispatch", key, map[string]int64{"expected_revision": approval.Revision}, &replay, 201)
+	if dispatched.ID != replay.ID || dispatched.ImplementationID == "" || dispatched.Kind != "implementation" {
+		t.Fatal("dispatch/replay")
+	}
+	client.call("POST", "/v1/camps/"+c.ID+"/requests/claim", "", map[string]any{"session_ids": []string{target.ID}, "include_planning": true}, &claimed, 200)
+	if claimed != nil {
+		t.Fatal("old worker admitted implementation")
+	}
+	client.call("POST", "/v1/camps/"+c.ID+"/requests/claim", "", map[string]any{"session_ids": []string{target.ID}, "include_implementation": true}, &claimed, 200)
+	if claimed == nil || claimed.ID != dispatched.ID {
+		t.Fatal("capable worker missing request")
+	}
+	var implementation camp.PlanningImplementation
+	client.call("GET", "/v1/camps/"+c.ID+"/planning/"+plan.ID+"/implementation-runs/"+dispatched.ImplementationID, "", nil, &implementation, 200)
+	if len(implementation.Requests) != 1 || implementation.Requests[0].LeaseToken != "" {
+		t.Fatal("implementation read contract")
 	}
 }

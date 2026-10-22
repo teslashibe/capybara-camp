@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
+	"github.com/teslashibe/capybara-camp/server/internal/localcli"
 )
 
 var ErrPlanningBudget = errors.New("this provider cannot enforce the selected token ceiling")
@@ -114,10 +115,13 @@ type PlanningAction struct {
 	ExpectedVersion  int64          `json:"expected_version,omitempty"`
 	Input            *PlanningInput `json:"input,omitempty"`
 }
-type planningStepLink struct {
-	PlanID  string
-	Version int64
-	Ordinal int
+type planRequestLink struct {
+	ImplementationID string
+	Permissions      localcli.PermissionSettings
+	Approved         bool
+	PlanID           string
+	Version          int64
+	Ordinal          int
 }
 
 // Both clients and workers use immutable planner assignments. A changed login,
@@ -593,7 +597,7 @@ func (s *Store) enqueuePlanningStep(ctx context.Context, tx pgx.Tx, p PlanningTi
 	if len(prompt) > 65536 {
 		return ErrInput
 	}
-	request, err := s.enqueueRequest(ctx, tx, actor, p.CampID, session, RequestInput{Prompt: prompt, Model: planner.Model, Effort: planner.Effort, Speed: planner.Speed, Sources: p.Version.Sources}, &planningStepLink{PlanID: p.ID, Version: p.Version.Version, Ordinal: ordinal})
+	request, err := s.enqueueRequest(ctx, tx, actor, p.CampID, session, RequestInput{Prompt: prompt, Model: planner.Model, Effort: planner.Effort, Speed: planner.Speed, Sources: p.Version.Sources}, &planRequestLink{PlanID: p.ID, Version: p.Version.Version, Ordinal: ordinal})
 	if err != nil {
 		return err
 	}
@@ -771,6 +775,13 @@ func (s *Store) ActOnPlanning(ctx context.Context, a auth.Actor, campID, id, key
 			return p, err
 		}
 	case "restart":
+		var active bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM prompt_requests WHERE plan_id=$1 AND kind='implementation' AND state IN ('queued','pending_approval','claimed','started','cancel_requested','outcome_unknown'))`, p.ID).Scan(&active); err != nil {
+			return p, err
+		}
+		if active {
+			return p, ErrTransition
+		}
 		if input.Input == nil {
 			return p, ErrInput
 		}

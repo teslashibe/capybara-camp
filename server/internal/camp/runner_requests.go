@@ -36,6 +36,9 @@ func (g *GitStore) lockExecution(ctx context.Context, tx pgx.Tx, token, workspac
 }
 
 func (g *GitStore) ClaimRunnerRequest(ctx context.Context, token, workspaceID, claim string) (*Request, error) {
+	return g.ClaimRunnerWork(ctx, token, workspaceID, claim, false)
+}
+func (g *GitStore) ClaimRunnerWork(ctx context.Context, token, workspaceID, claim string, implementation bool) (*Request, error) {
 	if !validID(claim) {
 		return nil, ErrInput
 	}
@@ -62,7 +65,7 @@ func (g *GitStore) ClaimRunnerRequest(ctx context.Context, token, workspaceID, c
 		if err != nil {
 			return nil, err
 		}
-		if r.ExecutionWorkspaceID != workspaceID {
+		if r.ExecutionWorkspaceID != workspaceID || (r.Kind == "implementation" && !implementation) {
 			return nil, ErrConflict
 		}
 		live, err := hasLiveLease(ctx, tx, id)
@@ -87,10 +90,10 @@ func (g *GitStore) ClaimRunnerRequest(ctx context.Context, token, workspaceID, c
 	if busy {
 		return nil, tx.Commit(ctx)
 	}
-	err = tx.QueryRow(ctx, `SELECT r.id FROM prompt_requests r WHERE r.session_id=$1 AND r.execution_location='cloud' AND r.execution_workspace_id=$2 AND r.execution_epoch=$3 AND r.state='queued'
+	err = tx.QueryRow(ctx, `SELECT r.id FROM prompt_requests r WHERE r.session_id=$1 AND r.execution_location='cloud' AND r.execution_workspace_id=$2 AND r.execution_epoch=$3 AND r.state='queued' AND (r.kind<>'implementation' OR $4)
  AND `+eligiblePlanningRequestSQL+`
  AND NOT EXISTS(SELECT 1 FROM prompt_requests active WHERE active.session_id=r.session_id AND active.state IN ('claimed','started','cancel_requested','outcome_unknown'))
- ORDER BY r.created_at,r.id LIMIT 1 FOR UPDATE OF r`, session.ID, workspaceID, session.ExecutionEpoch).Scan(&id)
+ ORDER BY r.created_at,r.id LIMIT 1 FOR UPDATE OF r`, session.ID, workspaceID, session.ExecutionEpoch, implementation).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, tx.Commit(ctx)
 	}

@@ -29,6 +29,9 @@ type RequestInput struct {
 	Sources []SourceRef `json:"sources"`
 }
 type Request struct {
+	ImplementationID     string                      `json:"implementation_id,omitempty"`
+	ProviderSessionID    string                      `json:"provider_session_id,omitempty"`
+	ExecutionContext     string                      `json:"execution_context,omitempty"`
 	ContentRestricted    bool                        `json:"content_restricted,omitempty"`
 	Kind                 string                      `json:"kind"`
 	PlanID               string                      `json:"plan_id,omitempty"`
@@ -65,6 +68,7 @@ type Request struct {
 	QuotedContextDigest  string                      `json:"quoted_context_digest,omitempty"`
 }
 type RequestAction struct {
+	ExecutionContext    string         `json:"execution_context,omitempty"`
 	QuotedContextDigest string         `json:"quoted_context_digest,omitempty"`
 	Output              string         `json:"output,omitempty"`
 	Usage               *PlanningUsage `json:"usage,omitempty"`
@@ -75,12 +79,12 @@ type RequestAction struct {
 }
 
 const requestColumns = `r.id,r.camp_id,r.session_id,r.requester_user_id,r.owner_user_id,r.owner_device_id,r.permission_revision,r.revision,r.prompt,r.model,r.effort,r.speed,r.state,
- COALESCE(r.lease_token::text,''),r.lease_until,r.created_at,r.outcome_evidence,r.reason,r.kind,COALESCE(r.plan_id::text,''),COALESCE(r.plan_version,0),COALESCE(r.plan_step,-1),r.execution_location,r.execution_epoch,COALESCE(r.execution_workspace_id::text,''),r.execution_permissions,r.execution_mode,COALESCE(r.runner_grant_id::text,''),r.context_revision,r.stream_seq`
+ COALESCE(r.lease_token::text,''),r.lease_until,r.created_at,r.outcome_evidence,r.reason,r.kind,COALESCE(r.plan_id::text,''),COALESCE(r.plan_version,0),COALESCE(r.plan_step,-1),r.execution_location,r.execution_epoch,COALESCE(r.execution_workspace_id::text,''),r.execution_permissions,r.execution_mode,COALESCE(r.runner_grant_id::text,''),r.context_revision,r.stream_seq,COALESCE(r.implementation_id::text,'')`
 
 func scanRequest(row rowScanner, extra ...any) (Request, error) {
 	r := Request{Sources: []SourceRef{}}
 	var permissions []byte
-	columns := []any{&r.ID, &r.CampID, &r.SessionID, &r.RequesterUserID, &r.OwnerUserID, &r.OwnerDeviceID, &r.PermissionRevision, &r.Revision, &r.Prompt, &r.Model, &r.Effort, &r.Speed, &r.State, &r.LeaseToken, &r.LeaseUntil, &r.CreatedAt, &r.Evidence, &r.Reason, &r.Kind, &r.PlanID, &r.PlanVersion, &r.PlanStep, &r.ExecutionLocation, &r.ExecutionEpoch, &r.ExecutionWorkspaceID, &permissions, &r.Mode, &r.RunnerGrantID, &r.ContextRevision, &r.StreamSeq}
+	columns := []any{&r.ID, &r.CampID, &r.SessionID, &r.RequesterUserID, &r.OwnerUserID, &r.OwnerDeviceID, &r.PermissionRevision, &r.Revision, &r.Prompt, &r.Model, &r.Effort, &r.Speed, &r.State, &r.LeaseToken, &r.LeaseUntil, &r.CreatedAt, &r.Evidence, &r.Reason, &r.Kind, &r.PlanID, &r.PlanVersion, &r.PlanStep, &r.ExecutionLocation, &r.ExecutionEpoch, &r.ExecutionWorkspaceID, &permissions, &r.Mode, &r.RunnerGrantID, &r.ContextRevision, &r.StreamSeq, &r.ImplementationID}
 	err := row.Scan(append(columns, extra...)...)
 	if err == nil {
 		err = json.Unmarshal(permissions, &r.Permissions)
@@ -115,7 +119,7 @@ func loadRequest(ctx context.Context, tx pgx.Tx, campID, id string) (Request, er
 	if err != nil {
 		return r, err
 	}
-	if r.Kind == "planning" {
+	if oneOf(r.Kind, "planning", "implementation") {
 		var raw []byte
 		if err = tx.QueryRow(ctx, `SELECT quoted_sources FROM planning_versions WHERE plan_id=$1 AND version=$2`, r.PlanID, r.PlanVersion).Scan(&raw); err != nil {
 			return r, err
@@ -125,6 +129,12 @@ func loadRequest(ctx context.Context, tx pgx.Tx, campID, id string) (Request, er
 		}
 		r.QuotedContextDigest = quotedContextDigest(r.QuotedSources)
 	}
+	if r.Kind == "implementation" {
+		if err = tx.QueryRow(ctx, `SELECT COALESCE(i.provider_session_id,''),COALESCE(a.execution_context,'') FROM planning_implementations i JOIN planning_execution_approvals a ON a.id=i.approval_id WHERE i.id=$1`, r.ImplementationID).Scan(&r.ProviderSessionID, &r.ExecutionContext); err != nil {
+			return r, err
+		}
+	}
+
 	return r, nil
 }
 
@@ -173,11 +183,11 @@ func (s *Store) requestAccess(ctx context.Context, tx pgx.Tx, r Request) (Sessio
 		if _, err = s.readSession(ctx, tx, owner, r.CampID, ref.SessionID); err != nil {
 			return session, err
 		}
-		if source.PermissionRevision != ref.PermissionRevision || source.TranscriptRevision < ref.TranscriptRevision || (session.Shared && !source.Shared) {
+		if source.PermissionRevision != ref.PermissionRevision || source.TranscriptRevision < ref.TranscriptRevision || (r.Kind != "implementation" && session.Shared && !source.Shared) {
 			return session, ErrDenied
 		}
 	}
-	if r.Kind == "planning" {
+	if oneOf(r.Kind, "planning", "implementation") {
 		for _, actor := range []auth.Actor{requester, owner} {
 			plan, err := s.loadPlanning(ctx, tx, actor, r.CampID, r.PlanID, r.PlanVersion)
 			if err != nil {
@@ -186,6 +196,12 @@ func (s *Store) requestAccess(ctx context.Context, tx pgx.Tx, r Request) (Sessio
 			if err = s.checkPlanningSources(ctx, tx, actor, plan); err != nil {
 				return session, err
 			}
+		}
+	}
+
+	if r.Kind == "implementation" {
+		if err = s.implementationAccess(ctx, tx, r); err != nil {
+			return session, err
 		}
 	}
 
@@ -241,7 +257,7 @@ func (s *Store) CreateRequest(ctx context.Context, a auth.Actor, campID, session
 
 // enqueueRequest shares authorization and persistence between ordinary chat and
 // the bounded planning coordinator. Callers hold the Camp transaction lock.
-func (s *Store) enqueueRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campID string, session Session, input RequestInput, planning *planningStepLink) (Request, error) {
+func (s *Store) enqueueRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campID string, session Session, input RequestInput, planning *planRequestLink) (Request, error) {
 	if err := requireUnheldSession(ctx, tx, session.ID); err != nil {
 		return Request{}, err
 	}
@@ -259,6 +275,16 @@ func (s *Store) enqueueRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, cam
 		r.PlanStep = planning.Ordinal
 		r.Mode = "planning"
 		r.Permissions = localcli.PermissionSettings{}
+		if planning.ImplementationID != "" {
+			r.Kind = "implementation"
+			r.Mode = "implementation"
+			r.PlanStep = -1
+			r.ImplementationID = planning.ImplementationID
+			r.Permissions = planning.Permissions
+			if planning.Approved {
+				r.State = "queued"
+			}
+		}
 	}
 	if r.Model == "" {
 		r.Model = session.Model
@@ -293,8 +319,8 @@ func (s *Store) enqueueRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, cam
 		return Request{}, err
 	}
 	permissions, _ := json.Marshal(r.Permissions)
-	err = tx.QueryRow(ctx, `INSERT INTO prompt_requests(id,camp_id,session_id,requester_user_id,owner_user_id,owner_device_id,permission_revision,prompt,model,effort,speed,state,kind,plan_id,plan_version,plan_step,execution_location,execution_epoch,execution_workspace_id,execution_permissions,execution_mode,context_revision)
-	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULLIF($14,'')::uuid,NULLIF($15,0),NULLIF($16,-1),$17,$18,NULLIF($19,'')::uuid,$20,$21,$22) RETURNING created_at`, r.ID, campID, session.ID, a.UserID, r.OwnerUserID, r.OwnerDeviceID, r.PermissionRevision, r.Prompt, r.Model, r.Effort, r.Speed, r.State, r.Kind, r.PlanID, r.PlanVersion, r.PlanStep, r.ExecutionLocation, r.ExecutionEpoch, r.ExecutionWorkspaceID, permissions, r.Mode, r.ContextRevision).Scan(&r.CreatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO prompt_requests(id,camp_id,session_id,requester_user_id,owner_user_id,owner_device_id,permission_revision,prompt,model,effort,speed,state,kind,plan_id,plan_version,plan_step,execution_location,execution_epoch,execution_workspace_id,execution_permissions,execution_mode,context_revision,implementation_id)
+	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULLIF($14,'')::uuid,NULLIF($15,0),NULLIF($16,-1),$17,$18,NULLIF($19,'')::uuid,$20,$21,$22,NULLIF($23,'')::uuid) RETURNING created_at`, r.ID, campID, session.ID, a.UserID, r.OwnerUserID, r.OwnerDeviceID, r.PermissionRevision, r.Prompt, r.Model, r.Effort, r.Speed, r.State, r.Kind, r.PlanID, r.PlanVersion, r.PlanStep, r.ExecutionLocation, r.ExecutionEpoch, r.ExecutionWorkspaceID, permissions, r.Mode, r.ContextRevision, r.ImplementationID).Scan(&r.CreatedAt)
 	if err != nil {
 		return Request{}, err
 	}
@@ -380,10 +406,13 @@ func (s *Store) ListRequests(ctx context.Context, a auth.Actor, campID string) (
 
 func emitRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, r Request, kind string, automatic bool) error {
 	payload := map[string]any{"request_id": r.ID, "session_id": r.SessionID, "state": r.State, "revision": r.Revision, "reason": r.Reason, "automatic": automatic}
-	if r.Kind == "planning" {
+	if oneOf(r.Kind, "planning", "implementation") {
 		payload["plan_id"] = r.PlanID
 		payload["plan_version"] = r.PlanVersion
 		payload["plan_step"] = r.PlanStep
+		if r.ImplementationID != "" {
+			payload["implementation_id"] = r.ImplementationID
+		}
 	}
 	if err := emit(ctx, tx, a, r.CampID, kind, payload); err != nil {
 		return err
@@ -395,7 +424,7 @@ func emitRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, r Request, kind s
 	return notifyRequest(ctx, tx, a, r)
 }
 
-const eligiblePlanningRequestSQL = `(r.kind='chat' OR (EXISTS(SELECT 1 FROM planning_versions v JOIN planning_tickets p ON p.id=v.plan_id WHERE v.plan_id=r.plan_id AND v.version=r.plan_version AND v.state='running' AND p.active_version=v.version)
+const eligiblePlanningRequestSQL = `(r.kind='chat' OR (r.kind='implementation' AND EXISTS(SELECT 1 FROM planning_implementations i JOIN planning_execution_approvals a ON a.id=i.approval_id JOIN planning_tickets p ON p.id=i.plan_id WHERE i.id=r.implementation_id AND a.state='dispatched' AND p.active_version=i.plan_version)) OR (r.kind='planning' AND EXISTS(SELECT 1 FROM planning_versions v JOIN planning_tickets p ON p.id=v.plan_id WHERE v.plan_id=r.plan_id AND v.version=r.plan_version AND v.state='running' AND p.active_version=v.version)
  AND NOT EXISTS(SELECT 1 FROM prompt_requests b WHERE b.plan_id=r.plan_id AND b.plan_version=r.plan_version AND b.state IN ('failed','cancelled','outcome_unknown'))))`
 
 // ClaimRequest never starts a provider. The worker must durably mark its local
@@ -486,13 +515,13 @@ func (s *Store) claimRequest(ctx context.Context, a auth.Actor, campID, key stri
 	}
 	var id string
 	err = tx.QueryRow(ctx, `SELECT r.id FROM prompt_requests r JOIN sessions s ON s.id=r.session_id JOIN profiles profile ON profile.id=s.profile_id
-	 WHERE r.camp_id=$1 AND r.owner_device_id=$2 AND r.owner_user_id=$4 AND (r.kind=$5 OR $5='all') AND r.state='queued' AND NOT s.external_owner
+	 WHERE r.camp_id=$1 AND r.owner_device_id=$2 AND r.owner_user_id=$4 AND (r.kind=$5 OR ($5='all' AND r.kind IN ('chat','planning')) OR $5='execution-v1') AND r.state='queued' AND NOT s.external_owner
 	 AND r.execution_location='local' AND s.execution_location='local' AND r.execution_epoch=s.execution_epoch
 	 AND `+eligiblePlanningRequestSQL+`
 	 AND ($3::uuid[] IS NULL OR r.session_id=ANY($3))
 	 AND NOT EXISTS(SELECT 1 FROM prompt_requests running WHERE running.session_id=r.session_id AND running.state IN ('claimed','started','cancel_requested','outcome_unknown'))
 	 AND (r.kind='chat' OR NOT EXISTS(SELECT 1 FROM prompt_requests running JOIN sessions rs ON rs.id=running.session_id JOIN profiles rp ON rp.id=rs.profile_id
-	 WHERE running.kind='planning' AND running.owner_device_id=r.owner_device_id AND rp.provider=profile.provider AND running.state IN ('claimed','started','cancel_requested','outcome_unknown')))
+	 WHERE running.kind IN ('planning','implementation') AND running.owner_device_id=r.owner_device_id AND rp.provider=profile.provider AND running.state IN ('claimed','started','cancel_requested','outcome_unknown')))
 	 ORDER BY r.created_at,r.id LIMIT 1 FOR UPDATE OF r SKIP LOCKED`, campID, a.DeviceID, sessions, a.UserID, kind).Scan(&id)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
@@ -603,7 +632,7 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 			if contentErr != nil {
 				return Request{}, contentErr
 			}
-			if err = s.planningCanStart(ctx, tx, r); err != nil {
+			if err = s.planWorkCanStart(ctx, tx, r, input.ExecutionContext); err != nil {
 				return r, err
 			}
 			if _, err = s.requestAccess(ctx, tx, r); err != nil {
@@ -639,7 +668,7 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 		}
 		r.State = "queued"
 	case "start":
-		if err = s.planningCanStart(ctx, tx, r); err != nil {
+		if err = s.planWorkCanStart(ctx, tx, r, input.ExecutionContext); err != nil {
 			return r, err
 		}
 		if !leaseValid || r.State != "claimed" {
@@ -713,6 +742,9 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 		if err = emitRequest(ctx, tx, a, r, "request."+r.State, false); err != nil {
 			return r, err
 		}
+	}
+	if r.Kind == "implementation" && terminal && input.Outcome == "completed" && r.ProviderSessionID == "" {
+		return r, ErrTransition
 	}
 	if r.Kind == "planning" && terminal {
 		if err = s.planningRequestFinished(ctx, tx, a, r, input); err != nil {
@@ -788,6 +820,12 @@ func (s *Store) invalidateRequests(ctx context.Context, tx pgx.Tx, a auth.Actor,
 		return err
 	}
 	for _, r := range changed {
+		if r.Kind == "implementation" {
+			r, err = loadRequest(ctx, tx, campID, r.ID)
+			if err != nil {
+				return err
+			}
+		}
 		if err = emitRequest(ctx, tx, a, r, "request.permission_changed", true); err != nil {
 			return err
 		}
@@ -826,6 +864,12 @@ func (s *Store) reapCamp(ctx context.Context, tx pgx.Tx, campID string) error {
 		return err
 	}
 	for _, r := range results {
+		if r.Kind == "implementation" {
+			r, err = loadRequest(ctx, tx, campID, r.ID)
+			if err != nil {
+				return err
+			}
+		}
 		if err = emitRequest(ctx, tx, auth.Actor{UserID: r.OwnerUserID}, r, "request.lease_expired", true); err != nil {
 			return err
 		}

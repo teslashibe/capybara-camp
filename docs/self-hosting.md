@@ -110,8 +110,11 @@ that creates unbound planning participants.
 
 Schema 32 adds shared implementation approval records and their pinned source
 grants. Back up before migration and deploy the matching API image; readiness
-requires its exact schema. Approvals do not dispatch work in this development
-slice. Downgrading to schema 31 is allowed only when no approval records exist.
+requires its exact schema. Schema 33 adds persistent implementation conversations
+and a separate dispatch action. Updated cloud runners explicitly opt into this
+request type; older workers skip it. Roll out the schema and matching API before
+the updated runner. Downgrading to schema 32 requires no implementation records
+or dispatched approvals. Downgrading to schema 31 requires no approval records.
 A retained approval, including a cancelled one, blocks destructive downgrade;
 retain a compatible binary or restore a complete backup instead.
 

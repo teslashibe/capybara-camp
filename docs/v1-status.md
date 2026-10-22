@@ -22,8 +22,9 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: finish the remaining transfer cases and full-history migration, then shared skills
-and shared execution. Continue the native design audit as those surfaces are
+Next: connect shared implementation approval, execution and history to the native
+worker and planning workspace, then finish the remaining transfer cases,
+full-history migration and shared skills. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
 the two-Mac acceptance run follow that deployment. Hardware has not been bought
@@ -33,7 +34,8 @@ credentials and isolated native client state against the local API for
 collaboration, permissions, replay and ownership tests. Those checks supplement
 the final two-Mac/cloud acceptance; they do not replace it.
 
-Shared implementation now has a durable API approval prerequisite at schema 32.
+Shared implementation has durable API approvals at schema 32 and dispatch at
+schema 33.
 The plan creator selects an independent executor; its owner approves the exact
 plan revision, model/settings, source grants and Local/Cloud assignment. Local
 approval binds the owning device's CLI context fingerprint. Changed plans,
@@ -43,9 +45,26 @@ tests cover replay, concurrent retries, revocation/resharing, unrelated members,
 cloud assignment changes, plan restart, HTTP authorization and migration retention
 (`build/planning-approval-tests.log`). The full Go race suite and vet pass against
 disposable PostgreSQL at schema 32 (`build/planning-approval-full-suite.log`),
-and Linux backend command builds pass. These approvals do not enqueue work.
-Dispatch, native review, persistent implementation-session creation and full
-provider acceptance remain open.
+and Linux backend command builds pass. Approving consent does not enqueue work;
+the separate dispatch action does.
+
+The schema 33 dispatcher atomically consumes consent and saves one implementation
+conversation under the original plan/version. Requests retain a write-once
+provider identity, preserve the source chat and workspace runtime, and support
+follow-ups through owner approval. Workers must explicitly opt in. The cloud
+runner opts in; the native worker remains disabled for this request type until
+its execution and permission-review path is complete. Local start checks the
+approved CLI context fingerprint. Revocation restricts content, uncertain outcomes
+prevent automatic reruns, and restart retains earlier execution history after
+active work is reconciled. Downgrade refuses to delete retained conversations.
+
+The full PostgreSQL Go race suite and vet pass at schema 33
+(`build/implementation-full-suite.log`), with focused HTTP, dispatch, replay,
+provider identity, revocation, recovery and migration tests. Linux backend builds
+pass. The final importer/follow-up regression is recorded separately in
+`build/implementation-final-focused.log`. This is synthetic API/runtime evidence.
+Native approval, worker implementation, same-ticket shared views and live-provider
+acceptance remain open; no release or cloud deployment was made.
 
 The shared implementation review found an existing request-content leak after
 tagged-source revocation. Regression tests reproduced it through detail reads,
@@ -55,8 +74,8 @@ stream reads and create-receipt reuse, and rechecks every planning participant's
 source before worker admission. Cancellation and final acknowledgements remain
 usable after revocation. Restoring a share does not revive its old grant.
 The Mac client labels restricted content, hides approval and stops local work
-when a heartbeat reports lost access. Shared implementation dispatch and its
-native approval workflow remain unfinished.
+when a heartbeat reports lost access. The native shared implementation approval
+workflow remains unfinished.
 
 The full Go race suite and vet pass with PostgreSQL
 (`build/request-privacy-final-suite.log`), as do Linux backend builds. The shared

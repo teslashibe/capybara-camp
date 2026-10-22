@@ -213,6 +213,22 @@ func notifyRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, r Request) erro
 	if !oneOf(r.State, "completed", "failed", "outcome_unknown") {
 		return nil
 	}
+	if r.Kind == "implementation" {
+		kind := "attention"
+		if r.State == "completed" {
+			kind = "plan"
+		}
+		recipients := []string{r.RequesterUserID}
+		if r.OwnerUserID != r.RequesterUserID {
+			recipients = append(recipients, r.OwnerUserID)
+		}
+		for _, recipient := range recipients {
+			if err := upsertNotification(ctx, tx, a, r.CampID, recipient, "implementation:"+r.ID, kind, "", "", r.PlanID, r.PlanVersion); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if r.Kind == "planning" {
 		if r.State == "outcome_unknown" {
 			return notifyPlan(ctx, tx, a, r.CampID, r.PlanID, r.PlanVersion, "attention")

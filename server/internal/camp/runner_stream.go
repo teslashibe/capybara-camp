@@ -165,11 +165,14 @@ func (g *GitStore) runnerTurn(ctx context.Context, token, workspaceID, id string
 	if err != nil {
 		return RunnerTurn{}, err
 	}
+	if r.Kind == "implementation" {
+		providerSession = r.ProviderSessionID
+	}
 	sources := []map[string]any{}
 	size := 0
 	refs := append([]SourceRef{}, r.Sources...)
 	history := []localcli.HistorySource{}
-	if r.ContextRevision > 0 && (paged || providerSession == "" || r.Mode == "planning") {
+	if r.Kind != "implementation" && r.ContextRevision > 0 && (paged || providerSession == "" || r.Mode == "planning") {
 		if !paged {
 			refs = append([]SourceRef{{SessionID: r.SessionID, TranscriptRevision: r.ContextRevision}}, refs...)
 		} else {
@@ -387,7 +390,11 @@ func (s *Store) appendRequestEvent(ctx context.Context, tx pgx.Tx, r Request, in
 		if providerSession == "" || len(providerSession) > 200 || strings.ContainsAny(providerSession, "/\\\x00\r\n") {
 			return 0, ErrInput
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO workspace_runtime(workspace_id,provider_session_id) VALUES($1,$2) ON CONFLICT(workspace_id) DO UPDATE SET provider_session_id=EXCLUDED.provider_session_id`, workspaceID, providerSession); err != nil {
+		if r.Kind == "implementation" {
+			if err = saveImplementationSession(ctx, tx, r, providerSession); err != nil {
+				return 0, err
+			}
+		} else if _, err = tx.Exec(ctx, `INSERT INTO workspace_runtime(workspace_id,provider_session_id) VALUES($1,$2) ON CONFLICT(workspace_id) DO UPDATE SET provider_session_id=EXCLUDED.provider_session_id`, workspaceID, providerSession); err != nil {
 			return 0, err
 		}
 	}
@@ -432,7 +439,7 @@ func (s *Store) RequestStream(ctx context.Context, a auth.Actor, campID, id stri
 	if err = requestContentAccess(ctx, tx, a, r); err != nil {
 		return out, err
 	}
-	if r.Kind == "planning" {
+	if oneOf(r.Kind, "planning", "implementation") {
 		p, err := s.loadPlanning(ctx, tx, a, campID, r.PlanID, r.PlanVersion)
 		if err != nil {
 			return out, err
@@ -463,7 +470,7 @@ func (s *Store) RequestStream(ctx context.Context, a auth.Actor, campID, id stri
 }
 
 func (s *Store) publishRunnerTranscript(ctx context.Context, tx pgx.Tx, r Request) error {
-	if r.Kind == "planning" || r.StreamSeq == 0 {
+	if r.Kind != "chat" || r.StreamSeq == 0 {
 		return nil
 	}
 	var published bool

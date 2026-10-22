@@ -12,10 +12,12 @@ import (
 // paged request list bounded without per-row queries or hiding lifecycle state.
 const readableRequestContentSQL = `
  (s.shared OR s.owner_user_id=$1)
+ AND (r.kind<>'implementation' OR EXISTS(SELECT 1 FROM planning_implementations i JOIN planning_execution_approvals a ON a.id=i.approval_id WHERE i.id=r.implementation_id AND (a.creator_user_id=$1 OR a.owner_user_id=$1)))
  AND NOT EXISTS(SELECT 1 FROM request_sources x JOIN sessions source ON source.id=x.session_id
    WHERE x.request_id=r.id AND (source.permission_revision<>x.permission_revision
      OR source.transcript_revision<x.transcript_revision OR NOT(source.shared OR source.owner_user_id=$1)))
- AND (r.kind<>'planning' OR EXISTS(
+ AND (r.kind<>'implementation' OR NOT EXISTS(SELECT 1 FROM planning_implementations i JOIN planning_execution_sources x ON x.approval_id=i.approval_id JOIN sessions source ON source.id=x.session_id WHERE i.id=r.implementation_id AND (source.permission_revision<>x.permission_revision OR NOT(source.shared OR source.owner_user_id=$1))))
+ AND (r.kind NOT IN ('planning','implementation') OR EXISTS(
    SELECT 1 FROM planning_tickets p WHERE p.id=r.plan_id
    AND (p.shared OR p.creator_user_id=$1 OR EXISTS(SELECT 1 FROM planning_participants member
      WHERE member.plan_id=p.id AND member.version=p.active_version AND member.owner_user_id=$1))
@@ -47,5 +49,7 @@ func redactRequestContent(r Request) Request {
 	r.QuotedSources = nil
 	r.QuotedContextDigest = ""
 	r.Evidence = ""
+	r.ExecutionContext = ""
+	r.ProviderSessionID = ""
 	return r
 }
