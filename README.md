@@ -130,6 +130,11 @@ model settings. Reopening the plan replays its saved stream; access changes
 hide the affected output. Native visual and live cloud validation are still
 required before V1 release.
 
+Memory consolidation is still being integrated. The
+[project memory contract](docs/memory.md) describes the embedded Cortex
+dependency, private/project scopes and selected CLI execution. Its native
+screen and authenticated job routing are not available yet.
+
 In the development build, choose **Save to Camp** from a local planning or
 implementation card's menu, or the cloud icon in the plan window. Review the
 destination project and choose **Save privately**. Camp copies the saved plan
