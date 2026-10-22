@@ -5,11 +5,16 @@ struct SharedPlanningResultView: View {
     let result: CloudPlanningResult
     @State private var section = "Plans"
     @State private var focusedSlot: Int?
+    @StateObject private var implementationHistory: ImportedImplementationHistory
+    init(store: CampStore, result: CloudPlanningResult) {
+        self.store = store; self.result = result
+        _implementationHistory = StateObject(wrappedValue: ImportedImplementationHistory(planning: store.sharedPlanning))
+    }
     var body: some View {
         HStack(spacing: 0) {
             PlanningNavigation(store: store, title: result.title, mode: result.version.workflow,
                 participants: participants, section: $section, focusedSlot: $focusedSlot,
-                sections: ["Plans", "Combined plan", "History"], canImplement: false)
+                sections: ["Plans", "Combined plan", "History"] + (implementationHistory.implementations.isEmpty ? [] : ["Implementation"]), canImplement: !implementationHistory.implementations.isEmpty)
             Divider()
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
@@ -36,8 +41,10 @@ struct SharedPlanningResultView: View {
                         .help("Saved local results. Importing did not run the providers")
                 }
                 SharedPlanningSources(store: store, result: result).id("\(result.id):\(result.version.version)")
-                PlanningStageBar(mode: result.version.workflow, section: $section, completed: completedStages, showImplementation: false)
-                if section == "History" || section == "Combined plan" {
+                PlanningStageBar(mode: result.version.workflow, section: $section, completed: completedStages, canImplement: !implementationHistory.implementations.isEmpty, showImplementation: !implementationHistory.implementations.isEmpty)
+                if section == "Implementation" {
+                    ImportedImplementationView(history: implementationHistory) { section = "History" }
+                } else if section == "History" || section == "Combined plan" {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 16) {
                             plannerPanes.frame(height: 340)
@@ -46,6 +53,9 @@ struct SharedPlanningResultView: View {
                                     Text("Planning history").font(.headline)
                                     ForEach(Array(max(1, (result.activeVersion ?? result.version.version) - 99)...(result.activeVersion ?? result.version.version)).reversed(), id: \.self) { version in
                                         Button("Version \(version)") { store.sharedPlanning.open(result.id, version: version); section = "Plans"; focusedSlot = nil }
+                                    }
+                                    ImportedImplementationList(history: implementationHistory) { record in
+                                        implementationHistory.select(record); section = "Implementation"
                                     }
                                 } else {
                                     messageBlocks(result.version.steps.filter { $0.phase == "merge" })
@@ -71,6 +81,13 @@ struct SharedPlanningResultView: View {
             if store.notificationPlanVersion != nil && result.version.workflow == .comparison { section = "Combined plan" }
             applyCardNavigation()
         }
+            .task(id: "\(result.id):\(result.version.version)") { implementationHistory.bind(result) }
+            .onDisappear { implementationHistory.cancel() }
+            .onChange(of: store.cloud.scope) { _, _ in implementationHistory.cancel() }
+            .onChange(of: store.cloudSessions.mapValues(\.permissionRevision)) { _, _ in
+                implementationHistory.bind(result)
+                if section == "Implementation" { section = "History" }
+            }
             .onChange(of: store.planNavigation) { _, _ in applyCardNavigation() }
             .onChange(of: result.version.workflow) { _, _ in section = "Plans"; focusedSlot = nil }
             .onChange(of: result.id) { _, _ in

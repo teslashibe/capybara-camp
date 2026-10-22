@@ -9,7 +9,7 @@ and acceptance are separate milestones.
 | Area | Implemented locally | Still required for V1 |
 | --- | --- | --- |
 | Local sessions | Automatic multi-profile import, board/chat, model/effort/speed controls, sub-agents, streaming, dictation, steering and queues | Finish live provider/recovery and performance validation after the Go migration; complete the final design comparison below |
-| Planning and projects | Single-model plan, provider comparison, saved versions, per-Camp execution defaults, shared-draft per-planner destination selection, pinned execution assignments, same-ticket local implementation, project assignment across repositories, private plan and implementation-history import APIs | Native local-plan promotion and implementation-history publication/browsing, shared implementation and owner-routed approval completion; cross-device validation |
+| Planning and projects | Single-model plan, provider comparison, saved versions, per-Camp execution defaults, shared-draft per-planner destination selection, pinned execution assignments, same-ticket local implementation, project assignment across repositories, private plan and implementation-history import APIs, native imported-implementation reader | Native local-plan promotion and implementation-history publication, shared implementation and owner-routed approval completion; cross-device validation |
 | Shared Camps | Go/PostgreSQL auth, membership, sessions, events, requests, native cache/outbox and owner-Mac worker | Real independent users on two Macs, remaining permission/recovery cases, production deployment |
 | Onboarding | Automatic profile discovery before full import, optional Camp sign-in, owner-only cloud account setup, GitHub connections, projects, execution defaults, notifications, skip/resume | Final onboarding validation after remaining services land |
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
@@ -32,8 +32,19 @@ text limit; it cannot claim another person's source or create provider work.
 Metadata, attempts and transcript reads check both plan and source access.
 The full Go race suite and vet pass, followed by targeted checks for batched
 attempt writes, long-message preservation, pagination, revoked access and
-oversized histories. Linux builds pass. Native publication and browsing of
-these records remain next, and the Mac is still locked for computer use.
+oversized histories. Linux builds pass. The native reader now opens saved
+implementations from the planning History view; publication remains next.
+The Mac is still locked for computer use.
+The native reader has separate Chat and Attempts views within the planning
+workspace, using the existing model controls and transcript layout. Its pages
+validate source identity, revision, ordering, counts and byte limits. Switching
+implementations cancels stale reads, and sign-out or observed permission changes
+clear the displayed history. The focused native implementation, planning and
+import suites pass, including 230 messages, a 300,000-byte Unicode response,
+paged attempts, malformed data, cancellation and revoked access. Visual
+acceptance and the native publication flow remain open.
+The signed synthetic audit apps are rebuilt with this reader and pass strict
+signature verification. The final staged secret scan is clean.
 
 The local-plan import backend preserves saved versions, planner settings,
 step outputs/errors/usage and bounded quoted local context. It creates private

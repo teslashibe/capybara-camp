@@ -258,8 +258,13 @@ plan; repeating an import returns the same records without creating work.
 Implementation and attempt pages return a `next` cursor of zero at the end.
 Transcript pages retain the ordinary `before`/`has_more` contract. Schema 28
 stores the links and attempt records and refuses a downgrade that would erase
-them. Native publication, browsing and continuation of these imported
-implementations remain release work.
+them. The native planning workspace lists saved implementations under History.
+Selecting one opens its chat and attempt records in the same workspace, with
+the existing provider marks, model controls and transcript component. Earlier
+messages and further attempts load in bounded pages. Switching records cancels
+the previous read; sign-out or observed permission changes clear its contents.
+Native publication and continuation of these imported implementations remain
+release work.
 
 Planning tables were introduced in schema 5. The current required schema is
 defined by `SchemaVersion` in [the database package](../server/internal/database/database.go).

@@ -238,6 +238,18 @@ struct CampPlanningState: Codable, Sendable {
               current.version.version == version else { throw CampCloudError.invalidResponse }
         return current
     }
+    func readImplementationResource(_ ticket: CloudPlanningResult, suffix: String, sourceID: String? = nil) async throws -> Data {
+        guard let c = context, ticket.valid, ticket.campId == c.scope.campId,
+              ticket.referencedSessions.isSubset(of: visibleSessions),
+              sourceID == nil || visibleSessions.contains(sourceID!) else { throw CampCloudError.invalidResponse }
+        let access = accessRevision
+        let data = try await c.transport.perform(CampPublication(kind: "read", method: "GET",
+            path: "/v1/camps/\(c.scope.campId)/planning/\(ticket.id)/implementations" + suffix, body: Data()))
+        try check(c)
+        guard access == accessRevision, sourceID == nil || visibleSessions.contains(sourceID!) else { throw CancellationError() }
+        return data
+    }
+    func implementationSourceVisible(_ id: String) -> Bool { visibleSessions.contains(id) }
     func flush() async {
         saveTask?.cancel(); saveTask = nil
         if ready { do { try await persist() } catch { self.error = "The planning draft could not be saved" } }

@@ -134,8 +134,10 @@ of existing implementation conversations in the native flow remain unfinished; s
 Start over retains quoted context in the new draft. Removing a source there
 does not alter the saved planning history.
 The development API can attach copied implementation transcripts and saved
-attempt records to their original plan versions. Its paged reads preserve the
-copied revision and current permissions; the native controls are still pending.
+attempt records to their original plan versions. Open them from the plan's
+History view to inspect the chat or attempts in the same workspace. Paged reads
+preserve the copied revision and current permissions. Native import and
+publication controls remain pending.
 
 ### Default execution settings
 
