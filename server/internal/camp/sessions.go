@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
 )
 
@@ -144,7 +143,8 @@ func (s *Store) readSession(ctx context.Context, q interface {
 		return Session{}, ErrDenied
 	}
 	value, err := scanSession(q.QueryRow(ctx, `SELECT `+sessionColumns+` FROM sessions s JOIN profiles p ON p.id=s.profile_id
-	 JOIN memberships m ON m.camp_id=s.camp_id AND m.user_id=$1 WHERE s.camp_id=$2 AND s.id=$3 AND (s.owner_user_id=$1 OR s.shared)`, a.UserID, campID, id))
+	 JOIN memberships m ON m.camp_id=s.camp_id AND m.user_id=$1 WHERE s.camp_id=$2 AND s.id=$3 AND (s.owner_user_id=$1 OR s.shared)
+ AND NOT EXISTS(SELECT 1 FROM session_children child WHERE child.session_id=s.id)`, a.UserID, campID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return value, ErrDenied
 	}
@@ -300,6 +300,7 @@ func (s *Store) ListSessions(ctx context.Context, a auth.Actor, campID, query, c
 	rows, err := s.pool.Query(ctx, `SELECT `+sessionColumns+` FROM sessions s JOIN profiles p ON p.id=s.profile_id JOIN memberships m ON m.camp_id=s.camp_id AND m.user_id=$1
  JOIN projects j ON j.id=s.project_id JOIN users u ON u.id=s.owner_user_id
  WHERE s.camp_id=$2 AND (s.owner_user_id=$1 OR s.shared) AND (s.updated_at,s.id)<($3,$4)
+ AND NOT EXISTS(SELECT 1 FROM session_children child WHERE child.session_id=s.id)
  AND ($5='' OR strpos(lower(s.title||' '||p.provider||' '||p.label||' '||j.name||' '||u.display_name),lower($5))>0)
  ORDER BY s.updated_at DESC,s.id DESC LIMIT $6`, a.UserID, campID, before, beforeID, query, limit+1)
 	if err != nil {
@@ -336,20 +337,10 @@ func (s *Store) WriteTranscript(ctx context.Context, a auth.Actor, campID, id, r
 	if input.ExpectedRevision < 0 || len(input.Messages) == 0 || len(input.Messages) > 200 {
 		return 0, ErrInput
 	}
-	size := 0
-	seen := map[string]bool{}
-	positions := map[int64]bool{}
-	for _, m := range input.Messages {
-		size += len(m.Text)
-		if len(m.ID) == 0 || len(m.ID) > 256 || len(m.Model) > 200 || len(m.Effort) > 32 || len(m.Speed) > 32 || m.Ordinal < 0 || seen[m.ID] || positions[m.Ordinal] || !oneOf(m.Role, "user", "assistant", "system", "tool") {
-			return 0, ErrInput
-		}
-		seen[m.ID] = true
-		positions[m.Ordinal] = true
+	if err := validateTranscriptMessages(input.Messages, false); err != nil {
+		return 0, err
 	}
-	if size > 1<<20 {
-		return 0, ErrInput
-	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, err
@@ -378,23 +369,10 @@ func (s *Store) WriteTranscript(ctx context.Context, a auth.Actor, campID, id, r
 		return 0, ErrRevision
 	}
 	result = session.TranscriptRevision + 1
-	for _, m := range input.Messages {
-		var ordinal int64
-		err = tx.QueryRow(ctx, `INSERT INTO messages(session_id,local_id,ordinal) VALUES($1,$2,$3) ON CONFLICT(session_id,local_id) DO UPDATE SET local_id=EXCLUDED.local_id RETURNING ordinal`, id, m.ID, m.Ordinal).Scan(&ordinal)
-		if err != nil {
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-				return 0, ErrConflict
-			}
-			return 0, err
-		}
-		if ordinal != m.Ordinal {
-			return 0, ErrConflict
-		}
-		if _, err = tx.Exec(ctx, `INSERT INTO message_revisions(session_id,local_id,revision,role,text,removed,model,effort,speed) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, m.ID, result, m.Role, m.Text, m.Removed, m.Model, m.Effort, m.Speed); err != nil {
-			return 0, err
-		}
+	if err = appendTranscriptMessages(ctx, tx, id, result, input.Messages); err != nil {
+		return 0, err
 	}
+
 	err = tx.QueryRow(ctx, `UPDATE sessions SET transcript_revision=$2,updated_at=now() WHERE id=$1 RETURNING revision`, id, result).Scan(&session.Revision)
 	if err != nil {
 		return 0, err
@@ -433,40 +411,9 @@ func (s *Store) transcriptOnce(ctx context.Context, a auth.Actor, campID, id str
 	if revision > session.TranscriptRevision {
 		return Transcript{}, ErrRevision
 	}
-	if before == 0 {
-		before = 1 << 62
-	}
-	rows, err := tx.Query(ctx, `SELECT m.local_id,m.ordinal,v.role,v.text,v.removed,v.revision,v.model,v.effort,v.speed FROM messages m
- CROSS JOIN LATERAL(SELECT role,text,removed,revision,model,effort,speed FROM message_revisions WHERE session_id=m.session_id AND local_id=m.local_id AND revision<=$2 ORDER BY revision DESC LIMIT 1) v
- WHERE m.session_id=$1 AND m.ordinal<$3 AND NOT v.removed ORDER BY m.ordinal DESC LIMIT $4`, id, revision, before, limit+1)
-	if err != nil {
-		return Transcript{}, err
-	}
-	out := Transcript{Revision: revision, Messages: []Message{}}
-	textBytes := 0
-	for rows.Next() {
-		var m Message
-		if err = rows.Scan(&m.ID, &m.Ordinal, &m.Role, &m.Text, &m.Removed, &m.Revision, &m.Model, &m.Effort, &m.Speed); err != nil {
-			rows.Close()
-			return out, err
-		}
-		if len(out.Messages) == limit || (textBytes+len(m.Text) > 1<<20 && len(out.Messages) > 0) {
-			out.HasMore = true
-			break
-		}
-		textBytes += len(m.Text)
-		out.Messages = append(out.Messages, m)
-	}
-	err = rows.Err()
-	rows.Close()
+	out, err := readTranscriptAt(ctx, tx, id, revision, before, limit)
 	if err != nil {
 		return out, err
-	}
-	if len(out.Messages) > 0 {
-		out.Before = out.Messages[len(out.Messages)-1].Ordinal
-	}
-	for i, j := 0, len(out.Messages)-1; i < j; i, j = i+1, j-1 {
-		out.Messages[i], out.Messages[j] = out.Messages[j], out.Messages[i]
 	}
 	return out, tx.Commit(ctx)
 }

@@ -50,9 +50,23 @@ provider fixtures export 230 messages without losing or duplicating messages.
 Tests reject foreign parents/profiles, changed snapshots, unsafe paths, invalid
 cursors and overflowing child lists. Codex database history remains available
 after its rollout file rotates; fallback files must identify the selected child.
-The packaged Mac helper exposes and exercises both commands. This is a local
-export layer only. Child cloud storage, publication, inherited access controls,
-runner context and native cloud navigation are still required.
+The packaged Mac helper exposes and exercises both commands. Cloud storage and
+inherited access controls are now implemented by the schema-24 API below.
+Native publication, runner context and native cloud navigation are still required.
+
+Schema 24 adds versioned child history beneath a parent session. Updates reuse
+the existing message store and advance the parent's transcript revision. Child
+rows are excluded from the board and ordinary session/execution endpoints.
+Private and revoked parent permissions apply to current and historical child
+reads. Partial uploads stay unreadable, and a removed child cannot be opened
+through an older snapshot. The API has bounded batches and idempotent receipts.
+The full Go race suite and vet passed with disposable PostgreSQL, including
+the new storage/HTTP tests and the existing main-transcript and runner suites.
+The separate controller-role check denies child metadata and message-body reads,
+and the Linux server, runner, controller and migration builds pass.
+A focused PostgreSQL rerun also verifies a 230-message child uploaded in two
+batches and read back over two pages without mixing it into the main transcript.
+No cloud has been deployed and no native child-publication flow has been accepted.
 
 The transfer work includes a read-only Go capture layer for selected Git
 changes and owner-bound, encrypted, resumable upload storage. Completion checks

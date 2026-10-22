@@ -245,9 +245,52 @@ a changed source fingerprint. File fingerprints detect ordinary local changes;
 they are not attestations against an adversary who can alter local provider
 files and their metadata.
 
-This is the local read layer for child migration. Child publication, cloud
-storage and access checks, runner reads, and native cloud child navigation are
-still required before the move can claim to preserve child history.
+This is the local read layer for child migration. The cloud storage contract
+below accepts those pages. Native publication, runner reads and native cloud
+child navigation are still required before the move can claim to preserve
+child history.
+
+### Cloud child histories
+
+Schema 24 stores each child's transcript separately, using the existing message
+and message-revision tables. Its relationship to the parent has an opaque source
+key and versioned display metadata. Child writes advance the parent's transcript
+revision, so a pinned parent revision also identifies the child history visible
+at that point. Updates retain earlier message versions.
+
+The source owner's original device can write through
+`POST /v1/camps/{camp}/sessions/{parent}/children/{child}/transcript` with an
+`Idempotency-Key`. `{child}` is a stable client-generated UUID for that source.
+The request includes `source_key`, `source_revision`, `name`, `phase`, `workflow`,
+`state`, `model`, `complete`, `removed`, `expected_parent_revision`,
+`expected_transcript_revision` and `messages`. Messages use the same format and
+200-message/1 MiB batch limits as the main transcript. An empty batch can publish
+metadata or remove a child. The child count is bounded to 512 per parent.
+
+The expected parent revision is its global transcript revision. The expected
+child transcript revision is that child's own message revision. A successful
+write returns both values. Retrying the same command returns the original
+receipt; reusing its key with changed input is rejected. Concurrent stale writes
+do not merge silently. The transcript stays unreadable until the sender marks
+the reviewed snapshot `complete`; metadata can report an incomplete upload.
+
+`GET /v1/camps/{camp}/sessions/{parent}/children?revision=N` lists child metadata.
+`GET /v1/camps/{camp}/sessions/{parent}/children/{child}/transcript` reads messages
+with `revision`, `before` and `limit` query parameters. Here `revision` selects
+the parent's transcript snapshot; zero means current. The response includes the
+resolved parent revision, current parent permission revision, child metadata and
+the normal paged transcript. Current parent access is checked on every read,
+including older snapshots. A removed child cannot be read through an old URL.
+
+Children do not appear as standalone board tickets and cannot receive prompts,
+change execution location or bypass the parent access check through ordinary
+session URLs. Their update events use the parent session's visibility. No
+provider credential is needed to read a shared child transcript.
+
+Before enabling child publication, upgrade every API process to the schema-24
+build and apply the migration through the normal backup and release procedure.
+Older API processes must not serve this database once child rows exist. The
+migration preserves existing histories and refuses destructive downgrade.
 
 ## Cloud runner integration
 

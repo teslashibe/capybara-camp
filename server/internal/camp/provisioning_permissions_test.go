@@ -64,7 +64,7 @@ func TestControllerRoleCanProvisionWithoutReadingHumanOrProviderSecrets(t *testi
 	if _, err = controller.EnsureControllerGrant(ctx, a, 4); err != nil {
 		t.Fatal("controller cannot check active workspaces", err)
 	}
-	for _, query := range []string{`SELECT prompt FROM prompt_requests`, `SELECT encrypted_read_token FROM ticket_workspaces`, `SELECT repository_name FROM ticket_workspaces`, `SELECT encrypted_credentials FROM provider_installations`, `SELECT encrypted_challenge FROM provider_login_attempts`, `SELECT encrypted_credentials FROM git_connections`, `SELECT encrypted_context FROM git_logins`, `SELECT email FROM users`, `SELECT token_hash FROM devices`} {
+	for _, query := range []string{`SELECT prompt FROM prompt_requests`, `SELECT encrypted_read_token FROM ticket_workspaces`, `SELECT repository_name FROM ticket_workspaces`, `SELECT encrypted_credentials FROM provider_installations`, `SELECT encrypted_challenge FROM provider_login_attempts`, `SELECT encrypted_credentials FROM git_connections`, `SELECT encrypted_context FROM git_logins`, `SELECT email FROM users`, `SELECT token_hash FROM devices`, `SELECT name FROM session_child_revisions`, `SELECT source_key FROM session_children`, `SELECT text FROM message_revisions`} {
 		if _, err = limited.Exec(ctx, query); err == nil {
 			t.Fatal("controller read a prohibited column")
 		}

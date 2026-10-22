@@ -9,6 +9,44 @@ import (
 )
 
 func (a *API) sessionRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/camps/{camp}/sessions/{session}/children", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		revision, ok := queryInt(w, r, "revision")
+		if !ok {
+			return
+		}
+		value, err := a.Camps.ChildHistories(r.Context(), u, r.PathValue("camp"), r.PathValue("session"), revision)
+		if !fail(w, err) {
+			write(w, 200, value)
+		}
+	}))
+	mux.HandleFunc("POST /v1/camps/{camp}/sessions/{session}/children/{child}/transcript", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		var input camp.ChildHistoryInput
+		if !decode(w, r, &input) {
+			return
+		}
+		value, err := a.Camps.WriteChildHistory(r.Context(), u, r.PathValue("camp"), r.PathValue("session"), r.PathValue("child"), r.Header.Get("Idempotency-Key"), input)
+		if !fail(w, err) {
+			write(w, 200, value)
+		}
+	}))
+	mux.HandleFunc("GET /v1/camps/{camp}/sessions/{session}/children/{child}/transcript", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		limit, ok := pageLimit(w, r)
+		if !ok {
+			return
+		}
+		revision, ok := queryInt(w, r, "revision")
+		if !ok {
+			return
+		}
+		before, ok := queryInt(w, r, "before")
+		if !ok {
+			return
+		}
+		value, err := a.Camps.ChildTranscript(r.Context(), u, r.PathValue("camp"), r.PathValue("session"), r.PathValue("child"), revision, before, limit)
+		if !fail(w, err) {
+			write(w, 200, value)
+		}
+	}))
 	mux.HandleFunc("POST /v1/camps/{camp}/sessions/{session}/message", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		var input camp.SourceRef
 		if !decode(w, r, &input) {
