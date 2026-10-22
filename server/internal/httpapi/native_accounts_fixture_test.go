@@ -42,6 +42,12 @@ func serveFixtureProviderAccounts(ctx context.Context, store *camp.Store, owner 
 			}
 			state, err := store.RunnerAccount(ctx, grant.Token)
 			if err != nil {
+				if account.State != "disconnecting" {
+					fresh, e := store.CreateRunnerGrant(ctx, owner, account.ID, uuid.NewString())
+					if e == nil {
+						grants[account.ID] = fresh
+					}
+				}
 				continue
 			}
 			if state.Action == "erase" {

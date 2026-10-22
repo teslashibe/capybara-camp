@@ -98,8 +98,8 @@ struct CampProviderAccountsView: View {
             if account.state == "connected" { Text("Usage has not been reported by this provider").font(.system(size: 11)).foregroundStyle(campMuted) }
             if account.state == "disconnecting" { Text("Waiting for the runner to confirm that its credentials have been removed").font(.system(size: 12)).foregroundStyle(campMuted) }
             HStack {
-                if !["disconnecting", "disconnected"].contains(account.state), accounts.detail?.login?.active != true, !accounts.preparing {
-                    Button(account.state == "connected" ? "Reconnect" : "Sign in") { Task { await accounts.connect(account) } }
+                if account.state != "disconnecting", accounts.detail?.login?.active != true, !accounts.preparing {
+                    Button(["connected", "disconnected"].contains(account.state) ? "Reconnect" : "Sign in") { Task { await accounts.connect(account) } }
                 }
                 Spacer()
                 if !["disconnecting", "disconnected"].contains(account.state) {

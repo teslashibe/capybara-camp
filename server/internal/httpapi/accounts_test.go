@@ -120,6 +120,9 @@ func TestCloudAccountHTTPSeparatesPeopleAndRunnerGrants(t *testing.T) {
 	call("GET", "/v1/runner/credentials", grant.Token, "", 404)
 	call("POST", "/v1/runner/erased", grant.Token, "", 204)
 	call("GET", "/v1/runner/account", grant.Token, "", 401)
+	call("POST", "/v1/provider-accounts/"+account.ID+"/reactivate", tokens[1], "", 404)
+	call("POST", "/v1/provider-accounts/"+account.ID+"/reactivate", tokens[0], "", 200)
+	call("GET", "/v1/runner/account", grant.Token, "", 401)
 
 	claude, claudeGrant := func() (camp.ProviderAccount, camp.RunnerGrant) {
 		account, err := store.CreateProviderAccount(ctx, actors[0], uuid.NewString(), camp.ProviderAccountInput{Provider: "Claude", Label: "Cloud Claude"})

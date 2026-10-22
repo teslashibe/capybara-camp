@@ -92,7 +92,7 @@ extension CampHTTP: CampAccountTransport {}
 
 @MainActor final class CampProviderAccounts: ObservableObject {
     struct AddIntent: Codable, Equatable { var provider: String; var label: String; var key: String }
-    private struct StartIntent: Codable { var key: String; var previousLogin: String? }
+    private struct StartIntent: Codable { var key: String; var previousLogin: String?; var reactivationKey: String? }
     private struct Journal: Codable { var add: AddIntent?; var starts: [String: StartIntent] = [:]; var selectedId: String? }
     private struct Connection {
         var transport: any CampAccountTransport
@@ -201,11 +201,21 @@ extension CampHTTP: CampAccountTransport {}
         let value = try await call(CloudProviderAccount.self, "POST", "/v1/provider-accounts", body: CampWire.body(["provider": intent.provider, "label": intent.label]), key: intent.key, c)
         guard value.valid(owner: c.credential.actor.userId), value.provider == intent.provider else { throw CampCloudError.invalidResponse }
         var next = journal; next.add = nil
-        next.starts[value.id] = StartIntent(key: UUID().uuidString, previousLogin: nil)
+        next.starts[value.id] = StartIntent(key: UUID().uuidString, previousLogin: nil, reactivationKey: nil)
         next.selectedId = value.id
         try await save(next, c); selectedId = value.id
     }
     private func begin(_ id: String, _ intent: StartIntent, _ c: Connection) async throws {
+        if let key = intent.reactivationKey {
+            let account = try await call(CloudProviderAccount.self, "POST", "/v1/provider-accounts/" + id + "/reactivate", key: key, c)
+            guard account.id == id, account.valid(owner: c.credential.actor.userId), !["disconnecting", "disconnected"].contains(account.state) else { throw CampCloudError.server(409, "request_state_changed") }
+            if let index = accounts.firstIndex(where: { $0.id == id }) { accounts[index] = account }
+            var next = journal; next.starts[id]?.reactivationKey = nil; try await save(next, c)
+            try await readDetail(id, c)
+            if let login = detail?.login, login.id != intent.previousLogin {
+                next = journal; next.starts[id] = nil; try await save(next, c); return
+            }
+        }
         let login = try await call(CloudProviderLogin.self, "POST", "/v1/provider-accounts/" + id + "/logins", key: intent.key, c)
         guard let account = accounts.first(where: { $0.id == id }), login.valid(account: account) else { throw CampCloudError.invalidResponse }
         var next = journal; next.starts[id] = nil; try await save(next, c)
@@ -259,11 +269,12 @@ extension CampHTTP: CampAccountTransport {}
     func retryAdd() async { await mutate { c in try await finishAdd(c) } }
     func connect(_ account: CloudProviderAccount) async {
         await mutate { c in
-            guard account.valid(owner: c.credential.actor.userId), !["disconnecting", "disconnected"].contains(account.state) else { throw CampCloudError.invalidResponse }
+            guard account.valid(owner: c.credential.actor.userId) else { throw CampCloudError.invalidResponse }
             selectedId = account.id; try await readDetail(account.id, c)
+            guard let current = detail?.account, current.state != "disconnecting" else { throw CampCloudError.server(409, "request_state_changed") }
             guard detail?.login?.active != true else { return }
             var next = journal
-            if next.starts[account.id] == nil { next.starts[account.id] = StartIntent(key: UUID().uuidString, previousLogin: detail?.login?.id) }
+            if next.starts[account.id] == nil { next.starts[account.id] = StartIntent(key: UUID().uuidString, previousLogin: detail?.login?.id, reactivationKey: current.state == "disconnected" ? UUID().uuidString : nil) }
             try await save(next, c)
             do { try await begin(account.id, next.starts[account.id]!, c) }
             catch CampCloudError.server(409, _) { /* The same intent resumes when the runner is ready. */ }

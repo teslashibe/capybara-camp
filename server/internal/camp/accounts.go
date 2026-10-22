@@ -452,6 +452,56 @@ func (s *Store) DisconnectProviderAccount(ctx context.Context, actor auth.Actor,
 	}
 	return a, tx.Commit(ctx)
 }
+
+// Reactivation preserves the account identity and history, but creates a new
+// installation epoch only after the former runner has confirmed erasure.
+func (s *Store) ReactivateProviderAccount(ctx context.Context, actor auth.Actor, id, key string) (ProviderAccount, error) {
+	if err := s.cloudEnabled(); err != nil {
+		return ProviderAccount{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ProviderAccount{}, err
+	}
+	defer tx.Rollback(ctx)
+	a, err := s.lockAccount(ctx, tx, actor.UserID, id)
+	if err != nil {
+		return a, err
+	}
+	var previous ProviderAccount
+	if hit, err := s.beginCommand(ctx, tx, actor, key, "provider.reactivate:"+id, struct{}{}, &previous); err != nil {
+		return a, err
+	} else if hit {
+		return a, tx.Commit(ctx)
+	}
+	if a.State != "disconnected" {
+		return a, ErrTransition
+	}
+	var unrevoked bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runner_grants WHERE installation_id=$1 AND revoked_at IS NULL)`, a.InstallationID).Scan(&unrevoked); err != nil {
+		return a, err
+	}
+	if unrevoked {
+		return a, ErrTransition
+	}
+	if _, err = tx.Exec(ctx, `UPDATE provider_installations SET state='pending',epoch=epoch+1,encrypted_credentials=NULL,credential_expires_at=NULL,updated_at=now() WHERE id=$1`, a.InstallationID); err != nil {
+		return a, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE provider_accounts SET revision=revision+1 WHERE id=$1`, a.ID); err != nil {
+		return a, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE provider_login_attempts SET state='cancelled',encrypted_challenge=NULL,encrypted_code=NULL,updated_at=now() WHERE installation_id=$1 AND state IN ('queued','running','waiting')`, a.InstallationID); err != nil {
+		return a, err
+	}
+	a, err = s.lockAccount(ctx, tx, actor.UserID, id)
+	if err != nil {
+		return a, err
+	}
+	if err = s.finishCommand(ctx, tx, actor, key, a); err != nil {
+		return a, err
+	}
+	return a, tx.Commit(ctx)
+}
 func (s *Store) sealProvider(plain []byte, binding string) ([]byte, error) {
 	nonce := make([]byte, s.providerCipher.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {

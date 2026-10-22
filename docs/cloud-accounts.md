@@ -53,6 +53,7 @@ All routes require the person's Camp device token. Writes require an
 | `POST /v1/provider-accounts/{account}/logins/{attempt}/code` | Submit `{code}` once for this waiting Claude login |
 | `POST /v1/provider-accounts/{account}/logins/{attempt}/cancel` | Cancel pending login and prevent late credential activation |
 | `POST /v1/provider-accounts/{account}/disconnect` | Fence login/credential access and request runner erasure |
+| `POST /v1/provider-accounts/{account}/reactivate` | Return an erased account to pending with a fresh installation epoch |
 
 A runner grant lasts 24 hours, is installation-scoped and is stored only as a
 hash, except its encrypted idempotency receipt. Replaying grant creation can
@@ -136,6 +137,15 @@ acknowledgment the grant is revoked and the account is `disconnected`. Workload
 termination, handling an offline or expired runner grant, and credential-volume
 removal must be implemented by the provisioning controller before release.
 An account that has never received a runner grant can disconnect immediately.
+
+Reconnect after a completed disconnect reactivates the same account and
+installation, preserving its pinned provider identity and history. It requires
+`disconnected` state and no unrevoked grants. The operation increments the
+installation epoch once and requires a new runner grant; it cannot restore old
+credentials or revive a previous worker. Replays of an old reactivation request
+return current state without undoing a later disconnect. A different provider
+identity still fails verification. The native form persists the reactivation
+request before sending it and then waits for provisioning before sign-in.
 
 ## Validation
 

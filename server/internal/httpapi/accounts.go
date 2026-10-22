@@ -70,6 +70,12 @@ func (a *API) accountRoutes(mux *http.ServeMux) {
 			write(w, 200, out)
 		}
 	}))
+	mux.HandleFunc("POST /v1/provider-accounts/{account}/reactivate", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		out, err := a.Camps.ReactivateProviderAccount(r.Context(), u, r.PathValue("account"), r.Header.Get("Idempotency-Key"))
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
 	// Runner tokens use their own domain authentication and cannot authorize any
 	// human Camp endpoint. Each mutation rechecks the grant under the account lock.
 	mux.HandleFunc("GET /v1/runner/account", a.runnerAuthorize(func(w http.ResponseWriter, r *http.Request, state camp.RunnerAccountState) {

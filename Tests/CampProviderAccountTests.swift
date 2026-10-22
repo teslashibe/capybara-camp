@@ -10,6 +10,8 @@ actor ProviderAccountFixture: CampAccountTransport {
     var foreignOwner = false
     var created = 0
     var starts = 0
+    var reactivations = 0
+    var loseReactivationReply = true
     var receivedCode = ""
     var holdList = false
     var holdStart = false
@@ -19,6 +21,8 @@ actor ProviderAccountFixture: CampAccountTransport {
     init(owner: String) { self.owner = owner }
     func prepareRunner() { grantReady = true }
     func counts() -> (Int, Int) { (created, starts) }
+    func reactivationCount() -> Int { reactivations }
+    func finishErasure(_ id: String) { if let index = accounts.firstIndex(where: { $0.id == id }) { accounts[index].state = "disconnected" } }
     func code() -> String { receivedCode }
     func setForeign(_ value: Bool) { foreignOwner = value }
     func holdNextList() { holdList = true }
@@ -57,6 +61,15 @@ actor ProviderAccountFixture: CampAccountTransport {
         guard parts.count >= 3, let index = accounts.firstIndex(where: { $0.id == parts[2] }) else { throw CampCloudError.server(404, "not_available") }
         let id = accounts[index].id
         if method == "GET" { return try CampWire.encoder().encode(CloudProviderStatus(account: accounts[index], login: logins[id])) }
+        if path.hasSuffix("/reactivate") {
+            guard let key else { throw CampCloudError.invalidResponse }
+            if let data = receipts[key] { return data }
+            guard accounts[index].state == "disconnected" else { throw CampCloudError.server(409, "request_state_changed") }
+            accounts[index].state = "pending"; accounts[index].epoch += 1; accounts[index].revision += 1; reactivations += 1
+            let data = try CampWire.encoder().encode(accounts[index]); receipts[key] = data
+            if loseReactivationReply { loseReactivationReply = false; throw URLError(.networkConnectionLost) }
+            return data
+        }
         if path.hasSuffix("/logins") {
             guard grantReady else { throw CampCloudError.server(409, "request_state_changed") }
             guard let key else { throw CampCloudError.invalidResponse }
@@ -126,6 +139,14 @@ actor ProviderAccountFixture: CampAccountTransport {
         precondition(restored.selection?.state == "connected", "Cancelling reconnect must retain the connected account")
         await restored.disconnect(restored.selection!)
         precondition(restored.selection?.state == "disconnecting")
+        await transport.finishErasure(id); await restored.refresh()
+        let erased = restored.selection!
+        await restored.connect(erased)
+        await restored.refresh()
+        let reactivations = await transport.reactivationCount()
+        precondition(reactivations == 1 && restored.accounts.count == 1 && restored.selection?.id == id && restored.selection?.epoch == erased.epoch + 1,
+                     "Lost reactivation response must preserve identity and increment epoch once")
+        precondition(restored.detail?.login?.state == "queued")
 
         await transport.setForeign(true)
         await restored.refresh()

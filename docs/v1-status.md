@@ -13,7 +13,7 @@ and acceptance are separate milestones.
 | Shared Camps | Go/PostgreSQL auth, membership, sessions, events, requests, native cache/outbox and owner-Mac worker | Real independent users on two Macs, remaining permission/recovery cases, production deployment |
 | Onboarding | Automatic profile discovery before full import, optional Camp sign-in, owner-only cloud account setup, projects, notifications, skip/resume | Default execution target and Git connection steps; final onboarding validation after remaining services land |
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
-| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, expiring login attempts, credential encryption, private Claude code delivery, cancellation/disconnect fencing, Go sign-in adapters and an auth-only worker with recovery journals | Workload provisioning and disconnected-account reactivation, isolated execution runtime, local/cloud defaults and transfers, usage states, real cloud sign-in and disconnected-Mac execution |
+| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, expiring login attempts, credential encryption, private Claude code delivery, disconnect/reactivation fencing, Go sign-in adapters and an auth-only worker with recovery journals | Workload provisioning, isolated execution runtime, local/cloud defaults and transfers, usage states, real cloud sign-in and disconnected-Mac execution |
 | Git | Project repository links and local CLI project execution | Independent member authorization, isolated cloud workspaces, Git actor attribution, branch/push/PR recovery |
 | Memory and skills | Approved Cortex/shared Markdown design | Actual native and Go integrations, provider/model consolidation, memory inspection, skill editing/version rollout and permission tests |
 | Hosting and release | Public Kubernetes/K3s base and local development builds | Runner/Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, Developer ID/notarization, universal V1 release and recorded website demo |
@@ -25,10 +25,10 @@ the two-Mac acceptance run follow that deployment. Hardware has not been bought
 or provisioned for this goal.
 
 The native account form and synthetic provider walkthrough now pass locally.
-The next cloud slice must provision/reconcile isolated workloads and grants,
-including explicit reactivation of a fully disconnected account after its old
-runner confirms erasure. The current form preserves disconnected records but
-does not yet restart them. This remains an open implementation requirement.
+The next cloud slice must provision/reconcile isolated workloads and grants.
+Reactivating a disconnected account now preserves its identity, waits for old
+runner erasure, and increments the execution epoch. The provisioning controller
+still has to create that epoch's fresh workload and handle physical storage cleanup.
 
 Automatic discovery finds local profile stores without asking for paths. It
 does not prove that every historical account is still signed in, or that six
