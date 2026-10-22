@@ -168,7 +168,7 @@ func (s *Store) PublishSession(ctx context.Context, a auth.Actor, campID, reques
 		return Session{}, err
 	}
 	var owned bool
-	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM profiles WHERE id=$1 AND owner_user_id=$2 AND owner_device_id=$3) AND EXISTS(SELECT 1 FROM projects WHERE id=$4 AND camp_id=$5)`, input.ProfileID, a.UserID, a.DeviceID, input.ProjectID, campID).Scan(&owned)
+	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM profiles WHERE id=$1 AND owner_user_id=$2 AND owner_device_id=$3) AND EXISTS(SELECT 1 FROM projects WHERE id=$4 AND camp_id=$5 AND (NOT archived OR EXISTS(SELECT 1 FROM sessions WHERE id=$6 AND camp_id=$5 AND project_id=$4)))`, input.ProfileID, a.UserID, a.DeviceID, input.ProjectID, campID, input.ID).Scan(&owned)
 	if err != nil {
 		return Session{}, err
 	}
@@ -202,7 +202,7 @@ func (s *Store) PublishSession(ctx context.Context, a auth.Actor, campID, reques
 		if input.ExpectedRevision != previous.Revision {
 			return result, ErrRevision
 		}
-		_, err = tx.Exec(ctx, `UPDATE sessions SET permission_revision=permission_revision+CASE WHEN project_id IS DISTINCT FROM $2 OR shared IS DISTINCT FROM $7 OR allow_requests IS DISTINCT FROM $8 THEN 1 ELSE 0 END,project_id=$2,title=$3,model=$4,state=$5,stage=$6,shared=$7,allow_requests=$8,external_owner=$9,revision=revision+1,updated_at=now() WHERE id=$1`, input.ID, input.ProjectID, input.Title, input.Model, input.State, input.Stage, input.Shared, input.AllowRequests, input.ExternalOwner)
+		_, err = tx.Exec(ctx, `UPDATE sessions SET permission_revision=permission_revision+CASE WHEN shared IS DISTINCT FROM $7 OR allow_requests IS DISTINCT FROM $8 THEN 1 ELSE 0 END,project_id=$2,title=$3,model=$4,state=$5,stage=$6,shared=$7,allow_requests=$8,external_owner=$9,revision=revision+1,updated_at=now() WHERE id=$1`, input.ID, input.ProjectID, input.Title, input.Model, input.State, input.Stage, input.Shared, input.AllowRequests, input.ExternalOwner)
 		if err != nil {
 			return result, err
 		}

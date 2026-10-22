@@ -2,7 +2,7 @@ import SwiftUI
 
 extension CampStore {
     func newSharedPlan(mode: PlanningMode = .single) {
-        guard let scope = cloud.scope, let project = cloud.projects.first else { banner = "Connect to a Camp and add a project first"; return }
+        guard let scope = cloud.scope, let project = cloud.projects.first(where:{ !$0.isArchived && "cloud:"+$0.id==projectFilter }) ?? cloud.projects.first(where:{ !$0.isArchived }) else { banner = "Connect to a Camp and add a project first"; return }
         let available = cloud.sessions.filter { $0.ownerUserId == scope.userId || $0.allowRequests }
         let preferred = available.first { $0.ownerUserId == scope.userId }?.provider ?? available.first?.provider ?? "Codex"
         let planners = (mode == .single ? [preferred] : ["Codex", "Claude"]).map { provider -> CloudPlannerInput in
@@ -106,14 +106,14 @@ struct SharedPlanningCard: View {
                 Text("Planning").font(.system(size: 10, weight: .medium)).foregroundStyle(campMuted)
                 Spacer()
                 Image(systemName: "person.2").font(.system(size: 10)).foregroundStyle(campMuted).help("Shared Camp")
-                Menu { Button("Open plan") { store.open(session) } } label: { Image(systemName: "ellipsis").frame(width: 24, height: 20) }
+                Menu { Button("Open plan") { store.open(session) };ProjectAssignmentMenu(store:store,session:session) } label: { Image(systemName: "ellipsis").frame(width: 24, height: 20) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Plan actions for \(session.title)")
             }
             Button { store.open(session) } label: {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34, alignment: .topLeading)
-                    Label(session.project, systemImage: "folder").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
+                    Label(store.projectSummary(session), systemImage: "folder").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
                     HStack { Text(mode.title); Spacer(); Text(Date(timeIntervalSince1970: session.updated), style: .relative) }.font(.system(size: 9)).foregroundStyle(campMuted)
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain)
@@ -159,7 +159,7 @@ struct SharedPlanningWorkspace: View {
                         .font(.system(size: 13)).scrollContentBackground(.hidden).frame(height: 90).padding(8).background(.white).clipShape(RoundedRectangle(cornerRadius: 8)).accessibilityLabel("Planning brief").disabled(planning.pending(id))
                     if let destination = store.selected { SessionContextComposer(store: store, mentions: store.mentions, destination: destination).disabled(planning.pending(id)) }
                     HStack {
-                        Picker("Project", selection: Binding(get: { draft.input.projectId }, set: { value in planning.edit(id) { $0.projectId = value } })) { ForEach(store.cloud.projects) { Text($0.name).tag($0.id) } }.frame(maxWidth: 300)
+                        Picker("Project", selection: Binding(get: { draft.input.projectId }, set: { value in planning.edit(id) { $0.projectId = value } })) { ForEach(store.cloud.projects.filter { !$0.isArchived }) { Text($0.name).tag($0.id) } }.frame(maxWidth: 300)
                         Toggle("Share plan with Camp", isOn: Binding(get: { draft.input.shared }, set: { value in planning.edit(id) { $0.shared = value } })).toggleStyle(.checkbox)
                     }.disabled(planning.pending(id) || draft.restartPlanID != nil)
                     Picker("Planning mode", selection: Binding(get: { draft.input.workflow }, set: { store.setSharedPlanMode(id, mode: $0) })) {

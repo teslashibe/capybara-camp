@@ -72,6 +72,7 @@ func (a *API) Handler() http.Handler {
 		}
 	}))
 	mux.HandleFunc("POST /v1/camps/{camp}/projects", a.authorize(a.createProject))
+	a.projectRoutes(mux)
 	mux.HandleFunc("POST /v1/camps/{camp}/invitations", a.authorize(a.invite))
 	mux.HandleFunc("POST /v1/invitations/accept", a.authorize(a.accept))
 	mux.HandleFunc("DELETE /v1/camps/{camp}/members/{user}", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
@@ -259,12 +260,13 @@ func (a *API) createCamp(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 }
 func (a *API) createProject(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 	var input struct {
-		Name string `json:"name"`
+		Name         string   `json:"name"`
+		Repositories []string `json:"repositories"`
 	}
 	if !decode(w, r, &input) {
 		return
 	}
-	value, err := a.Camps.CreateProject(r.Context(), u, r.PathValue("camp"), r.Header.Get("Idempotency-Key"), input.Name)
+	value, err := a.Camps.CreateProjectWithRepositories(r.Context(), u, r.PathValue("camp"), r.Header.Get("Idempotency-Key"), input.Name, input.Repositories)
 	if !fail(w, err) {
 		write(w, 201, value)
 	}

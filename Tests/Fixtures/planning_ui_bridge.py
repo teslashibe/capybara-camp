@@ -19,7 +19,7 @@ def emit(value):
 def sessions():
     return [dict(id=provider, sessionID=provider, provider=provider, sourceID=provider,
                  sourceLabel='Demo ' + provider, root=str(root / provider),
-                 title='Synthetic ' + provider + ' planning source', cwd=str(root / 'demo-project'),
+                 title='Synthetic ' + provider + ' planning source', cwd=str(root / (provider.lower() + '-repository' if os.environ.get('CAMP_FIXTURE_DISTINCT_PROJECTS') == '1' else 'demo-project')),
                  updated=time.time(), path='', accountID='', archived=False, model=model)
             for provider, model in [('Codex', 'gpt-6.1-sol'), ('Claude', 'claude-opus-5-5')]]
 

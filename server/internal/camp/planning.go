@@ -205,13 +205,6 @@ func (s *Store) CreatePlanning(ctx context.Context, a auth.Actor, campID, key st
 	if _, err = s.lock(ctx, tx, a, campID, true); err != nil {
 		return PlanningTicket{}, err
 	}
-	var exists bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE camp_id=$1 AND id=$2)`, campID, input.ProjectID).Scan(&exists); err != nil {
-		return PlanningTicket{}, err
-	}
-	if !exists {
-		return PlanningTicket{}, ErrDenied
-	}
 	var saved PlanningTicket
 	if hit, err := s.beginCommand(ctx, tx, a, key, "planning.create:"+campID, input, &saved); err != nil {
 		return saved, err
@@ -221,6 +214,13 @@ func (s *Store) CreatePlanning(ctx context.Context, a auth.Actor, campID, key st
 			err = s.checkPlanningSources(ctx, tx, a, result)
 		}
 		return result, err
+	}
+	var exists bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE camp_id=$1 AND id=$2 AND NOT archived)`, campID, input.ProjectID).Scan(&exists); err != nil {
+		return PlanningTicket{}, err
+	}
+	if !exists {
+		return PlanningTicket{}, ErrDenied
 	}
 	version, err := s.preparePlanning(ctx, tx, a, campID, input)
 	if err != nil {

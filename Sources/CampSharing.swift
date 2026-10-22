@@ -55,6 +55,7 @@ struct LocalShareStatus {
         let token = generation
         var value = binding(for: local) ?? LocalShare(id: UUID().uuidString.lowercased(), local: local, projectId: projectId, shared: shared, allowRequests: allowRequests)
         value.local = local; value.projectId = projectId; value.shared = shared; value.allowRequests = allowRequests
+        value.projectChangeRequested = true
         value.adoptRequested = adopt
         value.deviceId = actor.deviceId
         // A private metadata row fences any delayed first publication. Do not
@@ -156,6 +157,7 @@ struct LocalShareStatus {
         case "profile": updated.profile = try CampWire.decoder().decode(CloudProfile.self, from: data)
         case "session", "ownership":
             updated.remote = try CampWire.decoder().decode(CloudSession.self, from: data)
+            if command.kind == "session" { updated.projectChangeRequested = false }
             if command.kind == "ownership" { updated.adoptRequested = false }
         case "transcript":
             let response = try CampWire.decoder().decode([String: Int64].self, from: data)
@@ -191,7 +193,13 @@ struct LocalShareStatus {
             try await commit(value, generation: token); value = try await perform(value, generation: token)
         }
         let get = CampPublication(kind: "read", method: "GET", path: "/v1/camps/\(scope.campId)/sessions/\(id)", body: Data())
-        do { value.remote = try CampWire.decoder().decode(CloudSession.self, from: await transport.perform(get)) }
+        do {
+            value.remote = try CampWire.decoder().decode(CloudSession.self, from: await transport.perform(get))
+            if value.projectChangeRequested != true, let project=value.remote?.projectId, project != value.projectId {
+                value.projectId=project
+                try await commit(value,generation:token)
+            }
+        }
         catch CampCloudError.server(404, _) where value.remote == nil {}
         try check(token)
         guard let profile = value.profile, profile.ownerDeviceId == actor.deviceId else { throw CampCloudError.invalidResponse }

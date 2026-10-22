@@ -260,6 +260,10 @@ final class TranscriptWatch {
     var steering: Bool { selected.flatMap { conversation($0)?.steering } ?? false }
     @Published var banner = ""
     @Published var sourceSheet = false
+    @Published var projectSheet = false
+    @Published var projectFilter = "all" { didSet { filterRevision += 1 } }
+    let projects: LocalProjects
+    private(set) var cloudProjectIndex: [String:CampProject] = [:]
     @Published var activity: [String: LiveState] = [:] { didSet { filterRevision += 1 } }
     @Published var modelCatalogs: [String: [ModelOption]] = [:]
     @Published var modelChoices: [String: String] = [:]
@@ -333,7 +337,7 @@ final class TranscriptWatch {
         let state = stateSnapshot()
         cachedFiltered = visibleSessions.filter { s in
             (sourceFilter == "all" || (sourceFilter == "active" && state.busy(s)) || s.sourceID == sourceFilter || s.provider == sourceFilter) &&
-            (search.isEmpty || (s.title + " " + s.cwd + " " + s.sourceLabel).localizedCaseInsensitiveContains(search))
+            projectMatches(s) && (search.isEmpty || (s.title + " " + s.cwd + " " + s.sourceLabel + " " + projectLabel(s)).localizedCaseInsensitiveContains(search))
         }
         cachedFilterRevision = filterRevision; cachedFilterSearch = search; cachedFilterSource = sourceFilter
         return cachedFiltered
@@ -370,8 +374,10 @@ final class TranscriptWatch {
         #else
         cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"))
         #endif
+        projects = LocalProjects(cache: cloud.cache)
         sharing = CampSharing(cache: cloud.cache)
         sharedPlanning = CampPlanning(cache: cloud.cache)
+        projects.changed = { [weak self] in self?.projectsChanged() }
         sharedPlanning.changed = { [weak self] in self?.syncSharedPlans() }
         sharedPlanning.created = { [weak self] draft, id in
             guard let self, self.selectedID == "camp-plan-draft:" + draft else { return }
@@ -504,6 +510,7 @@ final class TranscriptWatch {
         sessions = (plans + sessions.filter { !$0.isPlan || $0.isSharedPlan }).sorted { $0.updated > $1.updated }
         for plan in planning.tickets { stages[plan.id] = plan.stage }
     }
+    func projectsChanged() { filterRevision += 1; objectWillChange.send() }
     var recentSessions: [CampSession] {
         if cachedRecentRevision == filterRevision && cachedRecentType == recentType { return cachedRecent }
         let type = recentType
@@ -517,6 +524,8 @@ final class TranscriptWatch {
         if let data = try? JSONEncoder().encode(value) { try? data.write(to: stateDirectory.appendingPathComponent("recent-filter.json"), options: .atomic) }
     }
     func applyCloud(_ values: [CloudSession], projects: [CloudProject]) {
+        let newProjects=Dictionary(uniqueKeysWithValues:projects.map { ($0.id,$0) })
+        if cloudProjectIndex != newProjects { cloudProjectIndex=newProjects; projectsChanged() }
         let previous = cloudSessions
         let next = Dictionary(uniqueKeysWithValues: values.map { ("camp:" + $0.id, $0) })
         if cloudSessions != next { cloudSessions = next }
@@ -1152,6 +1161,7 @@ struct RootView: View {
         .overlay(alignment: .topTrailing) { CampNotificationToast(store: store, notices: store.notifications).padding(22) }
         .onChange(of: store.view) { _, value in store.observeHistory(); if value == "Chat" { store.loadHistory() } }
         .sheet(isPresented: $store.sourceSheet) { SourcesView(store: store) }
+        .sheet(isPresented: $store.projectSheet) { CampProjectsView(store: store, local: store.projects, cloud: store.cloud) }
         .sheet(isPresented: $showCamp) { CampConnectionView(cloud: store.cloud) }
         .sheet(item: $store.shareSheet) { session in CampShareView(store: store, cloud: store.cloud, sharing: store.sharing, session: session) }
         .sheet(item: $store.contextInspection) { value in ContextInspectionView(store: store, inspection: value) }
@@ -1164,12 +1174,17 @@ struct RootView: View {
     var sidebar: some View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(spacing: 9) { Mascot(size: 46); VStack(alignment: .leading, spacing: 2) { Text("Capybara").font(.system(size: 17, weight: .semibold)); Text("CAMP").font(.system(size: 10, weight: .semibold)).tracking(3).foregroundStyle(campMuted) } }
+            ScrollView {
+            VStack(alignment:.leading,spacing:22) {
             VStack(alignment: .leading, spacing: 5) {
                 Text("YOUR CAMP").font(.system(size: 10, weight: .semibold)).tracking(1.4).foregroundStyle(campMuted).padding(.bottom, 8)
                 sourceButton("All sessions", id: "all", icon: "square.grid.2x2", count: store.sessionCount("all"))
                 sourceButton("Active now", id: "active", icon: "waveform.path", count: store.sessionCount("active"))
                 sourceButton("Codex", id: "Codex", icon: "terminal", count: store.sessionCount("Codex"))
                 sourceButton("Claude", id: "Claude", icon: "asterisk", count: store.sessionCount("Claude"))
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                ProjectSidebar(store: store, local: store.projects, cloud: store.cloud)
             }
             VStack(alignment: .leading, spacing: 10) {
                 HStack { Text("LOCAL PROFILES").font(.system(size: 10, weight: .semibold)).tracking(1.4).foregroundStyle(campMuted); Spacer(); Button { store.sourceSheet = true } label: { Image(systemName: "plus") }.buttonStyle(.plain) }
@@ -1180,7 +1195,8 @@ struct RootView: View {
                     }.buttonStyle(.plain).font(.system(size: 12))
                 }
             }
-            Spacer()
+            }
+            }.frame(maxHeight:.infinity)
             VStack(alignment: .leading, spacing: 8) {
                 HStack { Circle().fill(campGreen).frame(width: 6, height: 6); Text("Local on this Mac").font(.system(size: 11, weight: .medium)) }
                 Text([store.importError, store.activityError].filter { !$0.isEmpty }.joined(separator: " · ").isEmpty ? "Live transcript updates · New sessions every 30s" : [store.importError, store.activityError].filter { !$0.isEmpty }.joined(separator: " · ")).font(.system(size: 11)).foregroundStyle(campMuted).fixedSize(horizontal: false, vertical: true)
@@ -1197,8 +1213,9 @@ struct RootView: View {
     var header: some View {
         VStack(alignment: .leading, spacing: 19) {
             HStack {
-                VStack(alignment: .leading, spacing: 5) { Text(store.view == "Board" ? "Your Camp for big ideas" : store.sharedPlanResult?.title ?? store.selected?.title ?? "Choose a session").font(.system(size: 23, weight: .semibold)).lineLimit(1); Text(store.view == "Board" ? "\(store.filtered.count.formatted()) \(store.filtered.count == 1 ? "session" : "sessions") · Pick up where you left off" : store.sharedPlanResult != nil ? "Planning · Shared Camp" : "\(store.selected?.provider ?? "") · \(store.selected?.project ?? "")").font(.system(size: 12)).foregroundStyle(campMuted) }
+                VStack(alignment: .leading, spacing: 5) { Text(store.view == "Board" ? "Your Camp for big ideas" : store.sharedPlanResult?.title ?? store.selected?.title ?? "Choose a session").font(.system(size: 23, weight: .semibold)).lineLimit(1); Text(store.view == "Board" ? "\(store.filtered.count.formatted()) \(store.filtered.count == 1 ? "session" : "sessions") · Pick up where you left off" : store.sharedPlanResult != nil ? "Planning · Shared Camp" : "\(store.selected?.provider ?? "") · \(store.selected.map(store.projectSummary) ?? "")").font(.system(size: 12)).foregroundStyle(campMuted) }
                 Spacer()
+                if store.view == "Chat", let selected=store.selected { ProjectAssignmentMenu(store:store,session:selected) }
                 Menu {
                     Button("Plan on this Mac", systemImage: "lightbulb") { store.newPlan(mode: .single) }
                     Button("Plan with comparison", systemImage: "bubble.left.and.bubble.right") { store.newPlan(mode: .comparison) }
@@ -1269,6 +1286,7 @@ struct SessionCard: View {
                 Spacer()
                 Menu {
                     ForEach(Stage.allCases, id: \.self) { dest in Button("Move to \(dest.rawValue)") { store.move(session.id, dest) } }
+                    ProjectAssignmentMenu(store:store,session:session)
                     if let local = store.shareSource(session) { Divider(); Button("Share with Camp…") { store.shareSheet = local } }
                 } label: { Image(systemName: "ellipsis").frame(width: 24, height: 20) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Move \(session.title)")
@@ -1276,7 +1294,7 @@ struct SessionCard: View {
             Button { store.open(session) } label: {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading).frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34, alignment: .topLeading)
-                    HStack(spacing: 4) { Image(systemName: "folder"); Text(session.project.isEmpty ? "No project" : session.project).lineLimit(1) }.font(.system(size: 10)).foregroundStyle(campMuted)
+                    HStack(spacing: 4) { Image(systemName: "folder"); Text(store.projectSummary(session)).lineLimit(1) }.font(.system(size: 10)).foregroundStyle(campMuted)
                     HStack { Text(session.sourceLabel).lineLimit(1); Spacer(); Text(Date(timeIntervalSince1970: session.updated), style: .relative).lineLimit(1) }.font(.system(size: 9)).foregroundStyle(campMuted)
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain)
@@ -1323,7 +1341,7 @@ struct RecentSessionsList: View {
                     ForEach(store.recentSessions) { s in Button { store.open(s) } label: {
                         HStack(alignment: .top, spacing: 8) {
                             ProviderMark(provider: s.provider, size: 15).padding(.top, 2)
-                            VStack(alignment: .leading, spacing: 5) { Text(s.title).font(.system(size: 12, weight: .medium)).lineLimit(2); Text("\(s.provider) · \(s.project)").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1) }
+                            VStack(alignment: .leading, spacing: 5) { Text(s.title).font(.system(size: 12, weight: .medium)).lineLimit(2); Text("\(s.provider) · \(store.projectSummary(s))").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1) }
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(12).background(store.selectedID == s.id ? campGreen.opacity(0.10) : .clear).clipShape(RoundedRectangle(cornerRadius: 8))
                     }.buttonStyle(.plain) }
                     if store.recentSessions.isEmpty { Text("No recent \(store.recentType == "All types" ? "" : store.recentType.lowercased() + " ")sessions").font(.caption).foregroundStyle(campMuted).padding() }

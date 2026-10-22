@@ -36,7 +36,18 @@ struct CloudCredential: Codable, Sendable {
 }
 struct CloudLogin: Codable, Sendable { var actor: CloudActor; var token: String; var expiresAt: Date }
 struct CloudCamp: Codable, Identifiable, Sendable { var id: String; var name: String; var role: String; var cursor: Int64 }
-struct CloudProject: Codable, Identifiable, Sendable { var id: String; var name: String }
+struct CampProject: Codable, Identifiable, Equatable, Sendable {
+    var id: String; var name: String
+    var revision: Int64? = nil
+    var archived: Bool? = nil
+    var inbox: Bool? = nil
+    var repositories: [String]? = nil
+    var version: Int64 { revision ?? 1 }
+    var isArchived: Bool { archived ?? false }
+    var isInbox: Bool { inbox ?? false }
+    var repositoryURLs: [String] { repositories ?? [] }
+}
+typealias CloudProject = CampProject
 struct CloudMember: Codable, Identifiable, Sendable {
     var userId: String; var name: String; var role: String
     var id: String { userId }

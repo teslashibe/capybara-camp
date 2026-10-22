@@ -124,7 +124,7 @@ respect the same plan visibility as reads.
 - Existing request actions acknowledge start, heartbeat, finish and reconciliation
 
 Planning tables were introduced in schema 5; the current server requires schema
-7, including recipient notifications and planning mode. Migration 7 retains existing versions as comparison plans with five turns. Deploy the migrated server and updated native client before creating single plans; older clients cannot display those plans. Older request receipts and session
+8, including client projects. Migration 7 retains existing versions as comparison plans with five turns; migration 8 preserves existing project assignments and adds each Camp’s Inbox. Deploy the migrated server and updated native client before creating single plans; older clients cannot display those plans. Older request receipts and session
 history are retained. Run migrations before the new server. The public deployment templates use the
 same image for the migration job and API.
 

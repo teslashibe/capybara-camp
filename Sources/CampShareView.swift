@@ -25,7 +25,7 @@ struct CampShareView: View {
             } else if cloud.projects.isEmpty {
                 Text("Add a project in Camp settings first").font(.system(size: 12))
             } else {
-                Picker("Project", selection: $project) { ForEach(cloud.projects) { value in Text(value.name).tag(value.id) } }
+                Picker("Project", selection: $project) { ForEach(cloud.projects.filter { !$0.isArchived || $0.id==existing?.projectId }) { value in Text(value.name).tag(value.id) } }
                 Toggle("Allow teammates to request work", isOn: $allowRequests)
                 Text("You approve requests from other people before this Mac runs them").font(.system(size: 11)).foregroundStyle(campMuted)
                 if let existing { Text(existing.state).font(.system(size: 12)).foregroundStyle(campMuted) }

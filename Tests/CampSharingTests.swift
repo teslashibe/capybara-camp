@@ -16,6 +16,7 @@ actor PublishingFixture: CampPublishingTransport {
     init(scope: CloudScope, actor: CloudActor) { self.scope = scope; self.actor = actor }
     func holdNextSession() { holdSession = true; lostResponse = false }
     func isSessionHeld() -> Bool { sessionHeld }
+    func moveProject(_ id:String) { remote?.projectId=id;remote?.revision += 1 }
     func releaseSession() { releaseGate?.resume(); releaseGate = nil; holdSession = false }
     func perform(_ operation: CampPublication) async throws -> Data {
         if operation.method == "GET" {
@@ -101,6 +102,11 @@ actor PublishingFixture: CampPublishingTransport {
         let unchanged = await server.snapshot()
         precondition(unchanged.1 == 2, "unchanged transcript was uploaded again")
         precondition(unchanged.0?.revision == first.0?.revision, "Title whitespace repeatedly republished metadata")
+        let reassigned=UUID().uuidString
+        await server.moveProject(reassigned);resumed.retry()
+        await eventually("Publisher reverted the remote project assignment") { resumed.shares.first?.projectId==reassigned }
+        let afterAssignment=await server.snapshot()
+        precondition(afterAssignment.0?.projectId==reassigned)
         precondition(resumed.shares.first?.id == id, "reconnect changed shared session identity")
         try await resumed.configure(local: native, projectId: project, shared: false, allowRequests: false)
         await eventually("unshare did not complete") { resumed.shares.first?.state == "Private" }

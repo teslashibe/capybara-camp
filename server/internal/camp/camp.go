@@ -31,8 +31,12 @@ type Camp struct {
 	Cursor int64  `json:"cursor"`
 }
 type Project struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Revision     int64    `json:"revision"`
+	Archived     bool     `json:"archived"`
+	Inbox        bool     `json:"inbox"`
+	Repositories []string `json:"repositories"`
 }
 type Member struct {
 	UserID string `json:"user_id"`
@@ -130,6 +134,9 @@ func (s *Store) Create(ctx context.Context, a auth.Actor, requestID, name string
 	if _, err = tx.Exec(ctx, `INSERT INTO memberships(camp_id,user_id,role) VALUES($1,$2,'owner')`, c.ID, a.UserID); err != nil {
 		return Camp{}, err
 	}
+	if _, err = tx.Exec(ctx, `INSERT INTO projects(id,camp_id,name,inbox) VALUES($1,$2,'Inbox',true)`, uuid.NewString(), c.ID); err != nil {
+		return Camp{}, err
+	}
 	if err = emit(ctx, tx, a, c.ID, "camp.created", map[string]string{"id": c.ID, "name": name}); err != nil {
 		return Camp{}, err
 	}
@@ -169,13 +176,13 @@ func (s *Store) snapshotOnce(ctx context.Context, a auth.Actor, id string) (Snap
 	if err != nil {
 		return out, err
 	}
-	rows, err = tx.Query(ctx, `SELECT id,name FROM projects WHERE camp_id=$1 ORDER BY name,id`, id)
+	rows, err = tx.Query(ctx, `SELECT p.id,p.name,p.revision,p.archived,p.inbox,ARRAY(SELECT url FROM project_repository_links r WHERE r.project_id=p.id ORDER BY url) FROM projects p WHERE camp_id=$1 ORDER BY inbox DESC,archived,name,id`, id)
 	if err != nil {
 		return out, err
 	}
 	for rows.Next() {
 		var p Project
-		if err = rows.Scan(&p.ID, &p.Name); err != nil {
+		if err = rows.Scan(&p.ID, &p.Name, &p.Revision, &p.Archived, &p.Inbox, &p.Repositories); err != nil {
 			rows.Close()
 			return out, err
 		}
@@ -189,9 +196,16 @@ func (s *Store) snapshotOnce(ctx context.Context, a auth.Actor, id string) (Snap
 	return out, tx.Commit(ctx)
 }
 func (s *Store) CreateProject(ctx context.Context, a auth.Actor, id, requestID, name string) (Project, error) {
+	return s.CreateProjectWithRepositories(ctx, a, id, requestID, name, nil)
+}
+func (s *Store) CreateProjectWithRepositories(ctx context.Context, a auth.Actor, id, requestID, name string, repositories []string) (Project, error) {
 	name = strings.TrimSpace(name)
 	if !validName(name) {
 		return Project{}, ErrInput
+	}
+	urls, err := repositoryURLs(repositories)
+	if err != nil {
+		return Project{}, err
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -202,14 +216,26 @@ func (s *Store) CreateProject(ctx context.Context, a auth.Actor, id, requestID, 
 		return Project{}, err
 	}
 	p := Project{}
-	if hit, err := s.beginCommand(ctx, tx, a, requestID, "project.create:"+id, name, &p); err != nil {
+	var commandInput any = name
+	if len(urls) > 0 {
+		commandInput = struct {
+			Name         string
+			Repositories []string
+		}{name, urls}
+	}
+	if hit, err := s.beginCommand(ctx, tx, a, requestID, "project.create:"+id, commandInput, &p); err != nil {
 		return Project{}, err
 	} else if hit {
-		return p, nil
+		return readProject(ctx, tx, id, p.ID)
 	}
-	p = Project{ID: uuid.NewString(), Name: name}
+	p = Project{ID: uuid.NewString(), Name: name, Revision: 1, Repositories: urls}
 	if _, err = tx.Exec(ctx, `INSERT INTO projects(id,camp_id,name) VALUES($1,$2,$3)`, p.ID, id, p.Name); err != nil {
 		return Project{}, err
+	}
+	for _, url := range urls {
+		if _, err = tx.Exec(ctx, `INSERT INTO project_repository_links(camp_id,project_id,url) VALUES($1,$2,$3)`, id, p.ID, url); err != nil {
+			return Project{}, err
+		}
 	}
 	if err = emit(ctx, tx, a, id, "project.created", p); err != nil {
 		return Project{}, err

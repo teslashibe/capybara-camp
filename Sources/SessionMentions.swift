@@ -256,7 +256,7 @@ struct SessionContextPicker: View {
             if destination.isCloud && !source.isCloud { continue }
             let remote = store.cloudSessions[source.id]
             let person = remote.flatMap { members[$0.ownerUserId] } ?? ""
-            let value = [source.title, source.project, source.provider, source.sourceLabel, person].joined(separator: " ").lowercased()
+            let value = [source.title, store.projectSummary(source), source.provider, source.sourceLabel, person].joined(separator: " ").lowercased()
             if words.allSatisfy({ value.contains($0) }) { found.append(source) }
             if found.count == 30 { break }
         }
@@ -322,7 +322,7 @@ struct SessionContextPicker: View {
                                     ProviderMark(provider: source.provider, size: 16)
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(source.title).font(.system(size: 12)).lineLimit(2)
-                                        Text("\(source.provider) · \(source.project) · \(source.sourceLabel)").font(.system(size: 10)).foregroundStyle(campMuted)
+                                        Text("\(source.provider) · \(store.projectSummary(source)) · \(source.sourceLabel)").font(.system(size: 10)).foregroundStyle(campMuted)
                                     }; Spacer(minLength: 0)
                                 }.padding(10).contentShape(Rectangle())
                             }.buttonStyle(.plain)

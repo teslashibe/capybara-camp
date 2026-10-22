@@ -19,7 +19,10 @@ extension CampStore {
             guard let source = planningProfiles(provider).first else { return nil }
             return LocalPlanner(session: source, model: effectiveModel(source), tuning: tuning(source))
         }
-        if let id = planning.create(planners: peers, mode: mode), let plan = planning.ticket(id) { open(plan.session) }
+        if let id = planning.create(planners: peers, mode: mode), let plan = planning.ticket(id) {
+            if projectFilter.hasPrefix("local:") { assignProject(plan.session,to:String(projectFilter.dropFirst(6))) }
+            open(plan.session)
+        }
         else { banner = planning.error }
     }
     func setPlanMode(_ id: String, mode: PlanningMode) {
@@ -84,6 +87,7 @@ struct PlanningCard: View {
                     Spacer()
                     Menu {
                         Button("Open plan") { store.open(plan.session) }
+                        ProjectAssignmentMenu(store:store,session:plan.session)
                         Button("Start over") { planning.restart(id); store.open(plan.session) }
                         Button("Cancel planning") { planning.cancel(id) }.disabled(plan.current.state == "ready" || plan.current.state == "cancelled")
                     } label: { Image(systemName: "ellipsis").frame(width: 24, height: 20) }
@@ -93,7 +97,7 @@ struct PlanningCard: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(plan.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading)
                             .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34, alignment: .topLeading)
-                        Label(plan.session.project, systemImage: "folder").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
+                        Label(store.projectSummary(plan.session), systemImage: "folder").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
                         HStack { Text(plan.current.workflow.title); Spacer(); Text(Date(timeIntervalSince1970: plan.updated), style: .relative) }.font(.system(size: 9)).foregroundStyle(campMuted)
                     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain)

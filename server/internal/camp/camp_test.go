@@ -156,7 +156,7 @@ func TestMembershipIsolationInvitationsAndEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Members) != 3 || len(snapshot.Projects) != projects {
+	if len(snapshot.Members) != 3 || len(snapshot.Projects) != projects+1 {
 		t.Fatalf("unexpected snapshot members=%d projects=%d", len(snapshot.Members), len(snapshot.Projects))
 	}
 	events, err := s.Events(ctx, b, c.ID, 0)

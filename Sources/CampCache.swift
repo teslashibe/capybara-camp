@@ -37,7 +37,7 @@ actor CampCache {
         let versionReady = sqlite3_prepare_v2(database, "PRAGMA user_version", -1, &versionStatement, nil) == SQLITE_OK
         let version = versionReady && sqlite3_step(versionStatement) == SQLITE_ROW ? sqlite3_column_int(versionStatement, 0) : -1
         sqlite3_finalize(versionStatement)
-        guard (0...2).contains(version) else { sqlite3_close(database); db = nil; throw CampCloudError.cacheUnavailable }
+        guard (0...3).contains(version) else { sqlite3_close(database); db = nil; throw CampCloudError.cacheUnavailable }
         let schema = """
         PRAGMA journal_mode=WAL;
         PRAGMA synchronous=FULL;
@@ -52,9 +52,12 @@ actor CampCache {
         CREATE TABLE IF NOT EXISTS attempts(id TEXT PRIMARY KEY,scope TEXT NOT NULL,state TEXT NOT NULL,body BLOB NOT NULL);
         CREATE TABLE IF NOT EXISTS share_bindings(scope TEXT NOT NULL,id TEXT NOT NULL,body BLOB NOT NULL,PRIMARY KEY(scope,id));
         CREATE TABLE IF NOT EXISTS published_message_hashes(scope TEXT NOT NULL,session_id TEXT NOT NULL,id TEXT NOT NULL,digest TEXT NOT NULL,PRIMARY KEY(scope,session_id,id));
+        CREATE TABLE IF NOT EXISTS local_projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,revision INTEGER NOT NULL,archived INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS local_project_repositories(project_id TEXT NOT NULL,url TEXT NOT NULL,PRIMARY KEY(project_id,url));
+        CREATE TABLE IF NOT EXISTS local_project_assignments(ticket_id TEXT PRIMARY KEY,project_id TEXT NOT NULL);
         UPDATE outbox SET state='pending' WHERE state='sending';
         UPDATE attempts SET state='uncertain' WHERE state IN ('start_pending','running');
-        PRAGMA user_version=2;
+        PRAGMA user_version=3;
         """
         guard sqlite3_exec(database, schema, nil, nil, nil) == SQLITE_OK else { sqlite3_close(database); db = nil; throw CampCloudError.cacheUnavailable }
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
@@ -106,6 +109,41 @@ actor CampCache {
     }
     func metadata(_ key: String) throws -> Data? { try rows("SELECT value FROM metadata WHERE key=?", [.text(key)]) { blob($0, 0) }.first }
     func setMetadata(_ key: String, _ data: Data) throws { try execute("INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [.text(key), .blob(data)]) }
+    func localProjectState() throws -> LocalProjectState {
+        var projects = try rows("SELECT id,name,revision,archived FROM local_projects ORDER BY archived,name,id") { CampProject(id: text($0,0), name: text($0,1), revision: sqlite3_column_int64($0,2), archived: sqlite3_column_int($0,3) != 0, repositories: []) }
+        let links = try rows("SELECT project_id,url FROM local_project_repositories ORDER BY url") { (text($0,0),text($0,1)) }
+        let urls = Dictionary(grouping: links, by: { $0.0 }).mapValues { $0.map { $0.1 } }
+        for index in projects.indices { projects[index].repositories = urls[projects[index].id] ?? [] }
+        let assignments = try rows("SELECT ticket_id,project_id FROM local_project_assignments") { (text($0,0),text($0,1)) }
+        let revision = try metadata("local-project-revision").flatMap { Int64(String(decoding:$0,as:UTF8.self)) } ?? 0
+        return LocalProjectState(revision: revision, projects: projects, assignments: Dictionary(uniqueKeysWithValues: assignments))
+    }
+    func saveLocalProject(_ value: CampProject, expectedRevision: Int64) throws -> LocalProjectState {
+        guard UUID(uuidString:value.id) != nil, !value.name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty, value.name.utf8.count <= 120, !value.isInbox else { throw CampCloudError.invalidResponse }
+        let urls = try ProjectRepositories.normalize(value.repositoryURLs)
+        return try transaction {
+            let current = try rows("SELECT revision FROM local_projects WHERE id=?", [.text(value.id)]) { sqlite3_column_int64($0,0) }.first ?? 0
+            guard current == expectedRevision else { throw CampError.message("This project changed. Reopen it before saving") }
+            try execute("INSERT INTO local_projects(id,name,revision,archived) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,revision=excluded.revision,archived=excluded.archived", [.text(value.id),.text(value.name.trimmingCharacters(in:.whitespacesAndNewlines)),.integer(current+1),.integer(value.isArchived ? 1:0)])
+            try execute("DELETE FROM local_project_repositories WHERE project_id=?",[.text(value.id)])
+            for url in urls { try execute("INSERT INTO local_project_repositories(project_id,url) VALUES(?,?)",[.text(value.id),.text(url)]) }
+            try bumpProjectRevision(); return try localProjectState()
+        }
+    }
+    func assignLocalProject(ticketID: String, projectID: String?) throws -> LocalProjectState {
+        guard !ticketID.isEmpty, ticketID.utf8.count <= 8192 else { throw CampCloudError.invalidResponse }
+        return try transaction {
+            if let projectID {
+                guard try rows("SELECT id FROM local_projects WHERE id=? AND archived=0",[.text(projectID)],map:{text($0,0)}).first != nil else { throw CampError.message("Choose an active local project") }
+                try execute("INSERT INTO local_project_assignments(ticket_id,project_id) VALUES(?,?) ON CONFLICT(ticket_id) DO UPDATE SET project_id=excluded.project_id",[.text(ticketID),.text(projectID)])
+            } else { try execute("DELETE FROM local_project_assignments WHERE ticket_id=?",[.text(ticketID)]) }
+            try bumpProjectRevision(); return try localProjectState()
+        }
+    }
+    private func bumpProjectRevision() throws {
+        let revision = try metadata("local-project-revision").flatMap { Int64(String(decoding:$0,as:UTF8.self)) } ?? 0
+        try setMetadata("local-project-revision",Data(String(revision+1).utf8))
+    }
     func saveSnapshot(_ snapshot: CloudSnapshot, scope: CloudScope, expectedEpoch: Int64) throws {
         try transaction {
             try checkEpoch(scope, expectedEpoch)

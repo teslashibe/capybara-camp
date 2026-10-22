@@ -368,11 +368,42 @@ import SwiftUI
         } catch { self.error = error.localizedDescription }
     }
     func createProject(name: String) async {
-        guard let scope, let client, let credential else { return }
-        do {
-            _ = try await client.data("POST", path: "/v1/camps/\(scope.campId)/projects", body: CampWire.body(["name": name]), key: UUID().uuidString, token: credential.token)
-            await refresh()
-        } catch { self.error = error.localizedDescription }
+        do { try await queueProjectSave(nil,name:name,repositories:[],archived:false) }
+        catch { self.error=error.localizedDescription }
+    }
+    func queueProjectSave(_ project: CampProject?, name: String, repositories: [String], archived: Bool) async throws {
+        guard let scope else { throw CampCloudError.cacheUnavailable }
+        guard !name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,name.utf8.count<=120 else { throw CampError.message("Use a project name of 1–120 bytes") }
+        let urls=try ProjectRepositories.normalize(repositories)
+        let path="/v1/camps/\(scope.campId)/projects" + (project.map { "/"+$0.id } ?? "")
+        var body:[String:Any] = ["name":name,"repositories":urls]
+        if let project { body["expected_revision"]=project.version;body["archived"]=archived }
+        try await enqueueProjectChange(path:path,method:project == nil ? "POST":"PUT",body:body)
+    }
+    func queueSessionProject(_ session: CloudSession,projectID: String) async throws {
+        guard let scope,scope.campId==session.campId else { throw CampCloudError.invalidResponse }
+        try await enqueueProjectChange(path:"/v1/camps/\(scope.campId)/sessions/\(session.id)/project",method:"PATCH",body:["project_id":projectID,"expected_revision":session.revision])
+    }
+    func queuePlanningProject(_ plan: CloudPlanningResult,projectID: String) async throws {
+        guard let scope,scope.campId==plan.campId,let revision=plan.revision else { throw CampCloudError.invalidResponse }
+        try await enqueueProjectChange(path:"/v1/camps/\(scope.campId)/planning/\(plan.id)/project",method:"PATCH",body:["project_id":projectID,"expected_revision":revision])
+    }
+    private func enqueueProjectChange(path: String,method: String,body: [String:Any]) async throws {
+        guard let scope,let cache else { throw CampCloudError.cacheUnavailable }
+        let epoch=cacheEpoch,token=generation
+        let existing=try await cache.outbox(scope,limit:1000)
+        guard self.scope==scope,generation==token else { throw CancellationError() }
+        guard !existing.contains(where: { $0.path==path && ["pending","sending"].contains($0.state) }) else { throw CampError.message("This project change is already waiting to sync") }
+        for item in existing where item.path==path && ["failed","conflict"].contains(item.state) { try await cache.acknowledge(item.id) }
+        _ = try await cache.enqueue(scope:scope,method:method,path:path,body:CampWire.body(body),expectedEpoch:epoch)
+        let values=try await cache.outbox(scope)
+        guard self.scope==scope,generation==token else { throw CancellationError() }
+        pending=values;flush()
+    }
+    func discardProjectChange(_ item: CloudOutboxItem) async {
+        guard let scope,let cache,item.scope==scope.key,["failed","conflict"].contains(item.state),(item.path.contains("/projects") || item.path.hasSuffix("/project")) else { return }
+        let token=generation
+        do { try await cache.acknowledge(item.id);let values=try await cache.outbox(scope);guard self.scope==scope,generation==token else{return};pending=values } catch { if generation==token { self.error=error.localizedDescription } }
     }
     func invite(email: String, role: String) async -> String? {
         guard let scope, let client, let credential else { return nil }
@@ -436,9 +467,16 @@ import SwiftUI
                             try await cache.ingest(scope: scope, session: session, expectedEpoch: epoch)
                             if self?.generation == token, self?.accepts(session) == true { self?.sessionIndex[session.id] = session }
                         }
+                        if item.path.contains("/projects"), let project=try? CampWire.decoder().decode(CampProject.self,from:data), UUID(uuidString:project.id) != nil, let self,self.generation==token {
+                            if (self.projects.first { $0.id==project.id }?.version ?? 0) <= project.version {
+                                self.projects.removeAll { $0.id==project.id };self.projects.append(project)
+                                if let camp=self.camps.first(where:{$0.id==scope.campId}) { try await cache.saveSnapshot(CloudSnapshot(camp:camp,projects:self.projects,members:self.members),scope:scope,expectedEpoch:epoch) }
+                            }
+                        }
+                        if item.path.contains("/planning/"),item.path.hasSuffix("/project"),let plan=try? CampWire.decoder().decode(CloudPlanningResult.self,from:data),plan.valid,self?.generation==token { self?.planningChanged?(plan.id) }
                         try await cache.acknowledge(item.id)
                         if item.path == "/v1/camps/\(scope.campId)/notifications/actions", self?.generation == token { self?.scheduleNotifications(generation: token) }
-                    } catch CampCloudError.server(let status, let code) where status == 409 || status == 400 || status == 404 {
+                    } catch CampCloudError.server(let status, let code) where status == 409 || status == 400 || status == 404 || status == 403 {
                         try await cache.markOutbox(item.id, state: status == 409 ? "conflict" : "failed", error: code)
                         if item.path == "/v1/camps/\(scope.campId)/notifications/actions", self?.generation == token { self?.scheduleNotifications(generation: token) }
                     } catch {
