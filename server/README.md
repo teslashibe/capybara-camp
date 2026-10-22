@@ -1,12 +1,15 @@
 # Camp server
 
-V1 is under development. This first slice implements email-code sign-in,
+V1 is under development. The Go service implements email-code sign-in,
 revocable native-device credentials, Camp membership, invitation acceptance,
 projects, selected session sharing, versioned transcripts, durable prompt
 requests, atomic command receipts, recipient notification history with shared
-read receipts and an ordered event stream. Native execution,
-planning, memory and skills are still being built. Do not deploy it as the
-complete V1 product.
+read receipts and an ordered event stream. It also supports versioned planning,
+cloud accounts, Git workspace preparation, execution assignments and cloud
+provider-turn transport. The separate installation runner executes assigned
+work; the native owner-Mac worker handles local work. Memory, skills and the
+remaining cloud workflows are unfinished. Live deployment and provider
+acceptance remain open in [V1 delivery status](../docs/v1-status.md).
 
 ## Run locally
 
@@ -36,17 +39,21 @@ endpoints return only that installation's encrypted-at-rest provider state. Do n
 responses, credentials or authorization headers in logging middleware.
 Use `Authorization: Bearer <device-token>` after sign-in.
 
-Cloud account endpoints and their unfinished runtime integration are described
-in [cloud accounts](../docs/cloud-accounts.md). Schema 12 adds private GitHub
-connections and recoverable authorization to schema 11's managed runner grants.
-Run the migration before this binary; keep a compatible schema-12 build as the rollback floor.
+Cloud account endpoints are described in [cloud accounts](../docs/cloud-accounts.md).
+The exact required schema is defined by `SchemaVersion` in
+[`internal/database/database.go`](internal/database/database.go), with migrations
+in `internal/database/migrations`. Run the matching migrations before this
+binary. Review compatibility and back up before an upgrade; an older binary
+is not automatically a valid rollback after a schema change.
 
-The separate `cmd/camp-runner` binary implements installation-scoped sign-in
-only. Its private grant/state setup and container restart contract are documented
-in [cloud accounts](../docs/cloud-accounts.md#auth-only-worker). It does not yet
-execute cloud chat turns.
+The separate `cmd/camp-runner` binary implements installation-scoped sign-in,
+isolated Git preparation and assigned provider turns. Its private grant/state
+setup and container restart contract are documented in
+[cloud accounts](../docs/cloud-accounts.md#installation-worker) and
+[provider turns](../docs/runner-turns.md). Synthetic subprocess tests pass;
+successful real cloud provider execution remains a release gate.
 
-`cmd/camp-controller` provisions auth workers using a limited database role and
+`cmd/camp-controller` provisions installation workers using a limited database role and
 namespace-scoped Kubernetes permissions. Its configuration and optional public
 overlay are in [runner provisioning](../docs/runner-provisioning.md).
 
@@ -103,10 +110,12 @@ cache. New members do not receive that old removal notice. Initially fetch the
 Camp snapshot, save its cursor, list authorized sessions, then replay from that
 cursor. Apply each entity revision once, including removal notices.
 
-Only an owning device can publish a session or update its transcript. New
-uploads require explicit sharing; later unsharing preserves the owner's cloud
-history and denies other members. Provider profiles are metadata, not verified
-provider account identities. Private local imports are not uploaded by default.
+The owning local device publishes local session metadata and transcripts;
+cloud assignments fence those writes while the runner owns execution. Uploads
+require explicit sharing or an explicit private copy for cloud execution.
+Unsharing preserves the owner's cloud history and denies other members.
+Provider profiles are metadata, not verified provider account identities.
+Private local imports are not uploaded by default.
 
 Transcript writes have immutable revisions and preserve each message's original
 model/tuning metadata. Reads accept a pinned revision and are bounded to 200
@@ -137,7 +146,8 @@ uses isolated schemas in the supplied test database. Never set it to production.
 The tests exercise code replay/concurrency, device revocation, invitations,
 three-member permissions, ordered events, command retries, bounded streams,
 lease expiry, cancellation races and source revocation. HTTP tests cover the
-request lifecycle; these are not evidence of a real CLI execution yet.
+request lifecycle and synthetic CLI subprocess execution; these are not evidence
+of successful real cloud provider execution.
 Plain `go test ./...` skips PostgreSQL tests when that variable is absent.
 
 
@@ -168,7 +178,10 @@ not launch another CLI because a network response was lost. Repeated commands
 preserve their committed effect and return current state; a replayed expired
 claim cannot authorize work. Sources are checked again before starting.
 
-The server does not run CLIs or guarantee exactly-once provider work. Native
-outbox persistence, streaming and provider reconciliation remain required before
-this queue can execute real prompts. Externally owned terminal sessions remain
+The API process does not run CLIs. The native owner-Mac worker and separate cloud
+runner persist execution attempts and reconcile uncertain results. They never
+guarantee exactly-once provider work. Externally owned terminal sessions remain
 queued until safely released. One bounded recovery loop checks expired leases.
+See [execution assignments](../docs/execution-assignments.md),
+[execution locations](../docs/execution-locations.md) and
+[provider turns](../docs/runner-turns.md) for the cloud request and event contracts.

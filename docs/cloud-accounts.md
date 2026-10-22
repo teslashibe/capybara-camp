@@ -4,9 +4,11 @@ The Go service stores owner-bound accounts, installation grants and login
 attempts. Go sign-in adapters now drive the official CLIs inside disposable
 private profiles. A Go worker now claims those attempts, relays codes
 and persists recovery state. Native account setup uses these endpoints in Manage
-sources and onboarding. The worker also prepares isolated Git checkouts, and a
-Go controller provisions its workloads. Cloud model execution is still pending;
-these endpoints alone do not start a cloud chat session.
+sources and onboarding. The worker also prepares isolated Git checkouts and
+executes assigned [provider turns](runner-turns.md); a Go controller provisions
+its workloads. Account setup alone does not start a chat. The cloud runtime is
+implemented locally, but live cloud sign-in, provider execution and deployment
+acceptance are still pending.
 
 ## Ownership and storage
 
@@ -60,9 +62,9 @@ A runner grant lasts 24 hours, is installation-scoped and is stored only as a
 hash, except its encrypted idempotency receipt. Replaying grant creation can
 recover the same token while it is valid; it cannot revive an expired, replaced
 or cleanup-only grant. The [controller](runner-provisioning.md) now issues and
-renews separate managed grants for its auth workers. It preserves a grant during
+renews separate managed grants for its installation workers. It preserves a grant during
 active sign-in and rejects manual-grant conflicts. Live validation and the
-inference lifecycle are still required before unattended execution ships.
+remaining execution acceptance gates are still required before unattended execution ships.
 
 The provisioning controller delivers grants privately to isolated workloads.
 A human Camp token must never be installed in a runner. Manual grant creation is
@@ -128,8 +130,8 @@ device code. Codex uses the official device verification route. Claude URLs must
 carry a PKCE authorization request for the verified Claude Code subscription
 client with an allowed callback. Both the current `claude.com/cai/oauth/authorize`
 route and the older `claude.ai/oauth/authorize` route are supported. Arbitrary CLI output,
-URLs with embedded credentials and external redirects are rejected. Live CLI
-compatibility tests are still required before enabling the native login UI.
+URLs with embedded credentials and external redirects are rejected. Completed
+live cloud sign-in and compatibility tests are still required before release.
 
 Disconnect removes the server's credential copy and changes the current runner
 grant to cleanup-only. It can then poll for erasure and acknowledge completion,
@@ -182,9 +184,10 @@ cancelled before signing in. It proves URL compatibility, not a completed login.
 ## Installation worker
 
 `server/cmd/camp-runner` polls only its installation routes and invokes the fixed
-Go sign-in adapters and [Git checkout preparation](github.md#isolated-checkout).
-It cannot read human Camp history, execute prompts or accept arbitrary shell
-commands. Configure it through these environment variables:
+Go sign-in adapters, [Git checkout preparation](github.md#isolated-checkout)
+and [assigned provider turns](runner-turns.md). Its grant is restricted to its
+installation and explicitly assigned work. It cannot use human Camp endpoints
+or select arbitrary sessions. Configure it through these environment variables:
 
 | Variable | Purpose |
 | --- | --- |

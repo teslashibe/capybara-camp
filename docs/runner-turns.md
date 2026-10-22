@@ -65,8 +65,10 @@ workspace. The local adversarial check has passed; enforcement by the chosen
 Kubernetes runtime and live provider behavior remain release gates. See
 [process isolation](process-isolation.md) for the exact boundary and required checks.
 
-Also pending: native execution location/defaults and cloud steering, reviewed
-transfers, cloud usage presentation, Git publication and actor attribution,
+The native [Run on controls](execution-locations.md) now prepare and assign a
+private cloud copy. Also pending: execution defaults, multiple active tickets
+per account and native cloud steering, reviewed transfers, cloud usage
+presentation, Git publication and actor attribution,
 real provider logins/turns with the Mac offline, and two-user cloud acceptance.
 
 Local verification for this slice: `tools/test-server.sh` passed the full Go

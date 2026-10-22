@@ -5,10 +5,11 @@ devices, membership, projects, selected session sharing, versioned transcripts,
 durable prompt requests and ordered events. The development desktop also runs
 approved shared requests through the owning Mac's local CLI, with leased
 execution and explicit review of uncertain outcomes. The Go server also persists
-versioned planning tickets and their bounded five-step queue. Memory, skills and
-cloud inference are still being built. The base manifests serve shared state;
+versioned planning tickets and their bounded five-step queue. Isolated cloud
+provider turns are implemented locally and still await live acceptance. Memory,
+skills and the remaining cloud workflow are unfinished. The base manifests serve shared state;
 an optional [runner overlay and controller](runner-provisioning.md) supplies
-auth-worker provisioning. Live-cluster validation is still pending. Do not treat
+installation-worker provisioning. Live-cluster validation is still pending. Do not treat
 these templates as the completed V1 release or a production deployment sign-off.
 
 Every collaborating Mac connects to the same HTTPS service origin and Camp.
@@ -100,10 +101,11 @@ provided by the templates.
 
 ## Connect desktop clients
 
-The V1 desktop connection screen will accept the configured HTTPS origin.
+The V1 development desktop connection screen accepts the configured HTTPS origin.
 Each person signs in independently, joins the same Camp through an invitation,
 and explicitly shares selected sessions. Local provider logins stay on their
-owning Macs. The planned cloud account flow creates separate, owner-bound
+owning Macs. The cloud account flow creates separate, owner-bound
 installations and runs the official CLIs in isolated Linux workloads. Choosing
 Cloud does not share account credentials with other members. The connection
-screen is not in v0.0.1.
+screen is not in v0.0.1. Follow [execution locations](execution-locations.md)
+for the native assignment flow and its remaining transfer limits.

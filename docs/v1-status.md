@@ -85,8 +85,13 @@ recorded implementation and acceptance evidence, not just an updated spec.
    deploy the public Kubernetes templates, validate isolation, backup restore,
    independent GitHub accounts and execution with the owning Mac offline.
 7. **Pending — release**: Developer ID signing and notarization, universal
-   artifacts and checksums, GitHub v1.0.0 notes, website updates, and a recorded
-   native demo with playback controls and reduced-motion support.
+   artifacts and checksums, thorough README/setup/operator documentation and
+   committed v1.0.0 notes. Push the finished code, tag the tested commit, publish
+   the GitHub release, and verify its tag, downloadable artifacts and checksums.
+   Update the website with the shipped features and a recorded native demo
+   with playback controls and reduced-motion support, then smoke-test the live
+   site and downloads. Follow the [release procedure](releasing.md); development
+   build success alone does not complete this step.
 
 The current UI audit pass has corrected the notification drawer and toast,
 verified local onboarding through project creation, added native question

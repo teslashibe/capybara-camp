@@ -4,11 +4,20 @@
 
 Your Camp for big ideas
 
-A small native Mac app for your local Codex and Claude Code sessions. Find a conversation, put it on a Kanban board, and pick it up in chat.
+A native Mac app for your Codex and Claude Code sessions. Find a conversation,
+put it on a Kanban board, and pick it up in chat.
 
 [Get started](https://capybaracamp.com/) · [Download v0.0.1](https://github.com/teslashibe/capybara-camp/releases/tag/v0.0.1) · [Release notes](releases/v0.0.1.md)
 
-## What works
+## Release status
+
+**v0.0.1 is the published chat-only preview. V1 is in development and is not
+released.** The source branch includes features that the v0.0.1 download does
+not have. The [V1 delivery status](docs/v1-status.md) records what is implemented,
+tested and still required; the [release epic](https://github.com/teslashibe/capybara-camp/issues/1)
+defines the full release scope.
+
+## Local sessions
 
 - Import accessible local Codex and Claude Code profiles, with their sessions kept separate
 - Switch between Board and Chat; search by session, project or profile
@@ -18,7 +27,12 @@ A small native Mac app for your local Codex and Claude Code sessions. Find a con
 - Choose the model, effort and supported speed for the next reply
 - Discover new sessions automatically and follow open transcript changes as the CLI writes them
 
-The public v0.0.1 release is a **chat-only preview**. Its Camp-started sessions have tools, hooks and MCP servers disabled. V1 development adds explicit [local session permissions](docs/session-permissions.md) and approved plan implementation. A session open in another app must be closed there before Camp can send into it. External terminal conversations update when their CLI saves text; they do not expose an independent live token stream to Camp.
+The public preview disables tools, hooks and MCP servers in Camp-started
+sessions. V1 development adds explicit [session permissions](docs/session-permissions.md)
+and approved plan implementation. A session owned by another app must be
+released there before Camp can send into it. External terminal conversations
+update when their CLI saves text; Camp cannot display tokens that the CLI has
+not written or exposed through its activity interface.
 
 ## Requirements
 
@@ -29,7 +43,21 @@ The public v0.0.1 release is a **chat-only preview**. Its Camp-started sessions 
 
 Provider subscriptions, login and model availability remain with the provider. You only need the CLI for the provider you want to use.
 
-## Build and run
+## Download the public preview
+
+The [v0.0.1 release](https://github.com/teslashibe/capybara-camp/releases/tag/v0.0.1)
+includes a universal macOS ZIP and a SHA-256 checksum. Extract it and move
+**Capybara Camp.app** to Applications. That older release still requires Python
+3.11 and the provider CLI. Current source builds bundle the Go helper and do
+not require Python to build, test or run.
+
+v0.0.1 is ad-hoc signed and is not notarized by Apple. macOS may block a
+downloaded copy. Review Apple's [instructions for opening an app from an unidentified developer](https://support.apple.com/en-us/102445),
+or build from source below. Camp does not change Gatekeeper settings.
+
+## Build from source
+
+Install the requirements above, then:
 
 ```sh
 git clone https://github.com/teslashibe/capybara-camp.git
@@ -38,60 +66,173 @@ cd capybara-camp
 open "build/Capybara Camp.app"
 ```
 
-The first launch imports accessible local profiles automatically. Use **Manage sources** to add a separate `CODEX_HOME` or `CLAUDE_CONFIG_DIR` folder. A folder is a source, not proof of a particular signed-in account: its current login can differ from a historical conversation's author.
+This builds the checked-out source for your Mac's architecture. Go is needed
+on the build machine only; the app includes its local helper. For both Apple
+silicon and Intel, use `./build.sh --universal`.
 
-Click a card to open chat. Send with **Command–Return**. During a Camp reply, **Command–Return** steers it and **Command–Shift–Return** queues the next prompt. Queues stay paused after a restart until you resume them.
+The current unreleased V1 work is on `codex/capybara-v1`. To try that work,
+switch to that branch before building. The default branch and published
+download may be behind the development branch.
 
-New sessions are checked every 30 seconds; large libraries can take longer to read. Open transcripts use filesystem notifications, with no polling interval. When you scroll up, new messages leave your reading position in place.
+The [six-step onboarding flow](docs/onboarding.md) discovers local profiles,
+then offers optional Camp sign-in, cloud provider accounts, GitHub, a project
+and notifications. Each optional step can be skipped. **Finish later** saves
+your place; **Capybara Camp → Set up Capybara Camp** reopens setup.
 
-## Downloaded app
+Profile discovery does not require choosing folders. Use **Manage sources**
+to add an unusual `CODEX_HOME` or `CLAUDE_CONFIG_DIR` location if needed.
+A profile folder can contain several historical account identities; it does
+not prove that each of those accounts is currently signed in.
 
-The v0.0.1 release includes a universal macOS ZIP and a SHA-256 checksum. Extract it and move **Capybara Camp.app** to Applications. That older release still requires Python 3.11 and the provider CLI. V1 development builds bundle their Go runtime and do not require Python to run.
+## Working in the app
 
-**v0.0.1 is ad-hoc signed and is not notarized by Apple.** macOS may block a downloaded copy. Review Apple's [instructions for opening an app from an unidentified developer](https://support.apple.com/en-us/102445), or use the source build above. Camp does not change Gatekeeper settings.
+### Board and chat
+
+Click a card to open chat. Send with **Command–Return**. During a local Camp
+reply, **Command–Return** steers it and **Command–Shift–Return** queues the next
+prompt. Local queues stay paused after a restart until you resume them.
+
+New sessions are checked every 30 seconds; large libraries can take longer to
+read. Open transcripts use filesystem notifications. Chats open at the bottom
+and follow incoming output. The main chat and its sub-agents appear above the
+ten most recent sessions; use `@` to find older context. A saved sub-agent
+transcript alone is not evidence that it is currently running.
+
+Model, effort and supported speed controls apply to the next Camp turn.
+Running activity uses settings reported by the provider when available. An
+external session remains under its original client's control. The native chat
+editor accepts macOS Dictation as live text.
+
+### Plans and projects
+
+In V1 development, **Plan** uses one model. **Plan with comparison** uses two
+independent drafts, one review from each provider and a combined plan. Choose
+profiles and model settings for the planners, attach session context with `@`,
+and keep the planning card running in the background. Start over preserves the
+previous version. Local plans continue into implementation on the same ticket
+after you select an executor and approve its permissions.
+
+[Projects](docs/projects.md) group tickets for a client or body of work across
+repositories. Assigning a project does not move a working directory or grant
+Git access. [Planning](docs/planning.md) documents budgets, cancellation,
+history and the remaining shared implementation limits.
+
+### Permissions and notifications
+
+Open **Permissions** from a card's menu or the shield in chat. Imported sessions
+start in chat preview mode. Enabling project tools requires an explicit choice;
+the installed CLI enforces its available policies. A change applies to the next
+turn, and a queued prompt with outdated permissions needs review. Approval
+requests appear in chat and move the card to **Needs you**.
+
+The notification bell opens saved completions and unread items. Foreground
+completions show a toast. Desktop notifications are opt-in; title previews and
+sounds are separately optional. See [permissions](docs/session-permissions.md)
+and [notifications](docs/notifications.md) for the exact behavior.
+
+## Shared Camps and cloud execution
+
+These features are in the V1 source and still require the live acceptance work
+in [delivery status](docs/v1-status.md). No live cloud provider turn or production
+cloud deployment has been accepted for this release.
+
+Every collaborating Mac connects to the same HTTPS Camp service. Each person
+signs in with their own email, then creates or joins a Camp. On a session card,
+**Share with Camp** selects its project and whether teammates may request work.
+Another person's request requires the session owner's approval. Stopping
+sharing removes teammates' access and cancels queued requests. Private local
+imports are not automatically uploaded.
+
+The cloud service is Go with PostgreSQL. Native clients keep a scoped SQLite
+cache and a durable offline outbox. The owner-Mac worker runs approved local
+requests; a separately provisioned cloud installation runs assigned cloud
+requests. The service retains transcripts and ordered events so clients can
+reconnect. Independent Camp deployments do not synchronize with each other.
+
+### Connect provider accounts and GitHub
+
+1. Connect the app to your Camp service.
+2. In **Manage sources → Cloud accounts**, add each Codex or Claude account
+   separately. Complete that account's official provider sign-in after its
+   isolated runner becomes ready. Local profile credentials are not copied.
+3. Connect your own GitHub identity and select an available installation.
+4. Link a repository to the Camp project. A project link alone does not grant
+   repository access.
+
+Cloud accounts belong to their owner. Other Camp members do not receive their
+credentials. Account identity comes from successful provider verification,
+not its label. Missing server configuration or an unavailable runner appears
+as a visible setup state. Reconnect uses the same verified identity; provider
+login expiry and usage limits remain under the provider's control.
+
+### Move a ticket to Cloud
+
+Open **Run on** from the card or chat. Review the private transcript copy,
+provider account, GitHub identity, project repository and pinned revision.
+Prepare the checkout, review permissions, then assign it to the session.
+Copying a transcript privately does not share it with teammates. Local
+uncommitted files are not included by this preparation flow.
+
+Cloud assignment stops the local publisher from overwriting the cloud session.
+Returning an unused checkout to Local preserves the local draft and project.
+A used checkout requires the reviewed transfer feature, which is still pending;
+the current app blocks that move. Defaults, multiple cloud tickets on one
+account, cloud steering and other unfinished behavior are tracked in
+[execution locations](docs/execution-locations.md) and the delivery status.
+
+For operators, start with [self-hosting](docs/self-hosting.md), then the
+[runner provisioning guide](docs/runner-provisioning.md). The repository includes
+public Kubernetes and Hetzner K3s templates. Deploy the base Camp service and
+enable the isolated runner overlay only with its required storage, credentials
+and Linux isolation support. Hardware purchase and live deployment remain
+separate acceptance steps.
+
+## Data and privacy
+
+Camp stores source paths, cached metadata, board positions, model settings and
+queued prompts under `~/Library/Application Support/Capybara Camp`.
+`CAPY_SUPPORT` selects a separate absolute directory for testing. Provider
+credentials used locally stay in the provider's own storage. Import reads are
+local; sending a prompt uses the selected CLI and updates that provider's store.
+
+Cloud-only conversations and unreadable files belonging to other macOS users
+are not imported. v0.0.1 does not upload transcripts. V1 uploads a session only
+after explicit sharing or an explicit private cloud copy. Private copies remain
+owner-only. Cloud provider sign-in creates separate encrypted credentials on
+the configured service; it does not upload a local credential directory.
+
+Normal builds use HTTPS and store Camp device credentials in the macOS
+Keychain. Never attach profile directories, the application-support folder,
+provider credentials or unredacted transcripts to an issue. Report sensitive
+findings through the process in [SECURITY.md](SECURITY.md).
 
 ## Development
 
 ```sh
 ./test.sh
+./tools/test-server.sh
+./tools/test-processguard.sh
 ./build.sh --universal
-./tools/package-release.sh
 ```
 
-Tests use local fixtures and fake CLI processes; they do not need provider accounts or API keys. The suite covers import isolation, native state, transcript notifications, streaming, cancellation, steering and queue recovery. Live compatibility has been checked on one Mac with Codex CLI 0.163.0 and Claude Code 2.1.306; provider interfaces can change.
+`test.sh` runs local Go protocol tests and the native state suites with synthetic
+provider processes. `tools/test-server.sh` requires Docker and starts disposable
+PostgreSQL for Go race tests and vet; it removes the container on exit. An explicit
+`CAMP_TEST_DATABASE_URL` uses isolated schemas in that test database instead.
+Never point it at production. `tools/test-processguard.sh` exercises the required
+Linux process boundary; on macOS it uses Docker.
+
+These tests do not require real provider accounts or API keys. They cover import
+isolation, transcript notifications, streaming, cancellation, steering, queue
+recovery, auth and durable server state. They do not replace live provider,
+two-Mac, deployment or UI acceptance. Current evidence and CLI versions are
+recorded in the relevant guides and [UI audit](docs/ui-audit.md).
 
 The build and test suite use Swift and Go. `test.sh` builds a separate Go fixture executable for native protocol tests; that executable is never included in the app. The [migration record](docs/python-test-migration.json) maps the 103 former Python tests to their replacements.
 
 By default, builds go into `build/` and use ad-hoc signing. Set `CAMP_SIGN_IDENTITY` for your own certificate, `CAMP_APP_PATH` for a different output bundle, or `CAMP_BUNDLE_ID` for a different identifier. The default identifier is `com.capybaracamp.app`. Repeated builds keep that identifier; a matching binary hash across different builds is not promised.
 
-## V1 development
-
-The `codex/capybara-v1` work adds a Go shared-Camp service with PostgreSQL,
-email sign-in, membership, versioned transcripts, permission checks, a durable
-prompt queue and live events. The Swift client includes a scoped SQLite cache,
-an offline outbox, Camp connection controls and shared transcript viewing.
-The owner-Mac worker can execute shared chat requests and isolated shared
-planning steps. The native shared-planning workspace includes model settings,
-pinned context, board cards, pause/resume and saved version history. Plan runs one model; Plan with comparison uses two provider drafts, reviews and a combined plan. Local plans can
-continue into implementation with a separate executor choice on the same ticket.
-Completion notifications include a native inbox, foreground toasts, optional
-macOS alerts and server-owned read receipts across a person's devices.
-Client projects group tickets across repositories without changing their working directories. The sidebar and card menus support assignment, rename and archive, with private SQLite storage and shared Go/PostgreSQL state. See [projects](docs/projects.md) for the current contract.
-New installations open a four-step [setup flow](docs/onboarding.md) that automatically finds local profiles before importing their histories, then offers a shared Camp connection, a project and desktop notifications. A collapsed fallback accepts unusual profile locations. Existing users can open **Capybara Camp → Set up Capybara Camp**. Optional steps can be skipped, and setup can be resumed later.
-See [notifications](docs/notifications.md) for the current delivery
-and cross-device boundaries.
-Shared implementation, streamed partial shared-plan output, cloud runners,
-memory and skills are still in development. These features are not included in v0.0.1. See [planning](docs/planning.md),
-[cloud execution scope](docs/cloud-execution.md), and [self-hosting](docs/self-hosting.md)
-for the current implementation boundary and [the V1 epic](https://github.com/teslashibe/capybara-camp/issues/1)
-for release acceptance.
-The [V1 delivery status](docs/v1-status.md) separates the implemented local features from unfinished cloud, memory, skills and release work.
-V1 also includes a [Codex activity observer](docs/codex-activity.md), with live daemon events and verified desktop turn tracking. The [iteration sprint](docs/iteration-2.md) also covers client projects, GitHub workspaces and session permission controls.
-
-In a V1 development build, connect your Camp from the header, then choose
-**Share with Camp** on a session card. Select its project and whether teammates
-may request work. Requests from other people require the session owner's approval.
-Stop sharing removes the other members' access and cancels queued requests.
+### Isolated native QA
 
 For isolated native/Go integration tests, run `tools/native-fixture.sh` with an
 absolute temporary directory, then build with `./build.sh --development`.
@@ -100,21 +241,74 @@ email codes to that directory. Development builds allow a loopback HTTP origin.
 `CAMP_DEV_EPHEMERAL_CREDENTIALS=1` uses in-memory Camp credentials in those builds.
 Normal builds require HTTPS and use the Keychain.
 
+### Troubleshooting
+
+- A profile is missing: finish provider CLI sign-in, check file access, then use
+  **Manage sources** for a custom location. Do not copy another user's credentials.
+- A session cannot send: release it from its original client. Camp does not take
+  over another client's active session.
+- A response is delayed: Camp-started output streams directly; external output
+  depends on what the original CLI writes. Check its activity and login state.
+- Cloud setup is unavailable or waiting: check service configuration, account
+  provisioning and runner readiness in the operator guides.
+- A request has an unknown outcome: review it before starting again. A lost
+  connection is not proof that the provider did no work.
+- Desktop alerts are missing: enable them in Camp and macOS settings. The saved
+  notification inbox remains available even when the system suppresses an alert.
+
+## Documentation
+
+| Guide | Covers |
+| --- | --- |
+| [Onboarding](docs/onboarding.md) | Automatic discovery, optional connections and resume |
+| [Planning](docs/planning.md) | Single/comparison plans, budgets and implementation history |
+| [Projects](docs/projects.md) | Private/shared projects and repository links |
+| [Session context](docs/session-context.md) | `@` references, message ranges and source permissions |
+| [Session permissions](docs/session-permissions.md) | Provider policies, queues and approval changes |
+| [Notifications](docs/notifications.md) | Toasts, inbox, desktop alerts and cross-device state |
+| [Cloud accounts](docs/cloud-accounts.md) | Account ownership, login and credential lifecycle |
+| [GitHub](docs/github.md) | GitHub App setup, repository authorization and checkouts |
+| [Execution locations](docs/execution-locations.md) | Run on Local/Cloud and transfer limits |
+| [Cloud provider turns](docs/runner-turns.md) | Streaming, recovery and pending live acceptance |
+| [Self-hosting](docs/self-hosting.md) | Kubernetes/K3s configuration, upgrades and backups |
+| [Runner provisioning](docs/runner-provisioning.md) | Isolated workers, grants and lifecycle |
+| [Process isolation](docs/process-isolation.md) | Linux security boundary and runtime checks |
+| [Server API](server/README.md) | Go service, authentication and durable request contract |
+| [Go local helper](docs/go-local-helper.md) | Local runtime, bounded imports and migration evidence |
+| [UI audit](docs/ui-audit.md) | Design comparison and native test evidence |
+| [V1 delivery status](docs/v1-status.md) | Implemented work and open release gates |
+| [Release procedure](docs/releasing.md) | Signing, packaging, GitHub and website verification |
+
 ## Website
 
 The public website is hosted on Cloudflare Pages at [capybaracamp.com](https://capybaracamp.com), using the `capybara-camp` Direct Upload project. Its source is `docs/index.html`; a Cloudflare Redirect Rule sends the `www` address to the main domain.
 
-To publish a website update, upload a ZIP containing only `index.html` at the archive root. Do not upload the repository or a build directory: those can include local diagnostics. Direct Upload is separate from GitHub pushes. The GitHub Pages build remains a preview mirror.
+The current page is self-contained. Its upload ZIP contains only `index.html`
+at the archive root. Do not upload the repository or a build directory, which
+can include local diagnostics. The planned native demo will need explicitly
+listed media assets in the website package. Cloudflare Direct Upload is separate
+from GitHub pushes; GitHub Pages remains a preview mirror.
 
-## Local data and privacy
+## Releases
 
-Camp stores source paths, cached metadata, board positions, model settings and queued prompts under `~/Library/Application Support/Capybara Camp`. `CAPY_SUPPORT` can select a separate absolute directory for local testing. Provider credentials stay in the provider's own storage. Import reads are local; sending a prompt uses the selected CLI and updates that provider's session store.
+The [release procedure](docs/releasing.md) requires the full acceptance gates,
+updated README and versioned release notes, a final code push, a tag pointing to
+the tested commit, and a published GitHub release with verified artifacts and
+checksums. The website must show matching downloads and a recorded native demo.
 
-Cloud-only conversations and unreadable files belonging to other macOS users are not imported. v0.0.1 does not upload transcripts to a Camp service. V1 development builds upload only sessions explicitly shared to the configured Camp server. Do not attach your profile directories, application-support folder or unredacted transcripts to an issue. See [SECURITY.md](SECURITY.md).
+`tools/package-release.sh` currently packages a universal development app and
+the setup HTML into `dist/`. It does not notarize, push, tag or publish a release.
+The signing/notarization work and full V1 acceptance must finish before using
+its output as the public V1 download.
 
-## Scope of the first release
+## Scope and remaining work
 
-Verified multi-account login management, a usage dashboard, automatic credential rotation, limit-triggered account handoff, provider-native dictation and external Codex runtime monitoring are **not implemented**. Saved Codex subagent state is not proof that a subagent is currently running. This release is a local MVP, not a full coding-agent host.
+V1 still needs the unfinished cloud, shared implementation, Cortex memory,
+shared skills, Git publication and validation work listed in the delivery
+status. Automatic account rotation to evade limits, guaranteed perpetual login
+and silent execution fallback are excluded. macOS Dictation is the chosen input
+path; provider-native voice transcription is not included. v0.0.1 remains the
+smaller local preview described in its [release notes](releases/v0.0.1.md).
 
 ## Source layout
 

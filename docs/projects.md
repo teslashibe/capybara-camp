@@ -20,7 +20,10 @@ Shared project edits and assignments use the existing durable outbox. Pending ch
 
 Owners and editors can edit accessible work. Viewer writes, cross-Camp targets, malformed repository URLs and stale revisions are rejected. Repository links are canonical GitHub repository URLs, capped at 50 per project. They contain no credentials or branch paths.
 
-The server now requires schema 8. Run the migration command before starting this build. No destructive project rollback is supplied; retain a compatible binary and database backup.
+Project storage was introduced in schema 8. The current required schema is
+defined by `SchemaVersion` in [the database package](../server/internal/database/database.go).
+Run the matching migrations before starting the server. No destructive project
+rollback is supplied; retain a compatible binary and database backup.
 
 Repository authentication, isolated Git workspaces and Git actor selection belong to [the Git integration ticket](https://github.com/teslashibe/capybara-camp/issues/11). They are not implemented by storing a project link. Two-Mac and final release validation remain part of V1 acceptance.
 
