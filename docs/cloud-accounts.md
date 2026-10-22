@@ -14,7 +14,8 @@ login pins the provider subject; reconnecting with a different subject fails and
 preserves the working credentials. No account is merged by email or label.
 
 Schema 9 adds `provider_accounts`, `provider_installations`, `runner_grants` and
-`provider_login_attempts`. Existing local `profiles` and shared `sessions` keep
+`provider_login_attempts`. Schema 10 adds encrypted Claude authorization-code
+delivery. Existing local `profiles` and shared `sessions` keep
 their existing ownership. Cloud account metadata does not enter Camp snapshots,
 shared events or exported transcripts. There is a limit of 32 account records per
 person in this initial service.
@@ -45,6 +46,7 @@ All routes require the person's Camp device token. Writes require an
 | `POST /v1/provider-accounts/{account}/runner-grants` | Create one installation token, replacing its previous grant |
 | `POST /v1/provider-accounts/{account}/logins` | Queue one login attempt for its current runner |
 | `GET /v1/provider-accounts/{account}/logins/{attempt}` | Read state and the validated browser challenge |
+| `POST /v1/provider-accounts/{account}/logins/{attempt}/code` | Submit `{code}` once for this waiting Claude login |
 | `POST /v1/provider-accounts/{account}/logins/{attempt}/cancel` | Cancel pending login and prevent late credential activation |
 | `POST /v1/provider-accounts/{account}/disconnect` | Fence login/credential access and request runner erasure |
 
@@ -69,6 +71,8 @@ checks the grant again under the same account lock used by owner changes.
 | `GET /v1/runner/account` | Return only this installation's idle, login or erase action |
 | `POST /v1/runner/logins/{attempt}/claim` | Claim a queued attempt with a persisted `claim_id` UUID |
 | `POST /v1/runner/logins/{attempt}/report` | Report waiting, connected or failed with the same claim ID |
+| `POST /v1/runner/logins/{attempt}/code` | Read a Claude code with the owning `claim_id` and a persisted `delivery_id` |
+| `POST /v1/runner/logins/{attempt}/code/ack` | Erase that delivered code using its `claim_id`, `delivery_id` and `code_id` |
 | `GET /v1/runner/credentials` | Restore only this installation's credential object and pinned subject |
 | `POST /v1/runner/erased` | Acknowledge stopped processes and erased local provider state |
 
@@ -81,6 +85,34 @@ Attempts expire after ten minutes. Reads and claims enforce expiry; a bounded
 maintenance pass clears expired challenges even when no client returns. Replacing
 a runner invalidates its unfinished attempts. Cancelled or expired attempts cannot
 activate credentials. A failed or cancelled reconnect retains the existing login.
+
+## Claude authorization-code delivery
+
+Only the account owner can submit a browser return code. The login must already
+be waiting on its validated Claude challenge. Submission accepts at most 4 KiB,
+rejects whitespace and control characters, and stores the code encrypted with
+the owner, account, installation, attempt and code ID as associated data. Codes
+never enter shared Camp state, owner read responses or command receipts. The
+receipt stores a hash of the submitted request and encrypted status metadata.
+One attempt accepts one submission; a retry with the same idempotency key and
+payload returns current status. Correcting a code requires a new login attempt.
+
+Only that login's claimed runner can fetch its code. The runner persists a
+delivery UUID before the request. Repeating that UUID returns the same code until
+acknowledgment; a different UUID conflicts. A `204` means no code is waiting.
+Acknowledgment removes the ciphertext and is safe to retry with the same IDs.
+The runner must persist that it is about to deliver the code and acknowledge it
+before writing it to the CLI. After a crash with uncertain provider delivery, it
+must fail the attempt and ask for a new sign-in instead of replaying the code.
+The `code_consumed` flag means the server erased the code, not that the provider
+accepted it. Only a verified connected result establishes sign-in.
+
+The challenge is fixed once published. Changed challenges conflict, preventing
+an already-submitted code from being rebound to another browser flow. Completion,
+failure, cancellation, expiry, grant replacement and account disconnect all erase
+any pending code. Every take and acknowledgment rechecks ownership, grant, claim,
+epoch and attempt state under the account lock. Runtime delivery and native code
+entry still require the worker and onboarding integration.
 
 Waiting reports contain only an allowlisted HTTPS provider URL and optional
 device code. Codex uses the official device verification route. Claude URLs must

@@ -31,15 +31,15 @@ schemas stop startup. For Kubernetes, see [self-hosting](../docs/self-hosting.md
 
 JSON bodies reject unknown fields and trailing documents, with a 64 KiB limit.
 Human responses contain secrets only for sign-in, invitation creation and an
-owner's runner-grant creation. The separate runner credential endpoint returns
-only that installation's encrypted-at-rest provider state. Do not put these
+owner's runner-grant creation. The separate runner credential and login-code
+endpoints return only that installation's encrypted-at-rest provider state. Do not put these
 responses, credentials or authorization headers in logging middleware.
 Use `Authorization: Bearer <device-token>` after sign-in.
 
 Cloud account endpoints and their unfinished runtime integration are described
-in [cloud accounts](../docs/cloud-accounts.md). Schema 9 adds their storage without
-changing existing profile or session rows. Run the migration before this binary;
-keep a compatible schema-9 build as the rollback floor.
+in [cloud accounts](../docs/cloud-accounts.md). Schema 10 includes encrypted
+Claude code delivery without changing existing profile or session rows. Run the
+migration before this binary; keep a compatible schema-10 build as the rollback floor.
 
 | Method and path | Input or result |
 | --- | --- |

@@ -113,4 +113,51 @@ func TestCloudAccountHTTPSeparatesPeopleAndRunnerGrants(t *testing.T) {
 	call("GET", "/v1/runner/credentials", grant.Token, "", 404)
 	call("POST", "/v1/runner/erased", grant.Token, "", 204)
 	call("GET", "/v1/runner/account", grant.Token, "", 401)
+
+	claude, claudeGrant := func() (camp.ProviderAccount, camp.RunnerGrant) {
+		account, err := store.CreateProviderAccount(ctx, actors[0], uuid.NewString(), camp.ProviderAccountInput{Provider: "Claude", Label: "Cloud Claude"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		grant, err := store.CreateRunnerGrant(ctx, actors[0], account.ID, uuid.NewString())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return account, grant
+	}()
+	login, err = store.BeginProviderLogin(ctx, actors[0], claude.ID, uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim = uuid.NewString()
+	if _, err = store.ClaimRunnerLogin(ctx, claudeGrant.Token, login.ID, claim); err != nil {
+		t.Fatal(err)
+	}
+	challenge := camp.LoginChallenge{URL: "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=user%3Ainference&state=fixture-login-state&code_challenge=" + strings.Repeat("a", 43) + "&code_challenge_method=S256"}
+	if _, err = store.ReportRunnerLogin(ctx, claudeGrant.Token, login.ID, claim, camp.RunnerLoginReport{State: "waiting", Challenge: &challenge}); err != nil {
+		t.Fatal(err)
+	}
+	ownerPath := "/v1/provider-accounts/" + claude.ID + "/logins/" + login.ID + "/code"
+	runnerPath := "/v1/runner/logins/" + login.ID + "/code"
+	delivery := uuid.NewString()
+	takeBody := `{"claim_id":"` + claim + `","delivery_id":"` + delivery + `"}`
+	call("POST", runnerPath, claudeGrant.Token, takeBody, 204)
+	call("POST", ownerPath, tokens[1], `{"code":"fixture-oauth-code"}`, 404)
+	call("POST", ownerPath, claudeGrant.Token, `{"code":"fixture-oauth-code"}`, 401)
+	call("POST", ownerPath, tokens[0], `{"code":"fixture-oauth-code","account":"spoof"}`, 400)
+	call("POST", ownerPath, tokens[0], `{"code":"bad\ncode"}`, 400)
+	raw = call("POST", ownerPath, tokens[0], `{"code":"fixture-oauth-code"}`, 200)
+	if bytes.Contains(raw, []byte("fixture-oauth-code")) || !bytes.Contains(raw, []byte(`"code_submitted":true`)) {
+		t.Fatal("owner code response leaked or omitted submission state")
+	}
+	call("POST", runnerPath, tokens[0], takeBody, 401)
+	raw = call("POST", runnerPath, claudeGrant.Token, takeBody, 200)
+	var taken camp.RunnerLoginCode
+	if json.Unmarshal(raw, &taken) != nil || taken.Code != "fixture-oauth-code" {
+		t.Fatal("missing runner code")
+	}
+	ack := `{"claim_id":"` + claim + `","delivery_id":"` + delivery + `","code_id":"` + taken.CodeID + `"}`
+	call("POST", runnerPath+"/ack", claudeGrant.Token, ack, 204)
+	call("POST", runnerPath+"/ack", claudeGrant.Token, ack, 204)
+	call("POST", runnerPath, claudeGrant.Token, takeBody, 204)
 }

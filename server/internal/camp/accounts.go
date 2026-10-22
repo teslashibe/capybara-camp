@@ -70,6 +70,8 @@ type ProviderLogin struct {
 	FailureCode    string    `json:"failure_code,omitempty"`
 	URL            string    `json:"url,omitempty"`
 	UserCode       string    `json:"user_code,omitempty"`
+	CodeSubmitted  bool      `json:"code_submitted,omitempty"`
+	CodeConsumed   bool      `json:"code_consumed,omitempty"`
 	ExpiresAt      time.Time `json:"expires_at"`
 }
 
@@ -192,7 +194,7 @@ func (s *Store) CreateRunnerGrant(ctx context.Context, actor auth.Actor, id, key
 	if _, err = tx.Exec(ctx, `UPDATE runner_grants SET revoked_at=now() WHERE installation_id=$1 AND revoked_at IS NULL`, a.InstallationID); err != nil {
 		return out, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE provider_login_attempts SET state='failed',failure_code='runner_replaced',encrypted_challenge=NULL,updated_at=now() WHERE installation_id=$1 AND state IN ('queued','running','waiting')`, a.InstallationID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE provider_login_attempts SET state='failed',failure_code='runner_replaced',encrypted_challenge=NULL,encrypted_code=NULL,updated_at=now() WHERE installation_id=$1 AND state IN ('queued','running','waiting')`, a.InstallationID); err != nil {
 		return out, err
 	}
 	var random [32]byte
@@ -264,7 +266,7 @@ func (s *Store) BeginProviderLogin(ctx context.Context, actor auth.Actor, id, ke
 	return out, tx.Commit(ctx)
 }
 func (s *Store) expireLogins(ctx context.Context, tx pgx.Tx, installation string) error {
-	_, err := tx.Exec(ctx, `UPDATE provider_login_attempts SET state='expired',encrypted_challenge=NULL,updated_at=now() WHERE installation_id=$1 AND state IN ('queued','running','waiting') AND expires_at<=clock_timestamp()`, installation)
+	_, err := tx.Exec(ctx, `UPDATE provider_login_attempts SET state='expired',encrypted_challenge=NULL,encrypted_code=NULL,updated_at=now() WHERE installation_id=$1 AND state IN ('queued','running','waiting') AND expires_at<=clock_timestamp()`, installation)
 	return err
 }
 
@@ -274,7 +276,7 @@ func (s *Store) ReapProviderLogins(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `WITH expired AS (
  SELECT id FROM provider_login_attempts WHERE state IN ('queued','running','waiting') AND expires_at<=clock_timestamp()
  ORDER BY expires_at,id LIMIT 250 FOR UPDATE SKIP LOCKED
-) UPDATE provider_login_attempts p SET state='expired',encrypted_challenge=NULL,updated_at=now()
+) UPDATE provider_login_attempts p SET state='expired',encrypted_challenge=NULL,encrypted_code=NULL,updated_at=now()
  FROM expired e WHERE p.id=e.id`)
 	return err
 }
@@ -287,7 +289,7 @@ func (s *Store) readLogin(ctx context.Context, tx pgx.Tx, a ProviderAccount, id 
 	}
 	var out ProviderLogin
 	var encrypted []byte
-	err := tx.QueryRow(ctx, `SELECT id,installation_id,state,failure_code,expires_at,encrypted_challenge FROM provider_login_attempts WHERE id=$1 AND installation_id=$2`, id, a.InstallationID).Scan(&out.ID, &out.InstallationID, &out.State, &out.FailureCode, &out.ExpiresAt, &encrypted)
+	err := tx.QueryRow(ctx, `SELECT id,installation_id,state,failure_code,expires_at,encrypted_challenge,code_id IS NOT NULL,code_consumed_at IS NOT NULL FROM provider_login_attempts WHERE id=$1 AND installation_id=$2`, id, a.InstallationID).Scan(&out.ID, &out.InstallationID, &out.State, &out.FailureCode, &out.ExpiresAt, &encrypted, &out.CodeSubmitted, &out.CodeConsumed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, ErrDenied
 	}
@@ -349,7 +351,7 @@ func (s *Store) CancelProviderLogin(ctx context.Context, actor auth.Actor, id, a
 	} else if hit {
 		return out, tx.Commit(ctx)
 	}
-	if _, err = tx.Exec(ctx, `UPDATE provider_login_attempts SET state='cancelled',encrypted_challenge=NULL,updated_at=now() WHERE id=$1 AND state IN ('queued','running','waiting')`, attempt); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE provider_login_attempts SET state='cancelled',encrypted_challenge=NULL,encrypted_code=NULL,updated_at=now() WHERE id=$1 AND state IN ('queued','running','waiting')`, attempt); err != nil {
 		return out, err
 	}
 	out, err = s.readLogin(ctx, tx, a, attempt)
@@ -401,7 +403,7 @@ func (s *Store) DisconnectProviderAccount(ctx context.Context, actor auth.Actor,
 		if _, err = tx.Exec(ctx, `UPDATE runner_grants SET cleanup_only=true,epoch=$2 WHERE installation_id=$1 AND revoked_at IS NULL`, a.InstallationID, a.Epoch+1); err != nil {
 			return a, err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE provider_login_attempts SET state='cancelled',encrypted_challenge=NULL,updated_at=now() WHERE installation_id=$1 AND state IN ('queued','running','waiting')`, a.InstallationID); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE provider_login_attempts SET state='cancelled',encrypted_challenge=NULL,encrypted_code=NULL,updated_at=now() WHERE installation_id=$1 AND state IN ('queued','running','waiting')`, a.InstallationID); err != nil {
 			return a, err
 		}
 	}

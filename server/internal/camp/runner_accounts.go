@@ -229,6 +229,16 @@ func (s *Store) ReportRunnerLogin(ctx context.Context, token, attempt, claim str
 		return ProviderLogin{}, ErrTransition
 	}
 	if in.State == "waiting" {
+		if state == "waiting" {
+			previous, e := s.readLogin(ctx, tx, r.account, attempt)
+			if e != nil {
+				return ProviderLogin{}, e
+			}
+			if previous.URL != in.Challenge.URL || previous.UserCode != in.Challenge.UserCode {
+				return ProviderLogin{}, ErrConflict
+			}
+			return previous, tx.Commit(ctx)
+		}
 		payload, _ = json.Marshal(in.Challenge)
 		encrypted, e := s.sealProvider(payload, loginBinding(r.account, attempt))
 		if e != nil {
@@ -261,7 +271,7 @@ func (s *Store) ReportRunnerLogin(ctx context.Context, token, attempt, claim str
 				return ProviderLogin{}, err
 			}
 		}
-		if _, err = tx.Exec(ctx, `UPDATE provider_login_attempts SET state=$2,failure_code=$3,result_hash=$4,encrypted_challenge=NULL,updated_at=now() WHERE id=$1`, attempt, result, failure, hash[:]); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE provider_login_attempts SET state=$2,failure_code=$3,result_hash=$4,encrypted_challenge=NULL,encrypted_code=NULL,updated_at=now() WHERE id=$1`, attempt, result, failure, hash[:]); err != nil {
 			return ProviderLogin{}, err
 		}
 	}

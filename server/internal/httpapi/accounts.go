@@ -48,6 +48,16 @@ func (a *API) accountRoutes(mux *http.ServeMux) {
 			write(w, 200, out)
 		}
 	}))
+	mux.HandleFunc("POST /v1/provider-accounts/{account}/logins/{attempt}/code", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		var input camp.ProviderCodeInput
+		if !decode(w, r, &input) {
+			return
+		}
+		out, err := a.Camps.SubmitProviderLoginCode(r.Context(), u, r.PathValue("account"), r.PathValue("attempt"), r.Header.Get("Idempotency-Key"), input)
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
 	mux.HandleFunc("POST /v1/provider-accounts/{account}/disconnect", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		out, err := a.Camps.DisconnectProviderAccount(r.Context(), u, r.PathValue("account"), r.Header.Get("Idempotency-Key"))
 		if !fail(w, err) {
@@ -88,6 +98,36 @@ func (a *API) accountRoutes(mux *http.ServeMux) {
 		out, err := a.Camps.ReportRunnerLogin(r.Context(), token(r), r.PathValue("attempt"), in.ClaimID, in.RunnerLoginReport)
 		if !fail(w, err) {
 			write(w, 200, out)
+		}
+	}))
+	mux.HandleFunc("POST /v1/runner/logins/{attempt}/code", a.runnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
+		var input struct {
+			ClaimID    string `json:"claim_id"`
+			DeliveryID string `json:"delivery_id"`
+		}
+		if !decode(w, r, &input) {
+			return
+		}
+		out, err := a.Camps.TakeRunnerLoginCode(r.Context(), token(r), r.PathValue("attempt"), input.ClaimID, input.DeliveryID)
+		if !fail(w, err) {
+			if out == nil {
+				w.WriteHeader(204)
+			} else {
+				write(w, 200, out)
+			}
+		}
+	}))
+	mux.HandleFunc("POST /v1/runner/logins/{attempt}/code/ack", a.runnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
+		var input struct {
+			ClaimID    string `json:"claim_id"`
+			DeliveryID string `json:"delivery_id"`
+			CodeID     string `json:"code_id"`
+		}
+		if !decode(w, r, &input) {
+			return
+		}
+		if !fail(w, a.Camps.AcknowledgeRunnerLoginCode(r.Context(), token(r), r.PathValue("attempt"), input.ClaimID, input.DeliveryID, input.CodeID)) {
+			w.WriteHeader(204)
 		}
 	}))
 	mux.HandleFunc("POST /v1/runner/erased", a.runnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
