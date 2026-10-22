@@ -36,8 +36,35 @@ import SQLite3
         live.stop()
         check(live.messages.isEmpty && live.approvals.isEmpty && live.notice.isEmpty, "changing Camp clears streamed content")
     }
+    static func controlOutboxChecks() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("camp-controls-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let scope = CloudScope(origin:"https://camp.example",userId:UUID().uuidString,campId:UUID().uuidString)
+        let value = session(scope), requestID=UUID().uuidString, id=UUID().uuidString
+        let envelope=CloudControlEnvelope(id:id,control:.init(type:"steer",id:id,text:"Keep this exact direction"))
+        check(envelope.valid,"valid steering envelope")
+        var invalid=envelope;invalid.control.id=UUID().uuidString
+        check(!invalid.valid,"steer identity must match receipt")
+        invalid=envelope;invalid.control.text=String(repeating:"a",count:65537)
+        check(!invalid.valid,"steer text bounded")
+        let cache=try CampCache(directory:root)
+        try await cache.ingest(scope:scope,session:value)
+        _ = try await cache.enqueue(scope:scope,method:"POST",path:"/v1/camps/\(scope.campId)/requests/\(requestID)/controls",body:CampWire.encoder().encode(envelope),id:id,sessionID:value.id,expectedEpoch:0)
+        try await cache.markOutbox(id,state:"waiting")
+        let reopened=try CampCache(directory:root)
+        let item=try await reopened.outbox(scope).first!
+        check(item.id==id&&item.sessionID==value.id&&item.state=="waiting","provider acknowledgement survives restart")
+        check(item.cloudControl==envelope&&item.controlRequestID==requestID&&item.controlPending,"frozen control body and target survive restart")
+        try await reopened.markOutbox(id,state:"pending")
+        check(try await reopened.outbox(scope).first?.cloudControl==envelope,"transport retry preserves exact control")
+        let other=CloudScope(origin:scope.origin,userId:UUID().uuidString,campId:scope.campId)
+        check(try await reopened.outbox(other).isEmpty,"controls stay owner scoped")
+        try await reopened.ingest(scope:scope,removed:(value.id,value.revision))
+        check(try await reopened.outbox(scope).isEmpty,"session revocation removes pending control text")
+    }
     @MainActor static func main() async throws {
         try streamProjectionChecks()
+        try await controlOutboxChecks()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("camp-cloud-tests-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let endpoint = try CampEndpoint(" https://Camp.Example/ ")
@@ -184,6 +211,9 @@ import SQLite3
         check(store.recentSessions.count == 7 && store.recentSessions.allSatisfy { $0.provider == "Claude" }, "recent filter independent of board")
         store.applyCloud([value], projects: [])
         check(store.sessions.contains { $0.isCloud }, "shared sessions merged with local sessions")
+        var finished=value;finished.state="done";finished.stage="Done";finished.activityRevision=(value.activityRevision ?? 1)+1
+        store.applyCloud([finished],projects:[])
+        check(store.sessions.first(where:{$0.id=="camp:"+value.id}).map { store.stage($0) } == .done,"activity-only cloud completion updates the card stage")
         store.applyImport(ImportResult(sessions: locals, sources: [], errors: []))
         check(store.sessions.contains { $0.isCloud }, "local import preserves cloud sessions")
         store.selectedID = "camp:" + value.id

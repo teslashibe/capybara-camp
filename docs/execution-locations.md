@@ -53,8 +53,9 @@ the app explains the requirement and the server blocks the move.
 
 ## Remaining acceptance
 
-The complete history/base/ref/patch transfer flow, location defaults and native
-cloud steering remain separate unfinished parts of V1. A plain repository
+The complete history/base/ref/patch transfer flow and location defaults remain
+separate unfinished parts of V1. Native [cloud steering](cloud-controls.md) now
+uses the chat composer. A plain repository
 checkout is not an accepted transfer of local edits. The signed-in native
 happy path has been exercised against the real local API and disposable
 PostgreSQL: private copy, project-linked repository selection, preparation,

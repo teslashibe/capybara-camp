@@ -43,7 +43,6 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
     @Published private(set) var head: CloudStreamHead?
     @Published private(set) var messages: [Message] = []
     @Published private(set) var approvals: [ProviderApproval] = []
-    @Published private(set) var answering: Set<String> = []
     @Published private(set) var notice = ""
     @Published private(set) var revision: Int64 = 0
     private(set) var sessionID: String?
@@ -59,8 +58,6 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
     private var text = ""
     private var completed: [Message] = []
     private var committed: Set<String> = []
-    private var controlIDs: [String: String] = [:]
-    private var controlBodies: [String: Data] = [:]
     var changed: (() -> Void)?
     deinit { task?.cancel(); retryTask?.cancel() }
 
@@ -76,7 +73,7 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
         reset(); committed = []
     }
     private func reset() {
-        head = nil; cursor = 0; text = ""; completed = []; messages = []; approvals = []; answering = []; controlIDs = [:]; controlBodies = [:]; approvalSequences = [:]; notice = ""
+        head = nil; cursor = 0; text = ""; completed = []; messages = []; approvals = []; approvalSequences = [:]; notice = ""
         revision &+= 1; changed?()
     }
     func acknowledge(_ values: [CloudMessage]) {
@@ -154,9 +151,9 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
                 if !approvals.contains(where: { $0.id == approval.id }) { approvals.append(approval) }
                 approvalSequences[approval.id] = value.seq
             case "approvalResolved":
-                approvals.removeAll { $0.id == event.requestID }; if let id = event.requestID { answering.remove(id); controlIDs[id] = nil; controlBodies[id] = nil; approvalSequences[id] = nil }
+                approvals.removeAll { $0.id == event.requestID }; if let id = event.requestID { approvalSequences[id] = nil }
             case "approvalRejected":
-                if let id = event.requestID { answering.remove(id); controlIDs[id] = nil; controlBodies[id] = nil }; notice = event.message ?? "The answer was not accepted"
+                notice = event.message ?? "The answer was not accepted"
             case "notice", "error": notice = event.message ?? ""
             default: break
             }
@@ -177,23 +174,7 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
         if hidden { approvals = [] }
         revision &+= 1; changed?()
     }
-    func answer(_ id: String, allow: Bool, decision: String? = nil, answers: [String: [String]] = [:]) {
-        guard let head, head.state == "started", let client, let credential, let scope, let seq = approvalSequences[id], !answering.contains(id) else { return }
-        let key = controlIDs[id] ?? UUID().uuidString.lowercased(); controlIDs[id] = key; answering.insert(id)
-        let token = generation
-        Task { [weak self] in
-            do {
-                var control: [String: Any] = ["type": "approval", "id": id, "allow": allow, "answers": answers]
-                if let decision { control["decision"] = decision }
-                let body = try self?.controlBodies[id] ?? CampWire.body(["id": key, "approval_seq": seq, "control": control])
-                self?.controlBodies[id] = body
-                _ = try await client.data("POST", path: "/v1/camps/\(scope.campId)/requests/\(head.id)/controls", body: body, token: credential.token)
-            } catch {
-                guard let self, self.generation == token else { return }
-                self.answering.remove(id); self.notice = "Could not confirm the answer · Retry sends the same response"
-            }
-        }
-    }
+    func approvalSequence(_ id: String) -> Int64? { approvalSequences[id] }
 }
 
 struct CloudStreamMessages: View {
@@ -205,12 +186,15 @@ struct CloudStreamMessages: View {
 }
 struct CloudStreamApprovals: View {
     @ObservedObject var live: CloudLiveConversation
-    var canApprove: Bool
+    @ObservedObject var cloud: CampConnection
+    var session: CloudSession
     var body: some View {
         if live.head?.state == "started", let approval = live.approvals.first {
-            if canApprove {
-                ProviderApprovalView(approval: approval, sending: live.answering.contains(approval.id), answer: { allow, decision, answers in
-                    live.answer(approval.id, allow: allow, decision: decision, answers: answers)
+            if session.ownerUserId == cloud.credential?.actor.userId {
+                ProviderApprovalView(approval: approval, sending: live.head.map { cloud.pendingControl(requestID:$0.id,kind:"approval",providerID:approval.id) } ?? false, answer: { allow, decision, answers in
+                    guard let head = live.head, let seq = live.approvalSequence(approval.id) else { return }
+                    let value = CloudControlEnvelope(id:UUID().uuidString.lowercased(),approvalSeq:seq,control:.init(type:"approval",id:approval.id,allow:allow,decision:decision,answers:answers))
+                    Task { do { try await cloud.queueControl(session:session,head:head,value:value) } catch { cloud.error=error.localizedDescription } }
                 }).id(approval.id)
             } else {
                 Label("Waiting for the session owner to review", systemImage: "hand.raised").font(.system(size: 11)).foregroundStyle(campMuted)

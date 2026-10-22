@@ -9,6 +9,7 @@ struct CloudScope: Codable, Equatable, Sendable {
 struct CloudOutboxItem: Identifiable, Sendable {
     var id: String; var scope: String; var method: String; var path: String; var body: Data
     var state: String; var error: String
+    var sessionID: String = ""
 }
 struct CloudAttempt: Codable, Identifiable, Sendable {
     var id: String; var scope: String; var request: CloudRequest; var localSessionId: String
@@ -37,10 +38,11 @@ actor CampCache {
         let versionReady = sqlite3_prepare_v2(database, "PRAGMA user_version", -1, &versionStatement, nil) == SQLITE_OK
         let version = versionReady && sqlite3_step(versionStatement) == SQLITE_ROW ? sqlite3_column_int(versionStatement, 0) : -1
         sqlite3_finalize(versionStatement)
-        guard (0...3).contains(version) else { sqlite3_close(database); db = nil; throw CampCloudError.cacheUnavailable }
+        guard (0...4).contains(version) else { sqlite3_close(database); db = nil; throw CampCloudError.cacheUnavailable }
         let schema = """
         PRAGMA journal_mode=WAL;
         PRAGMA synchronous=FULL;
+        BEGIN IMMEDIATE;
         CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value BLOB NOT NULL);
         CREATE TABLE IF NOT EXISTS sessions(scope TEXT NOT NULL,id TEXT NOT NULL,revision INTEGER NOT NULL,transcript_revision INTEGER NOT NULL,body BLOB NOT NULL,PRIMARY KEY(scope,id));
         CREATE TABLE IF NOT EXISTS tombstones(scope TEXT NOT NULL,id TEXT NOT NULL,revision INTEGER NOT NULL,PRIMARY KEY(scope,id));
@@ -55,9 +57,11 @@ actor CampCache {
         CREATE TABLE IF NOT EXISTS local_projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,revision INTEGER NOT NULL,archived INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS local_project_repositories(project_id TEXT NOT NULL,url TEXT NOT NULL,PRIMARY KEY(project_id,url));
         CREATE TABLE IF NOT EXISTS local_project_assignments(ticket_id TEXT PRIMARY KEY,project_id TEXT NOT NULL);
+        \(version < 4 ? "ALTER TABLE outbox ADD COLUMN session_id TEXT NOT NULL DEFAULT '';" : "")
         UPDATE outbox SET state='pending' WHERE state='sending';
         UPDATE attempts SET state='uncertain' WHERE state IN ('start_pending','running');
-        PRAGMA user_version=3;
+        PRAGMA user_version=4;
+        COMMIT;
         """
         guard sqlite3_exec(database, schema, nil, nil, nil) == SQLITE_OK else { sqlite3_close(database); db = nil; throw CampCloudError.cacheUnavailable }
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
@@ -186,6 +190,7 @@ actor CampCache {
             for session in sessions { try save(session, scope: scope) }
             try execute("DELETE FROM messages WHERE scope=? AND session_id NOT IN (SELECT id FROM sessions WHERE scope=?)", [.text(scope.key), .text(scope.key)])
             try execute("DELETE FROM requests WHERE scope=? AND json_extract(CAST(body AS TEXT),'$.session_id') NOT IN (SELECT id FROM sessions WHERE scope=?)", [.text(scope.key), .text(scope.key)])
+            try execute("DELETE FROM outbox WHERE scope=? AND session_id<>'' AND session_id NOT IN (SELECT id FROM sessions WHERE scope=?)", [.text(scope.key),.text(scope.key)])
             try setMetadata("cursor:" + scope.key, Data(String(cursor).utf8))
         }
     }
@@ -200,6 +205,7 @@ actor CampCache {
                 try execute("DELETE FROM sessions WHERE scope=? AND id=? AND revision<=?", [.text(scope.key), .text(id), .integer(revision)])
                 try execute("DELETE FROM messages WHERE scope=? AND session_id=? AND NOT EXISTS(SELECT 1 FROM sessions WHERE scope=? AND id=? AND revision>?)", [.text(scope.key), .text(id), .text(scope.key), .text(id), .integer(revision)])
                 try execute("DELETE FROM requests WHERE scope=? AND json_extract(CAST(body AS TEXT),'$.session_id')=? AND NOT EXISTS(SELECT 1 FROM sessions WHERE scope=? AND id=? AND revision>?)", [.text(scope.key), .text(id), .text(scope.key), .text(id), .integer(revision)])
+                try execute("DELETE FROM outbox WHERE scope=? AND session_id=? AND NOT EXISTS(SELECT 1 FROM sessions WHERE scope=? AND id=? AND revision>?)", [.text(scope.key),.text(id),.text(scope.key),.text(id),.integer(revision)])
             }
             if let cursor { try setMetadata("cursor:" + scope.key, Data(String(cursor).utf8)) }
         }
@@ -259,24 +265,24 @@ actor CampCache {
             try CampWire.decoder().decode(CloudMessage.self, from: blob($0, 0))
         }.reversed())
     }
-    func enqueue(scope: CloudScope, method: String, path: String, body: Data, id: String = UUID().uuidString.lowercased(), expectedEpoch: Int64? = nil) throws -> String {
+    func enqueue(scope: CloudScope, method: String, path: String, body: Data, id: String = UUID().uuidString.lowercased(), sessionID: String = "", expectedEpoch: Int64? = nil) throws -> String {
         try checkEpoch(scope, expectedEpoch)
         let endpoint = try CampEndpoint(scope.origin, allowLoopback: true)
         _ = try endpoint.requestURL(path)
-        guard UUID(uuidString: id) != nil, body.count <= 2 << 20, ["POST", "PUT", "PATCH", "DELETE"].contains(method),
+        guard UUID(uuidString: id) != nil, sessionID.isEmpty || UUID(uuidString: sessionID) != nil, body.count <= 2 << 20, ["POST", "PUT", "PATCH", "DELETE"].contains(method),
               path.hasPrefix("/v1/camps/" + scope.campId + "/") || path == "/v1/profiles" else { throw CampCloudError.invalidResponse }
-        try execute("INSERT INTO outbox(id,scope,method,path,body,state,created) VALUES(?,?,?,?,?,'pending',?)", [.text(id), .text(scope.key), .text(method), .text(path), .blob(body), .integer(Int64(Date().timeIntervalSince1970 * 1000))])
+        try execute("INSERT INTO outbox(id,scope,method,path,body,state,created,session_id) VALUES(?,?,?,?,?,'pending',?,?)", [.text(id), .text(scope.key), .text(method), .text(path), .blob(body), .integer(Int64(Date().timeIntervalSince1970 * 1000)), .text(sessionID)])
         return id
     }
     func outbox(_ scope: CloudScope, pendingOnly: Bool = false, limit: Int = 100) throws -> [CloudOutboxItem] {
         guard (1...1000).contains(limit) else { throw CampCloudError.invalidResponse }
         let suffix = pendingOnly ? " AND state='pending'" : ""
-        return try rows("SELECT id,scope,method,path,body,state,error FROM outbox WHERE scope=?" + suffix + " ORDER BY created,rowid LIMIT ?", [.text(scope.key), .integer(Int64(limit))]) {
-            CloudOutboxItem(id: text($0, 0), scope: text($0, 1), method: text($0, 2), path: text($0, 3), body: blob($0, 4), state: text($0, 5), error: text($0, 6))
+        return try rows("SELECT id,scope,method,path,body,state,error,session_id FROM outbox WHERE scope=?" + suffix + " ORDER BY created,rowid LIMIT ?", [.text(scope.key), .integer(Int64(limit))]) {
+            CloudOutboxItem(id: text($0, 0), scope: text($0, 1), method: text($0, 2), path: text($0, 3), body: blob($0, 4), state: text($0, 5), error: text($0, 6), sessionID: text($0,7))
         }
     }
     func markOutbox(_ id: String, state: String, error: String = "") throws {
-        guard ["pending", "sending", "conflict", "failed"].contains(state) else { throw CampCloudError.cacheUnavailable }
+        guard ["pending", "sending", "waiting", "conflict", "failed"].contains(state) else { throw CampCloudError.cacheUnavailable }
         try execute("UPDATE outbox SET state=?,error=? WHERE id=?", [.text(state), .text(error), .text(id)])
     }
     func acknowledge(_ id: String) throws { try execute("DELETE FROM outbox WHERE id=?", [.text(id)]) }

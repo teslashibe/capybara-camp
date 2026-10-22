@@ -163,7 +163,7 @@ struct CloudRequestQueueView: View {
     var pending: [CloudOutboxItem] { cloud.pending.filter { $0.path.contains("/sessions/\(session.id)/") } }
     var body: some View {
         CampWorkerStatusView(worker: cloud.worker, sessionID: session.id, showStatus: false)
-        CloudStreamApprovals(live: cloud.live, canApprove: session.ownerUserId == cloud.credential?.actor.userId)
+        CloudStreamApprovals(live: cloud.live, cloud: cloud, session: session)
         if !items.isEmpty || !pending.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(items) { request in

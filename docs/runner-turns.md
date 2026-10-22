@@ -30,8 +30,9 @@ session owner can answer. Answers and steering are bound to the running request,
 provider request ID and, for approvals, the original event sequence. Pending
 control content is encrypted and erased when resolved. The CLI validates the
 actual provider decision and questions. Rejected approval answers can be
-corrected. The native cloud steering button is still pending; the server and
-runner transport support it.
+corrected. The native chat now exposes cloud steering through the same controls
+as local chat, with a durable outbox for steering and approval answers. See
+[cloud chat controls](cloud-controls.md) for delivery and recovery behavior.
 
 Terminal publication preserves response boundaries and accepted steering in
 conversation order. Output pages, events, transcript chunks and per-turn work
@@ -94,7 +95,7 @@ Kubernetes runtime and live provider behavior remain release gates. See
 [process isolation](process-isolation.md) for the exact boundary and required checks.
 
 The native [Run on controls](execution-locations.md) now prepare and assign a
-private cloud copy. Also pending: execution defaults and native cloud steering,
+private cloud copy. Also pending: execution defaults,
 reviewed transfers, cloud usage
 presentation, Git publication and actor attribution,
 real provider logins/turns with the Mac offline, and two-user cloud acceptance.

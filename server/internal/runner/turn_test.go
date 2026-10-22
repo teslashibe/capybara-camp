@@ -97,9 +97,15 @@ func runTurnFixture(provider, mode, record string) {
 					}
 				}
 				out(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": thread, "turnId": "active", "itemId": "reply", "delta": "Cloud reply"}})
-				if mode == "stall" {
+				if mode == "stall" || mode == "steer" {
 					continue
 				}
+				out(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": thread, "turn": map[string]any{"id": "active", "status": "completed"}}})
+				continue
+			case "turn/steer":
+				fixtureRecord(record, "steer")
+				out(map[string]any{"id": v["id"], "result": map[string]any{"turnId": "active"}})
+				out(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": thread, "turnId": "active", "itemId": "reply", "delta": " Steered reply"}})
 				out(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": thread, "turn": map[string]any{"id": "active", "status": "completed"}}})
 				continue
 			}
@@ -125,6 +131,25 @@ func runTurnFixture(provider, mode, record string) {
 		}
 	}
 	out(map[string]any{"type": "stream_event", "session_id": session, "event": map[string]any{"delta": map[string]any{"type": "text_delta", "text": "Cloud reply"}}})
+	if mode == "steer" {
+		interrupt := read()
+		if object(interrupt["request"])["subtype"] != "interrupt" {
+			os.Exit(4)
+		}
+		fixtureRecord(record, "steer")
+		out(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": interrupt["request_id"]}})
+		out(map[string]any{"type": "result", "session_id": session, "is_error": false, "result": "Cloud reply"})
+		direction := read()
+		if direction["type"] != "user" {
+			os.Exit(5)
+		}
+		out(direction)
+		out(map[string]any{"type": "stream_event", "session_id": session, "event": map[string]any{"delta": map[string]any{"type": "text_delta", "text": "Steered reply"}}})
+		out(map[string]any{"type": "result", "session_id": session, "is_error": false, "result": "Steered reply"})
+		for {
+			read()
+		}
+	}
 	if mode != "stall" {
 		out(map[string]any{"type": "result", "session_id": session, "is_error": false, "result": "Cloud reply"})
 	}
@@ -242,6 +267,56 @@ func TestRunnerApprovalChannelsBothProviders(t *testing.T) {
 				return e == nil && r.State == "completed"
 			})
 			stopWorker(t, cancel, done)
+		})
+	}
+}
+
+func TestRunnerSteeringReachesBothProviderProtocolsOnce(t *testing.T) {
+	for _, provider := range []string{"Codex", "Claude"} {
+		t.Run(provider, func(t *testing.T) {
+			f, _, w, record := turnFixture(t, provider, "steer")
+			r, err := f.store.CreateRequest(t.Context(), f.owner, w.CampID, w.SessionID, uuid.NewString(), camp.RequestInput{Prompt: "Initial direction"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cancel, done := startWorker(t, f.worker)
+			eventually(t, func() bool {
+				head, err := f.store.SessionStream(t.Context(), f.owner, w.CampID, w.SessionID)
+				return err == nil && head != nil && head.State == "started" && head.Seq >= 2
+			})
+			id := uuid.NewString()
+			input := camp.ControlInput{ID: id, Control: map[string]any{"type": "steer", "id": id, "text": "New direction"}}
+			for i := 0; i < 2; i++ {
+				if _, err = f.store.SendControl(t.Context(), f.owner, w.CampID, r.ID, input); err != nil {
+					t.Fatal(err)
+				}
+			}
+			eventually(t, func() bool {
+				out, err := f.store.ControlStatus(t.Context(), f.owner, w.CampID, r.ID, id)
+				if err != nil || out.State != "accepted" {
+					return false
+				}
+				current, err := f.store.Request(t.Context(), f.owner, w.CampID, r.ID)
+				return err == nil && current.State == "completed"
+			})
+			stopWorker(t, cancel, done)
+			raw, err := os.ReadFile(record)
+			if err != nil || strings.Count(string(raw), "steer\n") != 1 {
+				t.Fatal("control delivery was repeated", string(raw), err)
+			}
+			transcript, err := f.store.Transcript(t.Context(), f.owner, w.CampID, w.SessionID, 0, 0, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, message := range transcript.Messages {
+				if message.Role == "user" && message.Text == "New direction" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("accepted steering was lost from transcript")
+			}
 		})
 	}
 }

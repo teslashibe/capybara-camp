@@ -178,7 +178,9 @@ Returning an unused checkout to Local preserves the local draft and project.
 A used checkout requires the reviewed transfer feature, which is still pending;
 the current app blocks that move. The local runner implementation retains a
 separate checkout and provider history for each ticket and schedules work
-serially per account. Defaults, cloud steering and other unfinished behavior are tracked in
+serially per account. [Cloud controls](docs/cloud-controls.md) use the same
+steer, queue and stop actions as local chat, with durable delivery tracking.
+Defaults and other unfinished behavior are tracked in
 [execution locations](docs/execution-locations.md) and the delivery status.
 
 For operators, start with [self-hosting](docs/self-hosting.md), then the
@@ -271,6 +273,7 @@ Normal builds require HTTPS and use the Keychain.
 | [GitHub](docs/github.md) | GitHub App setup, repository authorization and checkouts |
 | [Execution locations](docs/execution-locations.md) | Run on Local/Cloud and transfer limits |
 | [Cloud provider turns](docs/runner-turns.md) | Streaming, recovery and pending live acceptance |
+| [Cloud chat controls](docs/cloud-controls.md) | Steering, queues, approvals and delivery recovery |
 | [Self-hosting](docs/self-hosting.md) | Kubernetes/K3s configuration, upgrades and backups |
 | [Runner provisioning](docs/runner-provisioning.md) | Isolated workers, grants and lifecycle |
 | [Process isolation](docs/process-isolation.md) | Linux security boundary and runtime checks |

@@ -325,3 +325,33 @@ retirement on handoff; the complete HTTP package then passed with the race
 detector. `go vet ./...` passed. A Go domain test confirms the same account can
 claim the next workspace after this return. This is not the final pair of
 complete code reviews or a live cloud acceptance run.
+
+## Cloud chat controls review
+
+The native walkthrough uses private synthetic Codex and Claude cloud tickets
+against the real Go API and disposable PostgreSQL. No provider login, model
+call or project command runs. The fixture deliberately drops the first control
+submission response after committing it.
+
+Computer use verified Command–Return steering, automatic recovery of the lost
+response, rejected-steering restoration without resending, Command–Shift–Return
+queueing, stop, and a queued turn completing. Claude's approval used the existing
+approval component; both providers showed their acknowledged direction in chat.
+The transcript retained accepted steering after completion. Reopening the app
+and reconnecting retained the saved conversations and notifications.
+
+This caught a native layout stall when the first cloud turn started. Sampling
+showed repeated SwiftUI minimum-size calculations. The chat now lays out inside
+its concrete viewport, and the same open/start/steer flows remained responsive.
+The control-status list is height-bounded and scrolls independently.
+
+Two additional corrections came from the walkthrough: an activity-only server
+update now moves a completed card into Done, and successful traffic clears a
+temporary offline badge. The final walkthrough showed both cloud cards in Done
+and High effort in an active chat from the reported stream settings.
+Captures are `build/ui-audit/cloud-steering.png` and
+`build/ui-audit/cloud-controls-completed.png`.
+
+This is one-Mac synthetic UI evidence. Complete cloud runtime settings across
+unopened cards, live provider controls, two-Mac operation, the full design audit
+and the release performance/soak gates remain open.

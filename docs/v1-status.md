@@ -13,12 +13,12 @@ and acceptance are separate milestones.
 | Shared Camps | Go/PostgreSQL auth, membership, sessions, events, requests, native cache/outbox and owner-Mac worker | Real independent users on two Macs, remaining permission/recovery cases, production deployment |
 | Onboarding | Automatic profile discovery before full import, optional Camp sign-in, owner-only cloud account setup, GitHub connections, projects, notifications, skip/resume | Default execution target; final onboarding validation after remaining services land |
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
-| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments, native Run on controls and private transcript copy, multi-ticket per-account scheduling, a shared request queue, provider subprocess consumption, event streaming, owner approval transport and credential revision fencing, mandatory Linux child-process isolation | Execution defaults and cloud steering, remaining signed-in recovery states, target-runtime isolation validation, reviewed transfers, reported runtime settings and usage states, live sandbox/network/login validation and disconnected-Mac execution |
+| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments, native Run on controls and private transcript copy, multi-ticket per-account scheduling, native steering/queue/stop controls, durable approval/control delivery, a shared request queue, provider subprocess consumption, event streaming and credential revision fencing, mandatory Linux child-process isolation | Execution defaults, remaining signed-in recovery states, target-runtime isolation validation, reviewed transfers, complete reported runtime settings and usage states, live sandbox/network/login/control validation and disconnected-Mac execution |
 | Git | Project repository links, local CLI project execution, owner-bound GitHub App authorization, native repository browsing, encrypted tokens, signed revocation, exact-commit and scoped read-token adapters, workspace records, exclusive claims and isolated runner checkouts with restart/cancellation recovery | Execution grants, Git actor attribution in execution, branch/push/PR recovery and live two-user GitHub validation |
 | Memory and skills | Approved Cortex/shared Markdown design | Actual native and Go integrations, provider/model consolidation, memory inspection, skill editing/version rollout and permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image and local development builds | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, Developer ID/notarization, universal V1 release and recorded website demo |
 
-Next: finish cloud controls, execution defaults and reviewed transfers, then memory/skills
+Next: finish execution defaults and reviewed transfers, then memory/skills
 and shared execution. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
@@ -56,6 +56,15 @@ database and HTTP packages passed again after the final query/cleanup review,
 along with vet. Migration checks preserve an existing schema-16 ready checkout
 when moving to schema 17. This is local automated evidence, not live cloud or
 two-Mac acceptance.
+
+Native cloud controls now use the durable outbox for steering and approval
+answers. Computer use verified both providers, response-loss recovery,
+rejected-prompt restoration, queues, stop, approvals and completed card states.
+It also found and corrected a chat layout stall. The final Go race/vet run
+passed with schema 18, and 84 native cloud checks plus execution and state suites
+passed. Runtime effort is shown from the open cloud stream; complete reporting
+across unopened cards remains in scope. See [cloud controls](cloud-controls.md).
+
 Local tests cover concurrency, limited database permissions, cleanup ordering
 and restart behavior. The runner image, database bootstrap and rendered
 manifests pass local checks. Live sandbox, storage, network and OAuth behavior
@@ -81,7 +90,7 @@ recorded implementation and acceptance evidence, not just an updated spec.
 2. **In progress — cloud workspaces and execution**: durable Git workspace jobs
    and the claim/token protocol, checkout worker, assignments, provider turns,
    streaming, approval transport, Linux child isolation and native location
-   controls are implemented; signed-in setup validation, cloud steering,
+   controls and durable cloud steering are implemented; remaining signed-in setup validation,
    recovery, Local/Cloud defaults and reviewed session transfers remain.
 3. **Pending — shared project capabilities**: Cortex consolidation and memory
    inspection, shared Markdown skills, Git publication and actor attribution,

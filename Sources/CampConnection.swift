@@ -14,7 +14,9 @@ import SwiftUI
     @Published var members: [CloudMember] = []
     @Published var sessions: [CloudSession] = []
     @Published var requests: [CloudRequest] = []
-    @Published var pending: [CloudOutboxItem] = []
+    @Published var pending: [CloudOutboxItem] = [] { didSet { controlsChanged?() } }
+    @Published private(set) var controlSending: Set<String> = [] { didSet { controlsChanged?() } }
+    var controlsChanged: (() -> Void)?
     @Published var selectedCampId = ""
     @Published var signedIn = false
 
@@ -41,6 +43,10 @@ import SwiftUI
     private var booted = false
     private var notificationTask: Task<Void, Never>?
     private var notificationsDirty = false
+    private var controlTask: Task<Void, Never>?
+    private var controlsDirty = false
+    private var flushRetryTask: Task<Void, Never>?
+    private var flushRetryDelay: Double = 1
     private var sessionIndex: [String: CloudSession] = [:]
     private var requestIndex: [String: CloudRequest] = [:]
     private var lastRenewal = Date.distantPast
@@ -51,7 +57,7 @@ import SwiftUI
         do { cache = try CampCache(directory: directory) }
         catch { self.error = "The local Camp cache could not be opened" }
     }
-    deinit { streamTask?.cancel(); publishTask?.cancel(); flushTask?.cancel(); notificationTask?.cancel() }
+    deinit { streamTask?.cancel(); publishTask?.cancel(); flushTask?.cancel(); notificationTask?.cancel(); controlTask?.cancel(); flushRetryTask?.cancel() }
 
     func restore() async {
         guard !booted else { return }; booted = true
@@ -117,6 +123,8 @@ import SwiftUI
     func selectCamp(_ id: String) async {
         guard let credential, let client, UUID(uuidString: id) != nil else { return }
         live.stop()
+        controlTask?.cancel(); controlTask = nil; controlsDirty = false; controlSending = []
+        flushRetryTask?.cancel(); flushRetryTask = nil; flushRetryDelay = 1
         streamTask?.cancel(); flushTask?.cancel(); publishTask?.cancel(); notificationTask?.cancel(); notificationTask = nil; notificationsDirty = false
         flushTask = nil; publishTask = nil
         let token = UUID(); generation = token; selectedCampId = id
@@ -140,7 +148,7 @@ import SwiftUI
             let token = generation
             let epoch = try await cache.epoch(scope)
             let cachedSessions = try await cache.sessions(scope), cachedRequests = try await cache.requests(scope)
-            let cachedPending = try await cache.outbox(scope)
+            let cachedPending = try await cache.outbox(scope, limit: 1000)
             let data = try await cache.metadata("snapshot:" + scope.key)
             guard self.scope == scope, generation == token else { return }
             cacheEpoch = epoch
@@ -180,6 +188,7 @@ import SwiftUI
         await loadCached(scope: scope)
         try await refreshNotifications(scope: scope, generation: token, live: false)
         worker.scan()
+        refreshControls()
     }
     private func startStream(scope: CloudScope, generation token: UUID) {
         streamTask?.cancel()
@@ -222,6 +231,8 @@ import SwiftUI
             guard UUID(uuidString: id) != nil else { throw CampCloudError.invalidResponse }
             try await cache.ingest(scope: scope, cursor: event.cursor, expectedEpoch: epoch)
             live.invalidate(id)
+            refreshControls()
+            status = "Connected to Camp"; error = ""
             return
         }
         var changedSession: CloudSession?, changedRequest: CloudRequest?, removed: (String, Int64)?
@@ -248,6 +259,7 @@ import SwiftUI
         }
         if event.kind == "transcript.updated", let id = event.payload.sessionId { transcriptChanged?(id) }
         if let id = event.payload.sessionId { live.invalidate(id) }
+        if event.kind.hasPrefix("request.") { refreshControls() }
         if event.kind == "planning.changed", let id = event.payload.planId { planningChanged?(id) }
         if event.kind == "notification.changed" || event.kind.hasPrefix("session.") || event.kind.hasPrefix("planning.") || event.kind.hasPrefix("member.") { scheduleNotifications(generation: token) }
         if event.payload.sessionId == nil && event.kind != "notification.changed" {
@@ -294,6 +306,8 @@ import SwiftUI
         }
     }
     private func clearVisible() {
+        flushRetryTask?.cancel(); flushRetryTask = nil
+        controlTask?.cancel(); controlTask = nil; controlsDirty = false; controlSending = []
         execution.attach(scope:nil,credential:nil,transport:nil)
         live.stop()
         sessions = []; projects = []; members = []; requests = []; pending = []
@@ -365,7 +379,7 @@ import SwiftUI
         let token = generation
         _ = try await cache.enqueue(scope: scope, method: "POST", path: "/v1/camps/\(scope.campId)/notifications/actions",
             body: CampWire.encoder().encode(CloudNotificationAction(ids: ids, action: action)), expectedEpoch: cacheEpoch)
-        let queued = try await cache.outbox(scope)
+        let queued = try await cache.outbox(scope, limit:1000)
         guard generation == token, self.scope == scope else { throw CancellationError() }
         pending = queued; flush()
     }
@@ -416,14 +430,14 @@ import SwiftUI
         guard !existing.contains(where: { $0.path==path && ["pending","sending"].contains($0.state) }) else { throw CampError.message("This project change is already waiting to sync") }
         for item in existing where item.path==path && ["failed","conflict"].contains(item.state) { try await cache.acknowledge(item.id) }
         _ = try await cache.enqueue(scope:scope,method:method,path:path,body:CampWire.body(body),expectedEpoch:epoch)
-        let values=try await cache.outbox(scope)
+        let values=try await cache.outbox(scope, limit:1000)
         guard self.scope==scope,generation==token else { throw CancellationError() }
         pending=values;flush()
     }
     func discardProjectChange(_ item: CloudOutboxItem) async {
         guard let scope,let cache,item.scope==scope.key,["failed","conflict"].contains(item.state),(item.path.contains("/projects") || item.path.hasSuffix("/project")) else { return }
         let token=generation
-        do { try await cache.acknowledge(item.id);let values=try await cache.outbox(scope);guard self.scope==scope,generation==token else{return};pending=values } catch { if generation==token { self.error=error.localizedDescription } }
+        do { try await cache.acknowledge(item.id);let values=try await cache.outbox(scope,limit:1000);guard self.scope==scope,generation==token else{return};pending=values } catch { if generation==token { self.error=error.localizedDescription } }
     }
     func invite(email: String, role: String) async -> String? {
         guard let scope, let client, let credential else { return nil }
@@ -444,7 +458,7 @@ import SwiftUI
         let refs = try JSONSerialization.jsonObject(with: CampWire.encoder().encode(sources))
         let body = try CampWire.body(["prompt": text, "model": model, "effort": tuning.effort, "speed": tuning.speed, "sources": refs])
         _ = try await cache.enqueue(scope: scope, method: "POST", path: "/v1/camps/\(scope.campId)/sessions/\(session.id)/requests", body: body, expectedEpoch: cacheEpoch)
-        pending = try await cache.outbox(scope); flush()
+        pending = try await cache.outbox(scope, limit:1000); flush()
     }
     func context(session: CloudSession, source: CloudSourceRef) async throws -> CloudTranscript {
         guard let scope, let client, let credential, session.campId == scope.campId,
@@ -458,23 +472,116 @@ import SwiftUI
         guard let scope, let cache else { throw CampCloudError.cacheUnavailable }
         let body = try CampWire.body(["stage": stage.rawValue, "expected_revision": session.revision])
         _ = try await cache.enqueue(scope: scope, method: "PATCH", path: "/v1/camps/\(scope.campId)/sessions/\(session.id)/board", body: body, expectedEpoch: cacheEpoch)
-        pending = try await cache.outbox(scope); flush()
+        pending = try await cache.outbox(scope, limit:1000); flush()
     }
     func queueAction(request: CloudRequest, action: String) async {
         guard let scope, let cache, ["approve", "cancel"].contains(action) else { return }
         do {
             _ = try await cache.enqueue(scope: scope, method: "POST", path: "/v1/camps/\(scope.campId)/requests/\(request.id)/actions", body: CampWire.body(["action": action]), expectedEpoch: cacheEpoch)
-            pending = try await cache.outbox(scope); flush()
+            pending = try await cache.outbox(scope, limit:1000); flush()
         } catch { self.error = error.localizedDescription }
+    }
+    func pendingControl(requestID: String, kind: String, providerID: String? = nil) -> Bool {
+        controlSending.contains(requestID) || pending.contains { item in
+            guard item.controlRequestID == requestID, item.controlPending, let value = item.cloudControl else { return false }
+            return value.control.type == kind && (providerID == nil || value.control.id == providerID)
+        }
+    }
+    func queueControl(session: CloudSession, head: CloudStreamHead, value: CloudControlEnvelope) async throws {
+        guard let scope, let cache, session.campId == scope.campId, session.ownerUserId == credential?.actor.userId,
+              session.executionLocation == "cloud", live.sessionID == session.id, live.head?.id == head.id,
+              head.state == "started", value.valid, !pendingControl(requestID: head.id, kind: value.control.type) else { throw CampError.message("This session cannot accept another control yet") }
+        let token = generation, epoch = cacheEpoch
+        controlSending.insert(head.id)
+        defer { if generation == token { controlSending.remove(head.id) } }
+        let saved = try await cache.outbox(scope, limit: 1000)
+        guard generation == token, self.scope == scope else { throw CancellationError() }
+        guard saved.filter({ $0.cloudControl != nil }).count < 64,
+              !saved.contains(where: { $0.controlRequestID == head.id && $0.controlPending && $0.cloudControl?.control.type == value.control.type }) else { throw CampError.message("Review the pending control before sending another") }
+        let body = try CampWire.encoder().encode(value)
+        guard body.count <= 96 << 10 else { throw CampError.message("This answer is too large to send") }
+        _ = try await cache.enqueue(scope: scope, method: "POST", path: "/v1/camps/\(scope.campId)/requests/\(head.id)/controls", body: body, id: value.id, sessionID: session.id, expectedEpoch: epoch)
+        let items = try await cache.outbox(scope, limit: 1000)
+        guard generation == token, self.scope == scope else { throw CancellationError() }
+        pending = items; flush()
+    }
+    func cancelRunning(session: CloudSession, head: CloudStreamHead) async {
+        guard let scope, let cache, session.campId == scope.campId, session.ownerUserId == credential?.actor.userId,
+              session.executionLocation == "cloud", live.sessionID == session.id, live.head?.id == head.id, head.running else { return }
+        let token = generation
+        do {
+            _ = try await cache.enqueue(scope: scope, method: "POST", path: "/v1/camps/\(scope.campId)/requests/\(head.id)/actions", body: CampWire.body(["action":"cancel"]), expectedEpoch: cacheEpoch)
+            let items = try await cache.outbox(scope, limit:1000)
+            guard generation == token else { return }; pending = items; flush()
+        } catch { if generation == token { self.error = error.localizedDescription } }
+    }
+    func discardControl(_ item: CloudOutboxItem) async -> Bool {
+        guard let scope, let cache, item.scope == scope.key, item.cloudControl != nil, !item.controlPending else { return false }
+        let token = generation
+        do {
+            try await cache.acknowledge(item.id)
+            let items = try await cache.outbox(scope, limit:1000)
+            guard generation == token else { return false }; pending = items; return true
+        } catch { if generation == token { self.error = error.localizedDescription }; return false }
+    }
+    func refreshControls() {
+        controlsDirty = true
+        guard controlTask == nil, let scope, let client, let credential, let cache else { return }
+        let token = generation
+        controlTask = Task { [weak self] in
+            defer { if self?.generation == token { self?.controlTask = nil } }
+            do {
+                while let self, self.controlsDirty, self.generation == token, !Task.isCancelled {
+                    self.controlsDirty = false
+                    for item in try await cache.outbox(scope, limit:1000) where item.state == "waiting" {
+                        guard let control = item.cloudControl, let requestID = item.controlRequestID else { continue }
+                        let value: CloudControlStatus
+                        do { value = try await client.get(CloudControlStatus.self, path: item.path + "/" + item.id, token: credential.token) }
+                        catch CampCloudError.server(let status, _) where status == 403 || status == 404 {
+                            guard self.generation == token else { return }
+                            try await cache.markOutbox(item.id,state:"failed",error:"Control acceptance is unavailable")
+                            continue
+                        }
+                        guard self.generation == token, !Task.isCancelled else { return }
+                        guard value.id == item.id, value.requestId == requestID, value.kind == control.control.type,
+                              ["pending","accepted","rejected","unconfirmed"].contains(value.state) else { throw CampCloudError.invalidResponse }
+                        if value.state == "accepted" { try await cache.acknowledge(item.id) }
+                        if value.state == "rejected" || value.state == "unconfirmed" {
+                            try await cache.markOutbox(item.id,state:"failed",error:value.state == "rejected" ? "The provider rejected this control" : "Provider acceptance is unconfirmed")
+                        }
+                    }
+                    let items = try await cache.outbox(scope, limit:1000)
+                    guard self.generation == token else { return }; self.pending = items
+                    self.flushRetryDelay = 1
+                }
+            } catch is CancellationError {} catch {
+                guard let self, self.generation == token else { return }
+                self.error = "Control status is waiting to reconnect"
+                self.scheduleFlushRetry(generation:token)
+            }
+        }
+    }
+    private func scheduleFlushRetry(generation token: UUID) {
+        guard generation == token, flushRetryTask == nil else { return }
+        let delay = flushRetryDelay; flushRetryDelay = min(15,delay * 2)
+        flushRetryTask = Task { [weak self] in
+            do { try await Task.sleep(for:.seconds(delay)) } catch { return }
+            guard let self, self.generation == token else { return }
+            self.flushRetryTask = nil; self.flush()
+        }
     }
     func flush() {
         guard flushTask == nil, let scope, let client, let credential, let cache else { return }
+        flushRetryTask?.cancel(); flushRetryTask = nil
         let token = generation
         let epoch = cacheEpoch
         flushTask = Task { [weak self] in
             defer { if self?.generation == token { self?.flushTask = nil } }
             do {
-                for item in try await cache.outbox(scope, pendingOnly: true) {
+                while true {
+                    let batch = try await cache.outbox(scope,pendingOnly:true)
+                    if batch.isEmpty { break }
+                    for item in batch {
                     guard !Task.isCancelled, self?.generation == token else { return }
                     try await cache.markOutbox(item.id, state: "sending")
                     do {
@@ -494,22 +601,32 @@ import SwiftUI
                             }
                         }
                         if item.path.contains("/planning/"),item.path.hasSuffix("/project"),let plan=try? CampWire.decoder().decode(CloudPlanningResult.self,from:data),plan.valid,self?.generation==token { self?.planningChanged?(plan.id) }
-                        try await cache.acknowledge(item.id)
+                        if item.controlRequestID != nil {
+                            guard let control = item.cloudControl,
+                                  let reply = try JSONSerialization.jsonObject(with:data) as? [String:Any], reply["id"] as? String == control.id else { throw CampCloudError.invalidResponse }
+                            try await cache.markOutbox(item.id, state:"waiting")
+                        } else { try await cache.acknowledge(item.id) }
                         if item.path == "/v1/camps/\(scope.campId)/notifications/actions", self?.generation == token { self?.scheduleNotifications(generation: token) }
                     } catch CampCloudError.server(let status, let code) where status == 409 || status == 400 || status == 404 || status == 403 {
-                        try await cache.markOutbox(item.id, state: status == 409 ? "conflict" : "failed", error: code)
+                        try await cache.markOutbox(item.id, state: status == 409 ? "conflict" : "failed", error: item.controlRequestID == nil ? code : "Control acceptance could not be confirmed")
                         if item.path == "/v1/camps/\(scope.campId)/notifications/actions", self?.generation == token { self?.scheduleNotifications(generation: token) }
+                    } catch CampCloudError.invalidResponse {
+                        try await cache.markOutbox(item.id,state:"failed",error:"The server returned an invalid receipt")
                     } catch {
                         try await cache.markOutbox(item.id, state: "pending")
                         throw error
                     }
+                    }
                 }
                 guard self?.generation == token else { return }
-                self?.pending = try await cache.outbox(scope); self?.schedulePublish(generation: token)
+                self?.pending = try await cache.outbox(scope, limit:1000)
+                self?.status = "Connected to Camp"; self?.error = ""
+                self?.schedulePublish(generation: token); self?.refreshControls()
             } catch {
                 guard self?.generation == token else { return }
                 self?.status = "Camp offline"; self?.error = error.localizedDescription
-                self?.pending = (try? await cache.outbox(scope)) ?? []
+                self?.pending = (try? await cache.outbox(scope, limit:1000)) ?? []
+                self?.scheduleFlushRetry(generation:token)
             }
         }
     }

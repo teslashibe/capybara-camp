@@ -9,6 +9,12 @@ import (
 )
 
 func (a *API) requestRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/camps/{camp}/requests/{request}/controls/{control}", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		out, err := a.Camps.ControlStatus(r.Context(), u, r.PathValue("camp"), r.PathValue("request"), r.PathValue("control"))
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
 	mux.HandleFunc("GET /v1/camps/{camp}/sessions/{session}/stream", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		out, err := a.Camps.SessionStream(r.Context(), u, r.PathValue("camp"), r.PathValue("session"))
 		if !fail(w, err) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 
@@ -116,7 +118,20 @@ func TestNativeFixtureServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	grants := seedNativeAccounts(t, store, actors[0])
-	server := httptest.NewServer(api.Handler())
+	handler := api.Handler()
+	if os.Getenv("CAMP_NATIVE_FIXTURE_CONTROLS") == "1" {
+		next := handler
+		var lost atomic.Bool
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/controls") && lost.CompareAndSwap(false, true) {
+				next.ServeHTTP(httptest.NewRecorder(), r)
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+	server := httptest.NewServer(handler)
 	defer server.Close()
 	data, err := json.Marshal(map[string]any{"url": server.URL, "camp_id": c.ID, "project_id": project.ID, "pid": os.Getpid(), "owner": actors[0].Email, "teammate": actors[1].Email})
 	if err != nil {
@@ -130,7 +145,7 @@ func TestNativeFixtureServer(t *testing.T) {
 	fixtureDone := make(chan struct{})
 	go func() {
 		defer close(fixtureDone)
-		serveFixtureProviderAccounts(fixtureContext, store, api.Git, actors[0], grants)
+		serveFixtureProviderAccounts(fixtureContext, store, api.Git, actors[0], grants, os.Getenv("CAMP_NATIVE_FIXTURE_CONTROLS") == "1")
 	}()
 	defer func() { stopFixture(); <-fixtureDone }()
 	stopped := make(chan os.Signal, 1)

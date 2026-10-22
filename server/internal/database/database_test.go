@@ -119,6 +119,10 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
  VALUES($1,$2,$3,$4,$5,$6,$7,3,$8,5,123,'preserved-user',7,5,'fixture/repo','main',$9,$10,'planning',1,1,'ready')`, workspace, camp, session, project, id, account, installation, connection, strings.Repeat("a", 40), "camp/"+session+"/"+workspace); err != nil {
 		t.Fatal(err)
 	}
+	controlID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO request_controls(id,request_id,provider_id,kind,input_hash,accepted_text,state) VALUES($1,$2,$4,'steer',$3,'Preserved direction','resolved')`, controlID, request, bytes.Repeat([]byte{19}, 32), controlID); err != nil {
+		t.Fatal(err)
+	}
 	if err = Migrate(ctx, u.String()); err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +131,10 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	}
 	if err = Ready(ctx, pool); err != nil {
 		t.Fatal(err)
+	}
+	var resolution string
+	if err = pool.QueryRow(ctx, `SELECT resolution FROM request_controls WHERE id=$1`, controlID).Scan(&resolution); err != nil || resolution != "accepted" {
+		t.Fatal("control resolution migration lost accepted direction", resolution, err)
 	}
 	var preparedState, preparedCommit string
 	if err = pool.QueryRow(ctx, `SELECT state,base_commit FROM ticket_workspaces WHERE id=$1`, workspace).Scan(&preparedState, &preparedCommit); err != nil || preparedState != "ready" || preparedCommit != strings.Repeat("a", 40) {

@@ -13,8 +13,9 @@ import (
 
 // Test binary only. No browser, network provider request or CLI is invoked.
 // This drives the real owner/runner API records for interactive native QA.
-func serveFixtureProviderAccounts(ctx context.Context, store *camp.Store, git *camp.GitStore, owner auth.Actor, grants map[string]camp.RunnerGrant) {
+func serveFixtureProviderAccounts(ctx context.Context, store *camp.Store, git *camp.GitStore, owner auth.Actor, grants map[string]camp.RunnerGrant, simulateControls bool) {
 	claims := map[string]string{}
+	turns := map[string]*nativeControlTurn{}
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -55,6 +56,9 @@ func serveFixtureProviderAccounts(ctx context.Context, store *camp.Store, git *c
 			}
 			if state.Action == "idle" {
 				prepareNativeWorkspace(ctx, git, grant)
+				if simulateControls {
+					turns[account.ID] = advanceNativeControls(ctx, git, grant, turns[account.ID])
+				}
 			}
 			if state.Login == nil {
 				continue

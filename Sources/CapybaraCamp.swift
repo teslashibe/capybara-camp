@@ -282,8 +282,24 @@ final class TranscriptWatch {
         get { selectedID.map { !enabledQueues.contains($0) } ?? true }
         set { guard let selectedID else { return }; pauseQueue(selectedID, newValue) }
     }
-    var readyToSteer: Bool { selected.flatMap { conversation($0)?.ready } ?? false }
-    var steering: Bool { selected.flatMap { conversation($0)?.steering } ?? false }
+    func controlsCloudTurn(_ session: CampSession) -> Bool {
+        guard let remote = cloudSessions[session.id], remote.executionLocation == "cloud",
+              remote.ownerUserId == cloud.credential?.actor.userId, cloud.live.sessionID == remote.id else { return false }
+        return cloud.live.head?.running == true
+    }
+    func chatRunning(_ session: CampSession) -> Bool { conversation(session) != nil || controlsCloudTurn(session) }
+    var readyToSteer: Bool {
+        guard let selected else { return false }
+        if controlsCloudTurn(selected), let head = cloud.live.head {
+            return head.state == "started" && cloud.requests.first(where:{$0.id == head.id})?.isPlanning != true
+        }
+        return conversation(selected)?.ready ?? false
+    }
+    var steering: Bool {
+        guard let selected else { return false }
+        if controlsCloudTurn(selected), let head = cloud.live.head { return cloud.pendingControl(requestID:head.id,kind:"steer") }
+        return conversation(selected)?.steering ?? false
+    }
     @Published var banner = ""
     @Published var sourceSheet = false
     @Published var sourceError = ""
@@ -521,6 +537,7 @@ final class TranscriptWatch {
             guard let self, self.selectedID == self.cloud.live.sessionID.map({ "camp:" + $0 }) else { return }
             self.objectWillChange.send()
         }
+        cloud.controlsChanged = { [weak self] in self?.objectWillChange.send() }
         planning.available = { [weak self] planner in
             guard let self else { return false }
             return !self.cloud.worker.usesPlanningProvider(planner.session.provider) && self.conversations.count + self.planning.activeCount + self.cloud.worker.activePlanningCount < 4 &&
@@ -580,7 +597,7 @@ final class TranscriptWatch {
         let imported = values.map { value in
             CampSession(id: "camp:" + value.id, sessionID: value.localSessionId, provider: value.provider, sourceID: "camp-profile:" + value.profileId, sourceLabel: value.profileLabel, root: "", title: value.title, cwd: names[value.projectId] ?? "Shared project", updated: value.updatedAt.timeIntervalSince1970, path: "", accountID: value.ownerUserId, archived: value.stage == "Done", model: value.model)
         }
-        for (id, value) in cloudSessions where value.revision > (previous[id]?.revision ?? 0) { stages[id] = Stage(rawValue: value.stage) ?? .ready }
+        for (id, value) in cloudSessions where previous[id]?.stage != value.stage || value.revision > (previous[id]?.revision ?? 0) { stages[id] = Stage(rawValue: value.stage) ?? .ready }
         let updatedSessions = (sessions.filter { !$0.isCloud || $0.isSharedPlan } + imported).sorted { $0.updated > $1.updated }
         if sessions != updatedSessions { sessions = updatedSessions }
         for run in conversations.values where run.references.contains(where: { reference in
@@ -615,6 +632,9 @@ final class TranscriptWatch {
     func modelLabel(_ s: CampSession) -> String { modelChoices[s.id] ?? (s.model.isEmpty ? "Session default" : s.model) }
     func reportedSettings(_ s: CampSession) -> ReportedModelSettings? {
         if let run = conversation(s) { return run.reportedSettings }
+        if let remote = cloudSessions[s.id], cloud.live.sessionID == remote.id, let head = cloud.live.head, head.running {
+            return ReportedModelSettings(model:head.model.isEmpty ? nil : head.model,effort:head.effort.isEmpty ? nil : head.effort,speed:head.speed.isEmpty ? nil : head.speed)
+        }
         let native = sharing.native(for: s.id) ?? s
         guard let live = activityFor(native), ["running", "waiting"].contains(live.state) else { return nil }
         return ReportedModelSettings(model: live.model.isEmpty ? nil : live.model, effort: live.effort, speed: live.speed)
@@ -1123,14 +1143,28 @@ final class TranscriptWatch {
         }
     }
     func stop() {
+        if let s = selected, controlsCloudTurn(s), let remote = cloudSessions[s.id], let head = cloud.live.head {
+            Task { await cloud.cancelRunning(session:remote,head:head) }; return
+        }
         guard let s = selected, let run = conversation(s) else { return }
         pauseQueue(run.session.id, true); run.stop()
     }
     func steerDraft() {
-        guard let s = selected, let run = conversation(s), !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard let s = selected, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard mentions.references(for: s.id).isEmpty else { banner = "Queue this prompt to attach new context after the current turn"; return }
+        if controlsCloudTurn(s), let remote = cloudSessions[s.id], let head = cloud.live.head {
+            let text = draft, id = UUID().uuidString.lowercased()
+            Task { do {
+                try await cloud.queueControl(session:remote,head:head,value:CloudControlEnvelope(id:id,control:.init(type:"steer",id:id,text:text)))
+                if selectedID == s.id, draft == text { draft = "" }
+                else if drafts[s.id] == text { drafts[s.id] = nil }
+            } catch { banner = error.localizedDescription } }
+            return
+        }
+        guard let run = conversation(s) else { return }
         do { try run.steer(draft); draft = "" } catch { banner = error.localizedDescription }
     }
+    func restoreControlDraft(_ text: String, for id: String) { restoreDraft(text,for:id) }
     private func restoreDraft(_ value: String, for id: String) {
         if selectedID == id { draft = draft.isEmpty ? value : value + "\n\n" + draft }
         else { let previous = drafts[id] ?? ""; drafts[id] = previous.isEmpty ? value : value + "\n\n" + previous }
@@ -1505,6 +1539,7 @@ struct ChatView: View {
     @State private var contextQuery = ""
     var currentChild: ChildSession? { store.children.first { $0.id == pickedChild?.id } }
     var body: some View {
+        GeometryReader { bounds in
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 if let session = store.selected {
@@ -1611,18 +1646,21 @@ struct ChatView: View {
                         if let conversation = store.conversation(s) { ConversationApprovalsView(conversation: conversation) }
                         if let remote = store.cloudSessions[s.id] { CloudRequestQueueView(cloud: store.cloud, session: remote) }
                         else { PromptQueueView(store: store, session: s) }
+                        if let remote = store.cloudSessions[s.id] {
+                            CloudControlQueueView(cloud:store.cloud,sessionID:remote.id) { text in store.restoreControlDraft(text,for:s.id) }
+                        }
                         TextEditor(text: $store.draft).font(.system(size: 13)).scrollContentBackground(.hidden).frame(minHeight: 64, maxHeight: 84).padding(8).background(.white).clipShape(RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(campInk.opacity(0.13)))
                         HStack(spacing: 10) {
-                            Text(s.isCloud ? (store.executionSession(s)?.executionLocation == "cloud" ? "Saved to Camp · Runs in Cloud with the selected account" : "Saved to Camp · Runs on the session owner's Mac after approval") : store.runningID == s.id ? "Steer now or queue for after this turn" : store.activityFor(s) != nil ? "Open in \(s.provider) · Camp queue waits until it is closed" : s.isPlan || store.sessionPermissions.grants[s.id] != nil ? "Uses \(s.sourceLabel) login · \(store.permissionSettings(s).summary)" : "Uses \(s.sourceLabel) login · Chat-only local preview")
+                            Text(store.chatRunning(s) ? "Steer now or queue for after this turn" : s.isCloud ? (store.executionSession(s)?.executionLocation == "cloud" ? "Saved to Camp · Runs in Cloud with the selected account" : "Saved to Camp · Runs on the session owner's Mac after approval") : store.activityFor(s) != nil ? "Open in \(s.provider) · Camp queue waits until it is closed" : s.isPlan || store.sessionPermissions.grants[s.id] != nil ? "Uses \(s.sourceLabel) login · \(store.permissionSettings(s).summary)" : "Uses \(s.sourceLabel) login · Chat-only local preview")
                                 .font(.system(size: 10)).foregroundStyle(campMuted).fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 8)
                             Button("@ Context") { contextQuery = ""; contextPicking = true }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(campGreen)
                                 .accessibilityLabel("Attach session context")
                                 .popover(isPresented: $contextPicking) { SessionContextPicker(store: store, destination: s, query: contextQuery) { contextPicking = false } }
-                            if store.runningID == s.id || store.activityFor(s) != nil {
+                            if store.chatRunning(s) || store.activityFor(s) != nil {
                                 Button("Queue") { store.enqueueDraft() }.disabled(store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).keyboardShortcut(.return, modifiers: [.command, .shift])
                             }
-                            if store.runningID == s.id {
+                            if store.chatRunning(s) {
                                 Button("Stop", role: .destructive) { store.stop() }
                                 Button(store.steering ? "Sending…" : "Steer") { store.steerDraft() }.buttonStyle(.borderedProminent).tint(campGreen)
                                     .disabled(!store.readyToSteer || store.steering || store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).keyboardShortcut(.return, modifiers: .command)
@@ -1635,6 +1673,8 @@ struct ChatView: View {
                     }.padding(20)
                 } else { Spacer(); Mascot(size: 120); Text("Choose a session to continue").foregroundStyle(campMuted); Spacer() }
             }.frame(maxWidth: .infinity)
+        }
+        .frame(width:bounds.size.width,height:bounds.size.height)
         }
         .task(id: store.selectedID) {
             pickedChild = nil

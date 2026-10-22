@@ -23,6 +23,58 @@ type RunnerControl struct {
 	Control map[string]any `json:"control"`
 }
 
+type ControlStatus struct {
+	ID        string `json:"id"`
+	RequestID string `json:"request_id"`
+	Kind      string `json:"kind"`
+	State     string `json:"state"`
+}
+
+// A successful submission is not proof that the provider accepted the input.
+// Expose the saved provider acknowledgement separately so native retries can
+// keep the same control ID across reconnects and app restarts.
+func (s *Store) ControlStatus(ctx context.Context, a auth.Actor, campID, requestID, id string) (ControlStatus, error) {
+	out := ControlStatus{ID: id, RequestID: requestID}
+	if !validID(id) || !validID(requestID) {
+		return out, ErrInput
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return out, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = s.lock(ctx, tx, a, campID, false); err != nil {
+		return out, err
+	}
+	r, err := loadRequest(ctx, tx, campID, requestID)
+	if err != nil {
+		return out, err
+	}
+	if r.OwnerUserID != a.UserID || r.ExecutionLocation != "cloud" {
+		return out, ErrDenied
+	}
+	if _, err = s.requestAccess(ctx, tx, r); err != nil {
+		return out, err
+	}
+	var storedState, resolution string
+	err = tx.QueryRow(ctx, `SELECT kind,state,resolution FROM request_controls WHERE id=$1 AND request_id=$2`, id, requestID).Scan(&out.Kind, &storedState, &resolution)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return out, ErrDenied
+	}
+	if err != nil {
+		return out, err
+	}
+	if resolution != "" {
+		out.State = resolution
+	} else {
+		out.State = "pending"
+		if storedState == "resolved" || oneOf(r.State, "completed", "failed", "cancelled", "outcome_unknown") {
+			out.State = "unconfirmed"
+		}
+	}
+	return out, nil
+}
+
 func (s *Store) cryptControl(id string, raw []byte, seal bool) ([]byte, error) {
 	cipher, err := s.receiptCipher()
 	if err != nil {
@@ -227,6 +279,9 @@ func (s *Store) settleControl(ctx context.Context, tx pgx.Tx, r Request, event m
 		return err
 	}
 	for _, i := range items {
+		if i.kind == "steer" && !oneOf(kind, "steerAccepted", "steerRejected") || i.kind == "approval" && !oneOf(kind, "approvalResolved", "approvalRejected") {
+			continue
+		}
 		text := ""
 		if i.kind == "steer" && kind == "steerAccepted" {
 			plain, e := s.cryptControl(i.id, i.raw, false)
@@ -239,7 +294,11 @@ func (s *Store) settleControl(ctx context.Context, tx pgx.Tx, r Request, event m
 			}
 			text, _ = data["text"].(string)
 		}
-		if _, err = tx.Exec(ctx, `UPDATE request_controls SET state='resolved',encrypted_input=NULL,accepted_text=$2 WHERE id=$1`, i.id, text); err != nil {
+		resolution := "rejected"
+		if oneOf(kind, "steerAccepted", "approvalResolved") {
+			resolution = "accepted"
+		}
+		if _, err = tx.Exec(ctx, `UPDATE request_controls SET state='resolved',encrypted_input=NULL,accepted_text=$2,resolution=$3 WHERE id=$1`, i.id, text, resolution); err != nil {
 			return err
 		}
 		if kind == "approvalRejected" {

@@ -223,8 +223,22 @@ func TestWorkspaceHTTPRequiresOwnerAndReplaysReceipt(t *testing.T) {
 	startBody, _ := json.Marshal(camp.RequestAction{Action: "start", LeaseToken: requestClaim})
 	call("POST", "/v1/camps/"+c.ID+"/requests/"+request.ID+"/actions", tokens[0], uuid.NewString(), startBody, 404)
 	call("POST", runnerPath+"/requests/"+request.ID+"/actions", grant.Token, uuid.NewString(), startBody, 200)
+	controlID := uuid.NewString()
+	controlBody, _ := json.Marshal(camp.ControlInput{ID: controlID, Control: map[string]any{"type": "steer", "id": controlID, "text": "Synthetic direction"}})
+	controlsPath := "/v1/camps/" + c.ID + "/requests/" + request.ID + "/controls"
+	call("POST", controlsPath, tokens[0], "", controlBody, 200)
+	call("GET", controlsPath+"/"+controlID, "", "", nil, 401)
+	call("GET", controlsPath+"/"+controlID, grant.Token, "", nil, 401)
+	call("GET", controlsPath+"/"+controlID, tokens[1], "", nil, 404)
+	var controlStatus camp.ControlStatus
+	if err = json.Unmarshal(call("GET", controlsPath+"/"+controlID, tokens[0], "", nil, 200), &controlStatus); err != nil || controlStatus.State != "pending" {
+		t.Fatal("control acceptance was fabricated", controlStatus, err)
+	}
 	finishBody, _ := json.Marshal(camp.RequestAction{Action: "finish", LeaseToken: requestClaim, Outcome: "completed", Evidence: "Fixture provider receipt"})
 	call("POST", runnerPath+"/requests/"+request.ID+"/actions", grant.Token, uuid.NewString(), finishBody, 200)
+	if err = json.Unmarshal(call("GET", controlsPath+"/"+controlID, tokens[0], "", nil, 200), &controlStatus); err != nil || controlStatus.State != "unconfirmed" {
+		t.Fatal("unacknowledged control was reported accepted", controlStatus, err)
+	}
 	localBody, _ := json.Marshal(camp.ExecutionInput{Location: "local", ExpectedEpoch: 2, ExpectedSessionRevision: session.Revision, ExpectedTranscriptRevision: session.TranscriptRevision})
 	call("PUT", executionPath, tokens[0], uuid.NewString(), localBody, 200)
 	raw = call("GET", readPath, tokens[0], "", nil, 200)
