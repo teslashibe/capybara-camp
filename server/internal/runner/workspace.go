@@ -135,6 +135,11 @@ func (w *Worker) workspaceTick(ctx context.Context, account camp.RunnerAccountSt
 			}
 			return w.turnTick(ctx, account, turn.Workspace)
 		}
+		if handled, err := w.handoffTick(ctx, account); err != nil {
+			return err
+		} else if handled {
+			return nil
+		}
 		if err = w.cleanupRetiredWorkspaces(ctx); err != nil {
 			return err
 		}

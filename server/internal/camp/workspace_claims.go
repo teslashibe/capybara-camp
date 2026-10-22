@@ -120,6 +120,7 @@ func (g *GitStore) NextRunnerWorkspace(ctx context.Context, token string) (*Work
  AND s.revision=w.source_revision AND s.project_id=w.project_id AND p.revision=w.project_revision AND NOT p.archived
  AND g.state='connected' AND g.epoch=w.git_epoch AND m.role<>'viewer'
  AND `+validWorkspaceTransferSQL+`
+ AND NOT EXISTS(SELECT 1 FROM transfer_handoffs h JOIN session_transfers t ON t.id=h.transfer_id JOIN ticket_workspaces w ON w.id=h.workspace_id WHERE h.session_id=s.id AND `+liveHandoffSQL+`)
  ORDER BY CASE WHEN requests.active THEN 0 WHEN w.state='preparing' THEN 1
  WHEN w.state='queued' OR requests.queued_at IS NOT NULL THEN 2 ELSE 3 END,
  COALESCE(requests.queued_at,w.created_at),w.id LIMIT 1`, state.InstallationID, state.Epoch).Scan(&id)

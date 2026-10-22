@@ -1,0 +1,194 @@
+package runner
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/teslashibe/capybara-camp/server/internal/camp"
+	"github.com/teslashibe/capybara-camp/server/internal/transfer"
+)
+
+func prepareSourceHandoff(t *testing.T, f fixture, g *camp.GitStore, source camp.Workspace) (camp.Handoff, camp.Session) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(f.worker.checkout.workdir(source), "README.md"), []byte("reviewed source contents\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := transfer.Capture(t.Context(), f.worker.checkout.workdir(source), []string{"README.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(manifest)
+	review, err := manifest.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := f.store.Session(t.Context(), f.owner, source.CampID, source.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upload, err := f.store.CreateTransfer(t.Context(), f.owner, source.CampID, source.SessionID, uuid.NewString(), camp.TransferInput{TargetLocation: "cloud", TargetAccountID: source.ProviderAccountID, ExpectedEpoch: session.ExecutionEpoch, ExpectedRevision: session.Revision, ExpectedTranscriptRevision: session.TranscriptRevision, ExpectedPermissionRevision: session.PermissionRevision, PayloadSHA256: payloadHash(raw), ReviewSHA256: review, PayloadBytes: len(raw)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.store.PutTransferChunk(t.Context(), f.owner, source.CampID, source.SessionID, upload.ID, 0, camp.TransferChunk{Data: raw, SHA256: payloadHash(raw)}); err != nil {
+		t.Fatal(err)
+	}
+	upload, err = f.store.CompleteTransfer(t.Context(), f.owner, source.CampID, source.SessionID, upload.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := g.CreateTransferWorkspace(t.Context(), f.owner, source.CampID, source.SessionID, upload.ID, uuid.NewString(), camp.WorkspaceInput{ProviderAccountID: source.ProviderAccountID, GitConnectionID: source.GitConnectionID, GitHubInstallationID: source.GitHubInstallationID, RepositoryID: source.RepositoryID, InstallationPage: 1, RepositoryPage: 1, Purpose: source.Purpose, ExpectedSessionRevision: session.Revision, ExpectedProjectRevision: source.ProjectRevision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := uuid.NewString()
+	if _, err = g.ClaimRunnerWorkspace(t.Context(), f.grant.Token, target.ID, claim); err != nil {
+		t.Fatal(err)
+	}
+	token, err := g.RunnerWorkspaceToken(t.Context(), f.grant.Token, target.ID, claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := f.worker.prepareTransfer(t.Context(), target, claim, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err = g.ReportRunnerWorkspace(t.Context(), f.grant.Token, target.ID, claim, camp.WorkspaceReport{State: "ready", BaseCommit: target.BaseCommit, Branch: target.Branch, TransferReceipt: receipt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := f.store.BeginHandoff(t.Context(), f.owner, source.CampID, source.SessionID, upload.ID, uuid.NewString(), camp.HandoffInput{WorkspaceID: target.ID, ExpectedWorkspaceRevision: target.Revision, ExpectedTransferRevision: upload.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h, session
+}
+
+func assertProviderExited(t *testing.T, record string) {
+	t.Helper()
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		if value, ok := strings.CutPrefix(line, "pid:"); ok {
+			pid, err := strconv.Atoi(value)
+			if err != nil || pid <= 1 {
+				t.Fatal("invalid fixture pid")
+			}
+			if err = syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+				t.Fatal("provider process remained alive", err)
+			}
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatal("unexpected provider launches", count)
+	}
+}
+
+func TestRunnerHandoffVerifiesStoppedSourceAndRecoversReceipts(t *testing.T) {
+	for _, tc := range []struct {
+		provider string
+		change   bool
+	}{{"Codex", false}, {"Claude", false}, {"Codex", true}} {
+		name := tc.provider
+		if tc.change {
+			name += " changed source"
+		}
+		t.Run(name, func(t *testing.T) {
+			finished := make(chan struct{}, 1)
+			var finishDropped, ackDropped atomic.Bool
+			var ackCalls atomic.Int32
+			f, g, source, record := turnFixture(t, tc.provider, "complete", func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if strings.HasSuffix(r.URL.Path, "/actions") && r.Method == "POST" {
+						var body camp.RequestAction
+						_ = json.NewDecoder(r.Body).Decode(&body)
+						raw, _ := json.Marshal(body)
+						r.Body = io.NopCloser(bytes.NewReader(raw))
+						if body.Action == "finish" && finishDropped.CompareAndSwap(false, true) {
+							next.ServeHTTP(discardResponse{}, r)
+							finished <- struct{}{}
+							<-r.Context().Done()
+							return
+						}
+					}
+					if strings.HasPrefix(r.URL.Path, "/v1/runner/handoffs/") && strings.HasSuffix(r.URL.Path, "/ack") {
+						ackCalls.Add(1)
+						if ackDropped.CompareAndSwap(false, true) {
+							next.ServeHTTP(discardResponse{}, r)
+							w.WriteHeader(503)
+							return
+						}
+					}
+					next.ServeHTTP(w, r)
+				})
+			})
+			request, err := f.store.CreateRequest(t.Context(), f.owner, source.CampID, source.SessionID, uuid.NewString(), camp.RequestInput{Prompt: "Finish source before transfer"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cancel, done := startWorker(t, f.worker)
+			select {
+			case <-finished:
+			case <-time.After(5 * time.Second):
+				t.Fatal("source did not finish")
+			}
+			stopWorker(t, cancel, done)
+			pending, err := f.worker.checkout.loadTurn()
+			if err != nil || pending == nil || pending.Phase != "finishing" {
+				t.Fatal("lost finish was not retained", err)
+			}
+			status, err := f.store.Request(t.Context(), f.owner, source.CampID, request.ID)
+			if err != nil || status.State != "completed" {
+				t.Fatal("source was not terminal", err)
+			}
+			assertProviderExited(t, record)
+			h, session := prepareSourceHandoff(t, f, g, source)
+			if tc.change {
+				if err = os.WriteFile(filepath.Join(f.worker.checkout.workdir(source), "README.md"), []byte("changed after review\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cancel, done = startWorker(t, f.worker)
+			want := "acknowledged"
+			if tc.change {
+				want = "invalidated"
+			}
+			eventually(t, func() bool {
+				value, err := f.store.Handoff(t.Context(), f.owner, source.CampID, source.SessionID, h.ID)
+				return err == nil && value.State == want
+			})
+			eventually(t, func() bool { value, err := f.worker.checkout.loadHandoff(); return err == nil && value == nil })
+			stopWorker(t, cancel, done)
+			if !tc.change && ackCalls.Load() != 2 {
+				t.Fatal("lost source acknowledgement was not replayed", ackCalls.Load())
+			}
+			if tc.change && ackCalls.Load() != 0 {
+				t.Fatal("changed files were acknowledged")
+			}
+			data, err := os.ReadFile(record)
+			if err != nil || strings.Count(string(data), "turn\n") != 1 {
+				t.Fatal("handoff repeated provider work", err)
+			}
+			current, err := f.store.Session(t.Context(), f.owner, source.CampID, source.SessionID)
+			if err != nil || current.ExecutionWorkspaceID != source.ID || current.ExecutionEpoch != session.ExecutionEpoch {
+				t.Fatal("source acknowledgement moved assignment", err)
+			}
+		})
+	}
+}

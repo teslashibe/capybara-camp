@@ -38,8 +38,8 @@ and reports the required file-verification receipt. The integration test uses
 the real Go API and Git transport with disposable PostgreSQL, drops download and
 completion responses, and verifies recovery without changing the source. Schema
 21 retains older uploads and adds the destination binding. Ordinary Run on
-assignment rejects these workspaces until the final handoff exists. Source
-locking, complete history/commit migration and native transfer review remain open.
+assignment rejects these workspaces until the final handoff exists. Native source
+verification, complete history/commit migration and transfer review remain open.
 The targeted upload, staging and runner tests pass, including an abrupt
 staging-process exit and recovery, owner-only access, stale snapshots, concurrent
 quotas and migration retention. Native end-to-end transfer and deployed Linux
@@ -52,12 +52,18 @@ The server handoff protocol now adds an exclusive five-minute source hold,
 blocks new prompts and assignment changes, and accepts source-bound acknowledgements
 of the reviewed payload. Existing queued or uncertain work prevents a hold.
 Expiry, cancellation and source drift release the guard without changing the
-execution epoch. Native/cloud source shutdown and file-verification wiring,
-history migration and the final assignment commit remain open; a server
-acknowledgement alone does not prove a CLI has stopped.
+execution epoch. A server acknowledgement alone does not prove a CLI has stopped.
 The handoff HTTP and PostgreSQL tests, full Go race suite and vet pass at schema
 22. They cover source identity, exclusive holds, expiry, queue preservation and
 release without an assignment change.
+
+The cloud source worker now reconciles its terminal turn, verifies the reviewed
+source files and acknowledges the handoff under a durable claim. Tests for both
+provider protocols confirm the actual fixture processes have exited, recover
+lost finish and handoff responses, and reject changed files without starting
+another model turn. Native source integration, history migration and the final
+assignment commit remain open. The complete Go race suite, vet and Linux command
+build pass with this integration at schema 22.
 
 The native account form and synthetic provider walkthrough now pass locally.
 The Go controller provisions per-installation workers, renews managed grants,

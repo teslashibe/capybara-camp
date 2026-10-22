@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -45,6 +46,7 @@ func fixtureRecord(path, value string) {
 }
 func runTurnFixture(provider, mode, record string) {
 	fixtureRecord(record, "process")
+	fixtureRecord(record, fmt.Sprintf("pid:%d", os.Getpid()))
 	decoder := json.NewDecoder(os.Stdin)
 	decoder.UseNumber()
 	encoder := json.NewEncoder(os.Stdout)

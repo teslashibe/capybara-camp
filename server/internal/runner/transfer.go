@@ -118,22 +118,31 @@ func (w *Worker) downloadTransfer(ctx context.Context, workspace camp.Workspace,
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return metadata, nil, ErrState
 	}
+	raw, err := w.client.transferPayload(ctx, base, claim, metadata)
+	return metadata, raw, err
+}
+
+func (c *client) transferPayload(ctx context.Context, base, claim string, metadata camp.Transfer) ([]byte, error) {
+	if metadata.PayloadBytes < 2 || metadata.PayloadBytes > transfer.MaxWireBytes || metadata.ChunkBytes != camp.TransferChunkBytes || metadata.UploadedBytes != metadata.PayloadBytes {
+		return nil, ErrState
+	}
+	input := map[string]string{"claim_id": claim}
 	raw := make([]byte, 0, metadata.PayloadBytes)
 	for index := 0; len(raw) < metadata.PayloadBytes; index++ {
 		var part camp.TransferChunk
-		if err := w.client.call(ctx, "POST", base+"/chunks/"+strconv.Itoa(index), input, &part); err != nil {
-			return metadata, nil, err
+		if err := c.call(ctx, "POST", base+"/chunks/"+strconv.Itoa(index), input, &part); err != nil {
+			return nil, err
 		}
 		expected := min(camp.TransferChunkBytes, metadata.PayloadBytes-len(raw))
 		if len(part.Data) != expected || payloadHash(part.Data) != part.SHA256 {
-			return metadata, nil, ErrState
+			return nil, ErrState
 		}
 		raw = append(raw, part.Data...)
 	}
 	if payloadHash(raw) != metadata.PayloadSHA256 {
-		return metadata, nil, ErrState
+		return nil, ErrState
 	}
-	return metadata, raw, nil
+	return raw, nil
 }
 
 func (w *Worker) prepareTransfer(ctx context.Context, workspace camp.Workspace, claim string, token camp.RunnerWorkspaceToken) (*transfer.StageReceipt, error) {

@@ -32,9 +32,6 @@ func (g *GitStore) lockExecution(ctx context.Context, tx pgx.Tx, token, workspac
 	if session.ExecutionLocation != "cloud" || session.ExecutionWorkspaceID != workspaceID || session.ExternalOwner {
 		return l, session, ErrDenied
 	}
-	if err = requireUnheldSession(ctx, tx, session.ID); err != nil {
-		return l, session, err
-	}
 	return l, session, nil
 }
 
@@ -50,6 +47,9 @@ func (g *GitStore) ClaimRunnerRequest(ctx context.Context, token, workspaceID, c
 	defer tx.Rollback(ctx)
 	l, session, err := g.lockExecution(ctx, tx, token, workspaceID)
 	if err != nil {
+		return nil, err
+	}
+	if err = requireUnheldSession(ctx, tx, session.ID); err != nil {
 		return nil, err
 	}
 	if err = s.reapCamp(ctx, tx, l.value.CampID); err != nil {

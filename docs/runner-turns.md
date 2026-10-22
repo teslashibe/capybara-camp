@@ -75,6 +75,14 @@ uses the existing preparation claim to authorize downloads and requires a
 verified staging receipt. These destinations cannot execute through ordinary
 Run on assignment; the final session handoff is still pending.
 
+For a source handoff, the cloud worker first reconciles any saved terminal
+turn receipt. Provider calls have closed and joined before that journal is
+cleared. It then claims the handoff, verifies the reviewed source files and
+acknowledges their hashes. The claim survives response loss and every retry
+rechecks the source. Held sessions are excluded from new work, while terminal
+receipt reconciliation remains available. The native source path and final
+assignment commit are still pending.
+
 Schema 17 permits multiple ready workspaces per installation while retaining a
 unique preparing workspace. It adds request/workspace scheduling indexes and
 preserves existing prepared checkouts. Upgrade the API and every runner with

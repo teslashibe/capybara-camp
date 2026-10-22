@@ -282,8 +282,18 @@ against the manifest before posting to `/ack`:
 The server validates the source identity, claim, hashes and current snapshots.
 Repeating the same acknowledgement returns its existing result. The `stopped`
 field is a declaration from the authenticated source client; the API does not
-itself stop a CLI. Wiring that stop/verification sequence into the native client
-and cloud worker remains required before this becomes a complete handoff.
+itself stop a CLI. The cloud worker now supplies that declaration only after
+reconciling its saved turn, verifying that no active turn journal remains, and
+checking the selected source files against the manifest. The native source
+client still needs this stop/verification integration.
+
+Cloud handoff claims are saved in a private journal before submission. The
+worker rechecks source files when retrying an acknowledgement, including after
+a lost response. A changed file rejects the handoff. Completed turn receipts
+remain readable and replayable during a hold, so a lost finish response cannot
+prevent the worker from reaching an idle state. New turns remain blocked, and
+the scheduler skips held sessions. The source stays assigned until the separate
+final commit is implemented and accepted.
 
 The owner reads status at
 `GET /v1/camps/{camp}/sessions/{session}/handoffs/{handoff}` and releases it by
@@ -296,8 +306,8 @@ history migration operation yet.
 
 The agreed transfer flow still requires:
 
-1. Wire source clients to the handoff hold, stop and verify their real provider
-   instances, and acknowledge their terminal state without losing queued work
+1. Wire the native source client to the handoff hold, close and verify its
+   provider instance, and acknowledge terminal state without losing queued work
 2. Transfer transcript, child-session and attachment provenance, including
    provider continuation and commits not available from the remote repository
 3. Native conflict review and the complete base-repository credential policy,
@@ -317,7 +327,7 @@ local-client ownership boundaries.
 cd server
 go test -race ./internal/transfer
 # With CAMP_TEST_DATABASE_URL pointing to a disposable PostgreSQL database:
-go test -race -run 'TestTransfer|TestWorkerStagesTransfer|TestWorkspaceHTTP|TestMigration' \
+go test -race -run 'TestTransfer|TestWorkerStagesTransfer|TestRunnerHandoff|TestWorkspaceHTTP|TestMigration' \
   ./internal/camp ./internal/httpapi ./internal/database ./internal/runner
 go vet ./internal/transfer ./internal/camp ./internal/httpapi
 ```
@@ -337,4 +347,8 @@ real Git HTTP fixture. It drops chunk and completion responses, verifies one
 destination checkout and receipt replay, and confirms the source stays intact.
 Handoff tests cover original-device/source-installation access, exclusive holds,
 idempotent acknowledgement, queue preservation, expiry, release and source drift.
-They validate the server protocol, not physical CLI shutdown.
+The source-runner tests use both provider protocol fixtures, verify their actual
+subprocesses have exited, recover a lost finish response during a hold, and retry
+a lost handoff acknowledgement. Changed source files are rejected without
+starting another provider turn. Live provider and native-source acceptance
+remain separate gates.

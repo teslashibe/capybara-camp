@@ -214,8 +214,12 @@ The Go API includes encrypted, resumable uploads for reviewed file-transfer
 manifests. An owner-authorized Cloud destination job connects the upload to the
 runner, stages files in a private checkout and validates its receipt. These are
 internal parts of the unfinished transfer flow: an upload alone does not move
-the session or apply files. See the [transfer contract](docs/transfer-payload.md)
-for ownership, limits, recovery, and the remaining destination/handoff work.
+the session or apply files. The source cloud runner can now verify an idle
+provider and the reviewed files under a temporary session hold. It retries lost
+acknowledgements without restarting the provider. Native source verification,
+complete history migration and the final assignment change remain unfinished.
+See the [transfer contract](docs/transfer-payload.md) for ownership, limits,
+recovery and the remaining handoff work.
 
 For operators, start with [self-hosting](docs/self-hosting.md), then the
 [runner provisioning guide](docs/runner-provisioning.md). The repository includes
