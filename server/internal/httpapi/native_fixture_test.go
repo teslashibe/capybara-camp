@@ -118,6 +118,9 @@ func TestNativeFixtureServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	grants := seedNativeAccounts(t, store, actors[0])
+	if os.Getenv("CAMP_NATIVE_FIXTURE_HISTORY") == "1" {
+		seedNativeTransferHistory(t, store, api.Git, actors[0], c.ID, project, grants, directory)
+	}
 	if os.Getenv("CAMP_NATIVE_FIXTURE_IMPLEMENTATION") == "1" {
 		// The synthetic executor owns a real fixture device row. Native sign-in
 		// still creates an independent device with its own credential.

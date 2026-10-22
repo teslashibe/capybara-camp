@@ -683,6 +683,45 @@ Destination checkout preparation, history/attachments and the local ownership
 handoff below need native integration and acceptance. Commits absent from the
 remote repository remain a separate migration requirement.
 
+## Native history download
+
+`CampTransferHistory` downloads the parent's transcript and every complete,
+non-removed child at one reviewed parent revision. The child catalog, each page
+and the final archive must match that revision and its permission revision.
+Incomplete children stop the download. Message IDs, ordinals, child provenance,
+model, effort and speed are retained; child messages stay separate from the parent.
+
+Each advance saves one page and its cursor atomically in the owner/Camp-scoped
+SQLite cache. The journal contains page hashes and byte counts. Lost replies can
+repeat a read; restarts reuse saved pages. A new sign-in for the same owner can
+resume without adopting another owner's cache. Cancellation or clearing the Camp
+removes pages and fences in-flight saves. Version checks reject stale writers.
+
+Returning an archive rechecks every page hash and cursor, rejects duplicate IDs
+across pages, verifies that the child catalog is complete, and fetches the current
+authorized session before and after assembly.
+Changed ownership, execution assignment, transcript or permissions requires a new
+review. Offline or rejected authorization cannot release cached history to the
+installer. The archive includes its server origin and source session identity.
+
+Downloads use 120-message pages, at most 512 children, 2,000 messages and 8 MiB of
+text per conversation, and 32 MiB of stored pages per transfer. Exceeding a limit
+fails explicitly without truncation. The downloader owns no timer or provider
+process. Destination history installation, attachments and native continuation
+still need integration; a complete downloaded archive does not grant execution.
+
+Run the native downloader against disposable PostgreSQL and the real local API:
+
+```sh
+CAMP_NATIVE_FIXTURE_HISTORY=1 tools/test-native-api.sh CampTransferHistoryTests NativeTransferHistoryAPITests
+```
+
+The fixture seeds 260 parent and 250 child messages for each provider, prepares
+synthetic cloud assignments, then checks download recovery on a second device,
+private-history denial for another user and changed permissions. Git and provider
+accounts are synthetic; no model turn runs. Fixture credentials and caches are
+removed on exit.
+
 ## Local destination receipts
 
 Schema 35 extends the existing source-hold protocol to a local destination.

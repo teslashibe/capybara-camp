@@ -32,4 +32,5 @@ if [ ! -f "$FIXTURE_DIR/fixture.json" ]; then
   echo "Timed out starting the native API fixture" >&2
   exit 1
 fi
-CAMP_NATIVE_API_FIXTURE="$FIXTURE_DIR" bash test.sh NativeImplementationAPITests
+if [ "$#" -eq 0 ]; then set -- NativeImplementationAPITests; fi
+CAMP_NATIVE_API_FIXTURE="$FIXTURE_DIR" bash test.sh "$@"

@@ -299,6 +299,10 @@ continuation approval. A fresh source stop proof then moves the same ticket to
 the selected local profile while preserving its shared parent/subagent history.
 Native checkout/history installation and the reverse-transfer review remain open;
 this backend path does not yet provide a complete Cloud-to-Local journey.
+The native history downloader preserves pinned parent and subagent messages in a
+resumable local cache, with integrity and permission checks before it returns an
+archive. Real local API tests cover both providers; installing that archive into
+the destination remains part of the unfinished transfer flow.
 The native publisher includes saved subagent histories with a shared or private
 Camp copy. Child transcripts stay under the parent's permissions and have their
 own message IDs and paged history. The sidebar refreshes after child updates,

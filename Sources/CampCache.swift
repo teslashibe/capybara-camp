@@ -163,6 +163,44 @@ actor CampCache {
         guard UUID(uuidString:id) != nil else {throw CampCloudError.invalidResponse}
         try transaction {try checkEpoch(scope,expectedEpoch);try setMetadata("transfer-cancel:"+scope.key,Data(id.utf8))}
     }
+    func saveTransferHistory(_ value: TransferHistoryJournal, scope: CloudScope, expectedEpoch: Int64, previousRevision: Int64?, page: Data? = nil, streamID: String? = nil, pageIndex: Int? = nil) throws {
+        let raw=try CampWire.encoder().encode(value)
+        guard UUID(uuidString:value.id) != nil, raw.count<=2<<20, value.session.campId==scope.campId,
+              value.session.ownerUserId==scope.userId else { throw CampCloudError.invalidResponse }
+        try transaction {
+            try checkEpoch(scope,expectedEpoch)
+            let key="transfer-history:"+scope.key
+            if let previousRevision {
+                guard let saved=try metadata(key) else { throw CancellationError() }
+                let old=try CampWire.decoder().decode(TransferHistoryJournal.self,from:saved)
+                guard old.id==value.id, old.revision==previousRevision, value.revision==previousRevision+1,
+                      let page, page.count<=2<<20, let streamID, UUID(uuidString:streamID) != nil,
+                      let pageIndex, pageIndex>=0, pageIndex<2000 else { throw CampCloudError.invalidResponse }
+                let pageKey="transfer-history-page:"+scope.key+":"+value.id+":"+streamID+":"+String(pageIndex)
+                guard try metadata(pageKey)==nil else { throw CampCloudError.invalidResponse }
+                try setMetadata(pageKey,page)
+            } else {
+                guard try metadata(key)==nil, value.revision==1, page==nil, value.storedBytes==0,
+                      value.streams.allSatisfy({$0.pages==0 && !$0.complete}) else { throw CampCloudError.invalidResponse }
+            }
+            try setMetadata(key,raw)
+        }
+    }
+    func transferHistoryPage(scope: CloudScope, id: String, stream: String, index: Int) throws -> Data? {
+        guard UUID(uuidString:id) != nil, UUID(uuidString:stream) != nil, (0..<2000).contains(index) else { throw CampCloudError.invalidResponse }
+        return try metadata("transfer-history-page:"+scope.key+":"+id+":"+stream+":"+String(index))
+    }
+    func discardTransferHistory(scope: CloudScope, id: String, expectedEpoch: Int64) throws {
+        try transaction {
+            try checkEpoch(scope,expectedEpoch)
+            let key="transfer-history:"+scope.key
+            guard let raw=try metadata(key) else { return }
+            let old=try CampWire.decoder().decode(TransferHistoryJournal.self,from:raw)
+            guard old.id==id else { throw CancellationError() }
+            try execute("DELETE FROM metadata WHERE key=?",[.text(key)])
+            try execute("DELETE FROM metadata WHERE key LIKE ?",[.text("transfer-history-page:"+scope.key+":"+id+":%")])
+        }
+    }
     func saveWorkspaceExport(_ value: WorkspaceExportJournal?, scope: CloudScope, expectedEpoch: Int64, initial: Bool = false, discardingKey: String? = nil) throws {
         try transaction {
             try checkEpoch(scope, expectedEpoch)
@@ -599,6 +637,8 @@ actor CampCache {
             try execute("DELETE FROM metadata WHERE key=?", [.text("transfer-review:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("transfer-cancel:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("workspace-export:" + scope.key)])
+            try execute("DELETE FROM metadata WHERE key=?", [.text("transfer-history:" + scope.key)])
+            try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-history-page:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("workspace-export-chunk:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-payload:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("child-epoch:" + scope.key + ":%")])

@@ -69,6 +69,29 @@ retains its approved sandbox/approval settings (`build/local-handoff-permissions
 Vet, Linux command builds and the staged secret scan pass. No native UI or live
 provider acceptance is implied by these backend checks.
 
+The native reverse-transfer history downloader now saves complete, pinned parent
+and child pages in a separate owner/Camp-scoped cache journal. It retains message
+IDs, ordering, child provenance and recorded model settings. Interrupted reads
+resume from saved pages; cache erasure fences late writes. Archive assembly
+verifies hashes, cursors, child completeness and current source authority. It
+refuses changed permissions and explicit size-limit violations without truncation.
+
+Native download/export/child-cache/transfer regression tests pass
+(`build/transfer-history-native-tests.log`). The real local API/PostgreSQL journey
+also passes for Codex and Claude, with 260 parent and 250 child messages each,
+a second device login, teammate denial for private history and changed permissions
+(`build/transfer-history-real-api.log`). The fixture's provider/Git accounts are
+synthetic and no model turn runs. The downloaded archive still needs destination
+installation, attachment handling, review UI integration and live continuation;
+these tests do not complete the full transfer gate.
+
+The final native run also verifies the pinned child catalog before archive
+assembly, rejecting a corrupted journal that omits a child. Downloader, real API,
+export, child-cache and transfer suites pass together
+(`build/transfer-history-final-native.log`). Go fixture compilation/vet, shell
+checks and the staged secret scan pass. Fixture cleanup removes its temporary
+database, credentials and downloaded histories.
+
 Cloud source inspection and selected-file capture are now implemented at schema
 34. The owner creates a bounded export; only its assigned runner can claim it.
 The runner captures its isolated Git checkout, excludes credentials and uploads
