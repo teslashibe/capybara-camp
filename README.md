@@ -351,7 +351,14 @@ dispatcher. Its support directory is isolated from the user's sessions.
 `tools/test-server.sh` requires Docker and starts disposable
 PostgreSQL for Go race tests and vet; it removes the container on exit. An explicit
 `CAMP_TEST_DATABASE_URL` uses isolated schemas in that test database instead.
-Never point it at production. `tools/test-processguard.sh` exercises the required
+Never point it at production. Its two-account HTTP journey signs in independent
+users through the real OTP endpoints with a captured test mailbox, saves separate
+device credentials, joins a Camp, shares a session, obtains owner approval and
+replays events after restarting the API. It checks private-session isolation,
+idempotent prompt retries and membership/device revocation. PostgreSQL and HTTP
+are real; worker completion is synthetic and no provider is called. Native
+client, live-provider and two-Mac/cloud acceptance remain separate checks.
+`tools/test-processguard.sh` exercises the required
 Linux process boundary; on macOS it uses Docker.
 `tools/test-release.sh` checks notarization recovery and packaging with synthetic
 Apple tools. It needs no certificate, Apple login or provider account.

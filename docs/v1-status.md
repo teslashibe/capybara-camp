@@ -33,6 +33,16 @@ credentials and isolated native client state against the local API for
 collaboration, permissions, replay and ownership tests. Those checks supplement
 the final two-Mac/cloud acceptance; they do not replace it.
 
+The two-account HTTP journey now passes against disposable PostgreSQL with the
+real authentication and API handlers. Separate clients sign in through captured
+OTP email, persist independent device credentials, join a Camp, publish shared
+and private sessions, route a prompt through owner approval, restart the API and
+replay events from the saved cursor. Private events remain hidden; retries before
+and after completion keep one request. Membership removal blocks reads, replay
+and receipt reuse; logout revokes the member's device. The race-enabled test
+and Go vet pass (`build/two-client-api-tests.log`). Worker completion is synthetic;
+this is API integration evidence, not native two-client or live-provider acceptance.
+
 October 22 native Save to Camp review now passes its focused local API
 walkthrough. The actual Go/PostgreSQL API received three synthetic planning
 revisions, quoted context and six implementation messages with two saved
