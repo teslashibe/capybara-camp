@@ -62,13 +62,14 @@ struct PlanningModelMenu: View {
     let id: String
     let version: LocalPlanVersion
     let slot: Int
+    var expanded = false
     var body: some View {
         let p = version.planners[slot]
         let models = store.availableModels(p.session)
         ModelSettingsMenu(provider: p.session.provider, title: "\(p.session.provider) planner", sessionModel: p.session.model,
             modelLabel: p.model.isEmpty ? "Session default" : p.model, models: models,
             caps: models.first { $0.id == p.model } ?? ModelOption(id: p.model, label: p.model), choice: p.tuning,
-            locked: !version.editable, context: "Model for this planning revision",
+            locked: !version.editable, expanded: expanded, context: "Model for this planning revision",
             selectModel: { store.planModel(id, slot: slot, model: $0) },
             tune: { store.planTuning(id, slot: slot, effort: $0, speed: $1) })
     }
@@ -80,7 +81,7 @@ struct PlanningCard: View {
     let id: String
     var body: some View {
         if let plan = planning.ticket(id) {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     ProviderMark(provider: "Planning", size: 17)
                     Text("Planning").font(.system(size: 10, weight: .medium)).foregroundStyle(campMuted)
@@ -94,7 +95,7 @@ struct PlanningCard: View {
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Plan actions for \(plan.title)")
                 }
                 Button { store.open(plan.session) } label: {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 7) {
                         Text(plan.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading)
                             .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34, alignment: .topLeading)
                         Label(store.projectSummary(plan.session), systemImage: "folder").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
@@ -237,7 +238,7 @@ struct PlanningWorkspace: View {
                     ForEach(profiles[planner.session.provider] ?? [planner.session]) { source in Text(source.sourceLabel).tag(source.id) }
                 }.font(.system(size: 11))
             } else { Text(planner.session.sourceLabel).font(.system(size: 11)).foregroundStyle(campMuted) }
-            PlanningModelMenu(store: store, id: id, version: version, slot: slot)
+            PlanningModelMenu(store: store, id: id, version: version, slot: slot, expanded: true)
             Divider()
             ScrollViewReader { proxy in
                 ScrollView {

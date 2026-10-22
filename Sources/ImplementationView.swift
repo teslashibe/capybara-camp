@@ -24,7 +24,7 @@ struct ImplementationSetupView: View {
                     ModelSettingsMenu(provider: executor.session.provider, title: "Implementation", sessionModel: executor.session.model,
                         modelLabel: executor.model.isEmpty ? "Session default" : executor.model, models: models,
                         caps: models.first { $0.id == executor.model } ?? ModelOption(id: executor.model, label: executor.model),
-                        choice: executor.tuning, locked: busy || plan.implementation?.active == true, context: "Model for implementation",
+                        choice: executor.tuning, locked: busy || plan.implementation?.active == true, expanded: true, context: "Model for implementation",
                         selectModel: { model in planning.editExecutor(id) { p in p.tuningByModel[p.model] = p.tuning; p.model = model.isEmpty ? p.session.model : model; p.tuning = p.tuningByModel[p.model] ?? ModelTuning() } },
                         tune: { effort, speed in planning.editExecutor(id) { p in if let effort { p.tuning.effort = effort }; if let speed { p.tuning.speed = speed } } })
                     Label("This Mac · \(executor.session.cwd)", systemImage: "desktopcomputer").font(.system(size: 11)).foregroundStyle(campMuted).textSelection(.enabled)

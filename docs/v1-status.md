@@ -44,7 +44,37 @@ The existing release exclusions remain: no automatic account rotation or quota
 bypass, no guaranteed never-expiring login, and no silent execution fallback.
 Normal provider sign-in and renewal remain provider-controlled.
 
+## Ordered delivery checklist
+
+Keep this sequence aligned with the full active goal. A checked step needs
+recorded implementation and acceptance evidence, not just an updated spec.
+
+1. **In progress — native design audit and corrections**: compare the approved
+   mock with synthetic sessions in the native app, fix current layout gaps and
+   test the affected interactions. Repeat the complete audit at step 5.
+2. **Pending — cloud workspaces and execution**: durable Git workspace jobs,
+   isolated checkout, provider turns and streaming, approvals, steering, queues,
+   recovery, Local/Cloud defaults and reviewed session transfers.
+3. **Pending — shared project capabilities**: Cortex consolidation and memory
+   inspection, shared Markdown skills, Git publication and actor attribution,
+   owner-routed shared implementation and permissions.
+4. **Pending — local acceptance**: independent users, two Macs, reconnect and
+   revocation cases, full provider flows, performance/leak/soak validation, then
+   two consecutive complete code reviews with no unresolved in-scope defects.
+5. **Pending — final UI acceptance**: repeat every screen/state against the
+   approved design on the finished build and resolve remaining differences.
+6. **Pending — joint cloud acceptance**: provision Hetzner with the owner,
+   deploy the public Kubernetes templates, validate isolation, backup restore,
+   independent GitHub accounts and execution with the owning Mac offline.
+7. **Pending — release**: Developer ID signing and notarization, universal
+   artifacts and checksums, GitHub v1.0.0 notes, website updates, and a recorded
+   native demo with playback controls and reduced-motion support.
+
 ## Final design acceptance
+
+The active discrepancy list and screen inventory are in [the UI audit](ui-audit.md).
+The replacement V1 goal begins with this repeated comparison and retains every
+cloud, collaboration, validation and release requirement in the checklist above.
 
 After implementation, compare the running native app with the approved
 interactive design at `http://127.0.0.1:8770/capybara-camp-interactive.html`.
@@ -63,10 +93,10 @@ and the affected flows pass again. Include the plan-to-implementation transition
 uniform board cards and model controls. The release evidence must distinguish
 design parity from functional test results.
 
-Known difference reported by the owner: an in-progress chat currently places
-sub-agents beneath Recent sessions. That layout is wrong. Match the approved
-design's separation of the main conversation and its sub-agents, and verify
-switching between them without mixing their transcripts or losing position.
+The first native audit corrected the reported placement of sub-agents beneath
+Recent sessions. Main chat and its children now appear above the recent list,
+and switching through two synthetic child transcripts passed. The full final
+gate remains open, including running children, other states and window sizes.
 
 The GitHub QA walkthrough also found that Command-Q took effect after closing
 the Manage sources sheet, but did not close the app from inside that sheet.

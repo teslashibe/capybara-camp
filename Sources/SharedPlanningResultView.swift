@@ -54,7 +54,7 @@ struct SharedPlanningResultView: View {
                                 HStack { ProviderMark(provider: planner.provider, size: 16); Text(planner.provider).font(.headline) }
                                 ModelSettingsMenu(provider: planner.provider, title: "\(planner.provider) planner", sessionModel: planner.model,
                                     modelLabel: planner.model, models: [], caps: ModelOption(id: planner.model, label: planner.model),
-                                    choice: ModelTuning(effort: planner.effort, speed: planner.speed), locked: true, selectModel: { _ in }, tune: { _, _ in })
+                                    choice: ModelTuning(effort: planner.effort, speed: planner.speed), locked: true, expanded: true, selectModel: { _ in }, tune: { _, _ in })
                                 Divider()
                                 resultMessages(result.version.steps.filter { $0.slot == planner.slot && $0.phase == (section == "Plans" ? "draft" : "review") })
                             }.padding(14).frame(maxWidth: .infinity, maxHeight: .infinity).background(.white.opacity(0.55)).clipShape(RoundedRectangle(cornerRadius: 10))

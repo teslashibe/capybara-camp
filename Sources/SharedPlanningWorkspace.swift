@@ -77,6 +77,7 @@ struct SharedPlanningModelMenu: View {
     @ObservedObject var planning: CampPlanning
     let id: String
     let slot: Int
+    var expanded = false
     var body: some View {
         if let draft = planning.draft(id), draft.input.planners.indices.contains(slot) {
             let p = draft.input.planners[slot]
@@ -86,7 +87,7 @@ struct SharedPlanningModelMenu: View {
             ModelSettingsMenu(provider: provider, title: "\(provider) planner", sessionModel: p.model,
                 modelLabel: p.model.isEmpty ? "Session default" : p.model, models: models,
                 caps: models.first { $0.id == p.model } ?? ModelOption(id: p.model, label: p.model),
-                choice: ModelTuning(effort: p.effort, speed: p.speed), locked: planning.pending(id), context: "Model for this planning revision",
+                choice: ModelTuning(effort: p.effort, speed: p.speed), locked: planning.pending(id), expanded: expanded, context: "Model for this planning revision",
                 selectModel: { planning.selectModel(id, slot: slot, model: $0) },
                 tune: { effort, speed in planning.edit(id) { input in if let effort { input.planners[slot].effort = effort }; if let speed { input.planners[slot].speed = speed } } })
         }
@@ -100,7 +101,7 @@ struct SharedPlanningCard: View {
     var body: some View {
         let id = session.sessionID, draft = planning.draft(id), ticket = planning.tickets.first { $0.id == id }
         let mode = draft?.input.workflow ?? ticket?.workflow ?? .comparison
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 ProviderMark(provider: "Planning", size: 17)
                 Text("Planning").font(.system(size: 10, weight: .medium)).foregroundStyle(campMuted)
@@ -110,7 +111,7 @@ struct SharedPlanningCard: View {
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Plan actions for \(session.title)")
             }
             Button { store.open(session) } label: {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 7) {
                     Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34, alignment: .topLeading)
                     Label(store.projectSummary(session), systemImage: "folder").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
@@ -179,7 +180,7 @@ struct SharedPlanningWorkspace: View {
                                     Text("Choose a shared session").tag("")
                                     ForEach(store.cloud.sessions.filter { (draft.input.workflow == .single || $0.provider == provider) && ($0.ownerUserId == store.cloud.scope?.userId || $0.allowRequests) }) { source in Text(source.provider + " · " + source.title).tag(source.id) }
                                 }.disabled(planning.pending(id))
-                                SharedPlanningModelMenu(store: store, planning: planning, id: id, slot: slot)
+                                SharedPlanningModelMenu(store: store, planning: planning, id: id, slot: slot, expanded: true)
                                 Spacer()
                             }.padding(14).frame(maxWidth: .infinity, maxHeight: .infinity).background(.white.opacity(0.55)).clipShape(RoundedRectangle(cornerRadius: 10))
                         }
