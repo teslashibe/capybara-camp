@@ -227,6 +227,28 @@ epoch only through the source-fenced server commit below.
 This path preserves main-history context. Child sessions, attachments, unpushed
 commit transport, Cloud-to-Local moves and live two-Mac validation remain open.
 
+### Child history export
+
+The local helper's `child-history-catalog` action enumerates a selected parent's
+saved children. It returns opaque, profile-bound source IDs, provider metadata
+and a catalog revision without local file paths. The catalog supports at most
+512 children; an oversized or unreadable set fails explicitly rather than
+returning a partial successful snapshot.
+
+`child-export-page` accepts the parent, source ID, reviewed source revision,
+`after` ordinal and `limit` from 1 to 200. It resolves the child through the
+parent's current membership before reading any page. Another parent or profile
+cannot substitute a source ID or transcript path. Each page reuses the existing
+transcript index, preserving stable message IDs, amendments, tombstones and
+recorded model settings. The page has the normal 1 MiB sharing budget and rejects
+a changed source fingerprint. File fingerprints detect ordinary local changes;
+they are not attestations against an adversary who can alter local provider
+files and their metadata.
+
+This is the local read layer for child migration. Child publication, cloud
+storage and access checks, runner reads, and native cloud child navigation are
+still required before the move can claim to preserve child history.
+
 ## Cloud runner integration
 
 `POST /{id}/workspaces` accepts the same `WorkspaceInput` as ordinary checkout

@@ -38,8 +38,21 @@ import Foundation
         precondition(changes.files.count==1 && changes.files[0].path=="file.txt")
         let capture=try JSONDecoder().decode(TransferCapture.self,from:await Bridge.call("transfer-capture",input:request))
         precondition(capture.valid && capture.files.count==1 && capture.payload.map(PublishMessage.hash)==capture.payloadSha256,"The bundled capture helper was not used")
+        let profile=root.appendingPathComponent("claude"), parentPath=profile.appendingPathComponent("projects/fixture/parent.jsonl")
+        let childPath=profile.appendingPathComponent("projects/fixture/parent/subagents/agent-one.jsonl")
+        try FileManager.default.createDirectory(at:childPath.deletingLastPathComponent(),withIntermediateDirectories:true)
+        try Data().write(to:parentPath)
+        try Data("{\"type\":\"assistant\",\"uuid\":\"child-message\",\"isSidechain\":true,\"message\":{\"model\":\"fixture-model\",\"content\":\"Child history\"}}\n".utf8).write(to:childPath)
+        let parent=CampSession(id:"parent",sessionID:UUID().uuidString,provider:"Claude",sourceID:"fixture",sourceLabel:"Fixture",root:profile.path,title:"Parent",cwd:repository.path,updated:1,path:parentPath.path,accountID:"",archived:false)
+        let encodedParent=try JSONSerialization.jsonObject(with:JSONEncoder().encode(parent))
+        struct Catalog:Decodable {struct Source:Decodable {var id:String;var revision:String};var sources:[Source]}
+        let catalog=try JSONDecoder().decode(Catalog.self,from:await Bridge.call("child-history-catalog",input:CampWire.body(["session":encodedParent])))
+        precondition(catalog.sources.count==1)
+        struct ChildPage:Decodable {var page:TranscriptExport}
+        let childPage=try JSONDecoder().decode(ChildPage.self,from:await Bridge.call("child-export-page",input:CampWire.body(["session":encodedParent,"sourceID":catalog.sources[0].id,"revision":catalog.sources[0].revision,"after":-1,"limit":200])))
+        precondition(childPage.page.messages.count==1 && childPage.page.messages[0].text=="Child history")
         do { _ = try Bridge.process("unrecognized-action"); preconditionFailure("The bridge accepted an unsupported command") }
         catch let error as CampError { precondition(error.localizedDescription == "Unsupported local session action") }
-        print("PASS: app-bundled Go recovery, change review, exact capture and action validation")
+        print("PASS: app-bundled Go recovery, change review, exact capture, pinned child export and action validation")
     }
 }

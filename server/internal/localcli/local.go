@@ -78,6 +78,9 @@ type request struct {
 }
 
 func (a *App) Run(ctx context.Context, action string, input io.Reader) (any, error) {
+	if action == "child-history-catalog" || action == "child-export-page" {
+		return a.childHistoryRequest(ctx, action, input)
+	}
 	if action == "transfer-changes" || action == "transfer-capture" {
 		return a.reviewTransfer(ctx, action, input)
 	}

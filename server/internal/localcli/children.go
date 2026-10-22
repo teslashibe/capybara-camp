@@ -3,6 +3,7 @@ package localcli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -58,12 +59,16 @@ func lastModel(ctx context.Context, path string) string {
 }
 
 func childrenFor(ctx context.Context, parent Session, busy bool) ([]Child, error) {
+	return childrenForLimit(ctx, parent, busy, 0)
+}
+
+func childrenForLimit(ctx context.Context, parent Session, busy bool, limit int) ([]Child, error) {
 	result := []Child{}
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
 	if parent.Provider == "Codex" {
-		return codexChildren(ctx, parent)
+		return codexChildrenLimit(ctx, parent, limit)
 	}
 	if parent.Provider != "Claude" || parent.Path == "" {
 		return result, nil
@@ -71,6 +76,9 @@ func childrenFor(ctx context.Context, parent Session, busy bool) ([]Child, error
 	folder := strings.TrimSuffix(parent.Path, filepath.Ext(parent.Path))
 	agents := filepath.Join(folder, "subagents")
 	journals, _ := filepath.Glob(filepath.Join(agents, "workflows", "*", "journal.jsonl"))
+	if limit > 0 && len(journals) > limit {
+		return result, errors.New("too many child histories")
+	}
 	latest := ""
 	var updated int64
 	for _, path := range journals {
@@ -119,9 +127,12 @@ func childrenFor(ctx context.Context, parent Session, busy bool) ([]Child, error
 				}
 			}
 			state[key] = row
+			if limit > 0 && len(state) > limit {
+				return errors.New("too many child histories")
+			}
 			return nil
 		})
-		if err != nil && ctx.Err() != nil {
+		if err != nil && (ctx.Err() != nil || limit > 0) {
 			return result, err
 		}
 	}
@@ -178,6 +189,9 @@ func childrenFor(ctx context.Context, parent Session, busy bool) ([]Child, error
 		}
 		row.Updated = float64(info.ModTime().UnixNano()) / 1e9
 		result = append(result, row)
+		if limit > 0 && len(result) > limit {
+			return errors.New("too many child histories")
+		}
 		return ctx.Err()
 	})
 	if err != nil {
@@ -193,6 +207,10 @@ func childrenFor(ctx context.Context, parent Session, busy bool) ([]Child, error
 }
 
 func codexChildren(ctx context.Context, parent Session) ([]Child, error) {
+	return codexChildrenLimit(ctx, parent, 0)
+}
+
+func codexChildrenLimit(ctx context.Context, parent Session, limit int) ([]Child, error) {
 	result := []Child{}
 	path := filepath.Join(parent.Root, "state_5.sqlite")
 	if !isFile(path) {
@@ -225,7 +243,12 @@ SELECT t.id,t.title,t.rollout_path,t.updated_at`
 		query += ",t." + key
 	}
 	query += ` FROM threads t JOIN children c ON t.id=c.id WHERE t.id<>?`
-	rows, err := db.QueryContext(ctx, query, parent.SessionID, parent.SessionID)
+	args := []any{parent.SessionID, parent.SessionID}
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit+1)
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		if ctx.Err() != nil {
 			return result, ctx.Err()
@@ -256,6 +279,9 @@ SELECT t.id,t.title,t.rollout_path,t.updated_at`
 			}
 		}
 		result = append(result, row)
+		if limit > 0 && len(result) > limit {
+			return nil, errors.New("too many child histories")
+		}
 	}
 	return result, rows.Err()
 }

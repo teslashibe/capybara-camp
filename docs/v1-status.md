@@ -44,6 +44,16 @@ file while macOS was locked; an isolated protected-file check reproduced that
 restriction. Repeat the full suite after unlocking. The staged-source secret
 scan passed. The native click-through is also waiting for the Mac to be unlocked.
 
+The next child-history increment adds parent/profile-bound local source IDs and
+revision-checked export pages, reusing the existing transcript index. Both
+provider fixtures export 230 messages without losing or duplicating messages.
+Tests reject foreign parents/profiles, changed snapshots, unsafe paths, invalid
+cursors and overflowing child lists. Codex database history remains available
+after its rollout file rotates; fallback files must identify the selected child.
+The packaged Mac helper exposes and exercises both commands. This is a local
+export layer only. Child cloud storage, publication, inherited access controls,
+runner context and native cloud navigation are still required.
+
 The transfer work includes a read-only Go capture layer for selected Git
 changes and owner-bound, encrypted, resumable upload storage. Completion checks
 payload and review hashes against the pinned source revisions. The staging
