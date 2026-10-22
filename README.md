@@ -204,9 +204,10 @@ must already be available in the selected remote repository.
 Once the destination is ready, choose **Verify source** on the original Mac.
 Camp checks that the provider has stopped and the selected files still match.
 Review the destination permissions, then choose **Move to cloud**. The ticket
-keeps its main conversation as imported context, with saved child transcripts
-attached. Agent access to child history, attachments and unpushed commits still
-needs the work listed in the delivery status.
+keeps its main conversation and saved child transcripts as imported context.
+The cloud agent can read both through the Camp context tool. File attachments,
+unpushed commits and full migration acceptance still need the work listed in
+the delivery status.
 Copying a transcript privately does not share it with teammates.
 
 Cloud assignment stops the local publisher from overwriting the cloud session.
@@ -218,10 +219,11 @@ serially per account. [Cloud controls](docs/cloud-controls.md) use the same
 steer, queue and stop actions as local chat, with durable delivery tracking.
 The runner can read its complete stored conversation through the context tool
 in bounded pages, including long messages. History remains pinned to the queued
-prompt and each page checks the current request and permissions. The runner's
-context tool currently reads only the main conversation. Saved child histories are
-published and readable separately in the native sidebar; file attachments
-still need migration support.
+prompt and each page checks the current request and permissions. The agent uses
+`list_subagents` to find attached child histories, then `read_session` to read
+only the ones it needs. The child catalog and history use the same pinned parent
+revision. Saved child histories are also readable separately in the native
+sidebar; file attachments still need migration support.
 Default settings, the prepared-workspace requirement and unfinished transfer
 behavior are documented in [execution locations](docs/execution-locations.md)
 and the delivery status.
@@ -244,8 +246,10 @@ The native publisher includes saved subagent histories with a shared or private
 Camp copy. Child transcripts stay under the parent's permissions and have their
 own message IDs and paged history. The sidebar refreshes after child updates,
 and a child can be opened without mixing its messages into the main chat.
-Reading cloud child history currently requires a connection; durable offline
-child caching and runner context-tool access remain open V1 work.
+Model citations open the specific child message in the native snapshot
+inspector, with a link back to that child conversation. Reading cloud child
+history currently requires a connection; durable offline child caching remains
+open V1 work.
 
 The native review stores its selected payload separately from its small recovery
 journal. Interrupted uploads reuse their saved command keys and missing chunks.

@@ -8,6 +8,7 @@ type HistorySource struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`
 	Revision string `json:"revision"`
+	ParentID string `json:"parent_id,omitempty"`
 }
 type HistoryRead struct {
 	SessionID  string `json:"session_id"`

@@ -86,6 +86,7 @@ func TestChildHistoryHTTPAuthorizationReplayAndRevocation(t *testing.T) {
 		t.Fatal("HTTP retry changed its receipt")
 	}
 	call("GET", path, tokens[1], "", nil, 200)
+	call("POST", strings.TrimSuffix(path, "/transcript")+"/message", tokens[1], uuid.NewString(), []byte(`{"revision":1,"message_id":"m"}`), 200)
 	call("GET", "/v1/camps/"+c.ID+"/sessions/"+parent.ID+"/children", tokens[1], "", nil, 200)
 	call("GET", "/v1/camps/"+c.ID+"/sessions/"+parent.ID+"/children/publication", tokens[1], "", nil, 404)
 	call("GET", "/v1/camps/"+c.ID+"/sessions/"+parent.ID+"/children/publication", tokens[0], "", nil, 200)

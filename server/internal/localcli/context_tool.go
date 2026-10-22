@@ -173,6 +173,59 @@ type contextTool struct {
 	ctx     context.Context
 }
 
+func (t contextTool) listSubagents(raw any) (map[string]any, error) {
+	args, ok := raw.(map[string]any)
+	if !ok {
+		return nil, errors.New("Use an offset and limit")
+	}
+	offset, limit := int64(0), int64(20)
+	for key, value := range args {
+		n, ok := value.(json.Number)
+		if !ok {
+			return nil, errors.New("Use integer offsets")
+		}
+		v, e := n.Int64()
+		if e != nil {
+			return nil, errors.New("Use integer offsets")
+		}
+		switch key {
+		case "offset":
+			offset = v
+		case "limit":
+			limit = v
+		default:
+			return nil, errors.New("Unsupported child history parameter")
+		}
+	}
+	if offset < 0 || limit < 1 || limit > 50 || len(t.history) < 2 || t.reader == nil {
+		return nil, errors.New("Child histories are unavailable")
+	}
+	ctx := t.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	probe := HistoryRead{SessionID: t.history[0].ID, Limit: 1}
+	page, err := t.reader(ctx, probe)
+	if err != nil {
+		return nil, err
+	}
+	if err = validateHistoryPage(t.history[0], probe, page); err != nil {
+		return nil, err
+	}
+	children := t.history[1:]
+	start := min(offset, int64(len(children)))
+	end := min(start+limit, int64(len(children)))
+	out := []map[string]string{}
+	for _, child := range children[start:end] {
+		out = append(out, map[string]string{"session_id": child.ID, "title": child.Title, "revision": child.Revision, "parent_id": child.ParentID})
+	}
+	var next any
+	if end < int64(len(children)) {
+		next = end
+	}
+	return map[string]any{"children": out, "next_offset": next}, nil
+}
+
 func (t contextTool) read(raw any) (map[string]any, error) {
 	args, ok := raw.(map[string]any)
 	if !ok {
@@ -288,25 +341,41 @@ func (t contextTool) handle(request map[string]any) map[string]any {
 	case "ping":
 		response["result"] = map[string]any{}
 	case "tools/list":
-		ids := make([]string, 0, len(t.sources))
+		ids := make([]string, 0, len(t.sources)+1)
 		for _, source := range t.sources {
 			ids = append(ids, source.ID)
 		}
+		children := false
 		for _, source := range t.history {
-			ids = append(ids, source.ID)
+			if source.ParentID == "" {
+				ids = append(ids, source.ID)
+			} else {
+				children = true
+			}
 		}
-		response["result"] = map[string]any{"tools": []any{map[string]any{
-			"name": "read_session", "description": "Read attached Camp snapshots or complete conversation history with pinned source links. Follow next_offset and next_text_offset for history pages; text offsets count UTF-8 bytes at character boundaries. Cannot discover sessions or send prompts.",
-			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"session_id": map[string]any{"type": "string", "enum": ids}, "offset": map[string]any{"type": "integer", "minimum": 0}, "text_offset": map[string]any{"type": "integer", "minimum": 0}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 120}}, "required": []string{"session_id"}, "additionalProperties": false},
-			"annotations": map[string]any{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false, "idempotentHint": true},
-		}}}
+		sessionProperty := map[string]any{"type": "string", "enum": ids}
+		if children {
+			sessionProperty = map[string]any{"type": "string", "description": "An attached session ID or an ID returned by list_subagents"}
+		}
+		annotations := map[string]any{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false, "idempotentHint": true}
+		tools := []any{map[string]any{
+			"name": "read_session", "description": "Read an attached snapshot or a pinned parent/child conversation. Follow next_offset and next_text_offset for history pages. Cannot discover unrelated sessions or send prompts.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"session_id": sessionProperty, "offset": map[string]any{"type": "integer", "minimum": 0}, "text_offset": map[string]any{"type": "integer", "minimum": 0}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 120}}, "required": []string{"session_id"}, "additionalProperties": false}, "annotations": annotations,
+		}}
+		if children {
+			tools = append(tools, map[string]any{"name": "list_subagents", "description": "List child histories attached to the current conversation. Read only the histories you need using read_session.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"offset": map[string]any{"type": "integer", "minimum": 0}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50}}, "additionalProperties": false}, "annotations": annotations})
+		}
+		response["result"] = map[string]any{"tools": tools}
 	case "tools/call":
 		var value map[string]any
 		var err error
-		if str(params["name"]) != "read_session" {
-			err = errors.New("This tool is not available")
-		} else {
+		switch str(params["name"]) {
+		case "read_session":
 			value, err = t.read(params["arguments"])
+		case "list_subagents":
+			value, err = t.listSubagents(params["arguments"])
+		default:
+			err = errors.New("This tool is not available")
 		}
 		var text string
 		if err != nil {

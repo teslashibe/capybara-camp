@@ -18,7 +18,8 @@ import (
 // The synthetic provider calls the actual context-tool executable. The tool
 // reaches its parent runner's narrow loopback reader; only the parent holds
 // the runner credential used for the real authenticated Camp history API.
-func readFixtureHistory(server map[string]any, record string) error {
+func readFixtureHistory(server map[string]any, record string, child ...bool) error {
+	childHistory := len(child) > 0 && child[0]
 	path, _ := server["command"].(string)
 	var args []string
 	for _, arg := range server["args"].([]any) {
@@ -62,7 +63,28 @@ func readFixtureHistory(server map[string]any, record string) error {
 	tools := list["tools"].([]any)
 	tool := tools[0].(map[string]any)
 	properties := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
-	id := properties["session_id"].(map[string]any)["enum"].([]any)[0].(string)
+	id := ""
+	if childHistory {
+		listed, e := call("tools/call", map[string]any{"name": "list_subagents", "arguments": map[string]any{"limit": 1}})
+		if e != nil {
+			return e
+		}
+		text := listed["content"].([]any)[0].(map[string]any)["text"].(string)
+		var catalog struct {
+			Children []struct {
+				ID string `json:"session_id"`
+			}
+		}
+		if e = json.Unmarshal([]byte(text), &catalog); e != nil || len(catalog.Children) != 1 {
+			return fmt.Errorf("child list unavailable")
+		}
+		id = catalog.Children[0].ID
+	} else {
+		id = properties["session_id"].(map[string]any)["enum"].([]any)[0].(string)
+	}
+	if id == "" {
+		return fmt.Errorf("history source missing")
+	}
 	offset, textOffset := int64(0), 0
 	contents := map[string]string{}
 	for calls := 0; calls < 100; calls++ {
@@ -85,12 +107,80 @@ func readFixtureHistory(server map[string]any, record string) error {
 			if len(contents) != 150 || contents["history-0"] != "first history" || contents["history-149"] != "last history" || contents["history-75"] != strings.Repeat("😀", 75000) {
 				return fmt.Errorf("incomplete history")
 			}
-			fixtureRecord(record, "history:150:complete")
+			if childHistory {
+				fixtureRecord(record, "child-history:150:complete")
+			} else {
+				fixtureRecord(record, "history:150:complete")
+			}
 			return nil
 		}
 		offset, textOffset = *page.NextOffset, page.NextTextOffset
 	}
 	return fmt.Errorf("history never ended")
+}
+
+func TestProviderReadsChildHistoryThroughCampTool(t *testing.T) {
+	for _, provider := range []string{"Codex", "Claude"} {
+		t.Run(provider, func(t *testing.T) {
+			f, _, workspace, record := turnFixture(t, provider, "child-history")
+			ctx := t.Context()
+			id := uuid.NewString()
+			tx, err := f.api.Pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(ctx)
+			if _, err = tx.Exec(ctx, `INSERT INTO sessions(id,camp_id,project_id,profile_id,owner_user_id,owner_device_id,local_session_id,title,state,stage,shared)
+ SELECT $1::uuid,camp_id,project_id,profile_id,owner_user_id,owner_device_id,$1::text,'Child fixture','idle','Done',false FROM sessions WHERE id=$2`, id, workspace.SessionID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = tx.Exec(ctx, `INSERT INTO session_children(session_id,camp_id,parent_session_id,source_key) VALUES($1,$2,$3,$4)`, id, workspace.CampID, workspace.SessionID, strings.Repeat("a", 64)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = tx.Exec(ctx, `INSERT INTO session_child_revisions(parent_session_id,child_session_id,revision,transcript_revision,source_revision,name,phase,workflow,state,model,complete)
+ VALUES($1,$2,1,1,$3,'Child fixture','','','done','fixture',true)`, workspace.SessionID, id, strings.Repeat("b", 64)); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 150; i++ {
+				text := "history"
+				switch i {
+				case 0:
+					text = "first history"
+				case 149:
+					text = "last history"
+				case 75:
+					text = strings.Repeat("😀", 75000)
+				}
+				messageID := fmt.Sprintf("history-%d", i)
+				if _, err = tx.Exec(ctx, `INSERT INTO messages(session_id,local_id,ordinal) VALUES($1,$2,$3)`, id, messageID, i); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = tx.Exec(ctx, `INSERT INTO message_revisions(session_id,local_id,revision,role,text) VALUES($1,$2,1,'assistant',$3)`, id, messageID, text); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err = tx.Exec(ctx, `UPDATE sessions SET transcript_revision=1 WHERE id IN ($1,$2)`, id, workspace.SessionID); err != nil {
+				t.Fatal(err)
+			}
+			if err = tx.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			request, err := f.store.CreateRequest(ctx, f.owner, workspace.CampID, workspace.SessionID, uuid.NewString(), camp.RequestInput{Prompt: "Read the child conversation"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cancel, done := startWorker(t, f.worker)
+			eventually(t, func() bool {
+				r, e := f.store.Request(ctx, f.owner, workspace.CampID, request.ID)
+				return e == nil && r.State == "completed"
+			})
+			stopWorker(t, cancel, done)
+			calls, err := os.ReadFile(record)
+			if err != nil || strings.Count(string(calls), "turn\n") != 1 || !strings.Contains(string(calls), "child-history:150:complete") {
+				t.Fatal("Provider did not read child history", string(calls), err)
+			}
+		})
+	}
 }
 
 func TestProviderReadsCompleteHistoryThroughCampTool(t *testing.T) {

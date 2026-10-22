@@ -30,8 +30,8 @@ type contextManifest struct {
 }
 
 func validateHistoryCatalog(sources []contextSource, history []HistorySource) error {
-	if len(history) > 1 {
-		return errors.New("Only the current conversation can supply complete history")
+	if len(history) > 513 {
+		return errors.New("Too many child histories")
 	}
 	seen := map[string]bool{}
 	for _, s := range sources {
@@ -42,6 +42,17 @@ func validateHistoryCatalog(sources []contextSource, history []HistorySource) er
 			return errors.New("Invalid history source")
 		}
 		seen[h.ID] = true
+	}
+	if len(history) > 0 {
+		if history[0].ParentID != "" {
+			return errors.New("History must start with the parent conversation")
+		}
+		for _, h := range history[1:] {
+			suffix, ok := strings.CutPrefix(h.ID, h.ParentID+"/child:")
+			if h.ParentID != history[0].ID || h.Revision != history[0].Revision || !ok || suffix == "" || strings.Contains(suffix, "/") {
+				return errors.New("Only children of the current conversation can supply history")
+			}
+		}
 	}
 	return nil
 }

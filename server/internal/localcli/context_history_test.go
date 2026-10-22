@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -149,5 +150,68 @@ func TestHistoryPageRejectsWrongRevisionAndNonadvancingCursor(t *testing.T) {
 	defer server.Close()
 	if _, err = proxy.reader(t.Context(), in); err == nil {
 		t.Fatal("Revoked reader remained available")
+	}
+}
+
+func TestHistoryCatalogBindsChildrenToOneParent(t *testing.T) {
+	parent := HistorySource{ID: "camp:parent", Title: "Parent", Revision: "7"}
+	child := HistorySource{ID: "camp:parent/child:one", Title: "Child", Revision: "7", ParentID: parent.ID}
+	if err := validateHistoryCatalog(nil, []HistorySource{parent, child}); err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range []string{"parent", "revision", "identity", "root"} {
+		p, c := parent, child
+		switch change {
+		case "parent":
+			c.ParentID = "another"
+		case "revision":
+			c.Revision = "8"
+		case "identity":
+			c.ID = "unrelated"
+		case "root":
+			p.ParentID = "ancestor"
+		}
+		if err := validateHistoryCatalog(nil, []HistorySource{p, c}); err == nil {
+			t.Fatal("Unbound child accepted", change)
+		}
+	}
+}
+
+func TestChildHistoryCatalogIsLazyBoundedAndPermissionChecked(t *testing.T) {
+	history := []HistorySource{{ID: "camp:parent", Title: "Parent", Revision: "7"}}
+	for i := 0; i < 512; i++ {
+		history = append(history, HistorySource{ID: "camp:parent/child:" + strconv.Itoa(i), Title: "Unique child " + strconv.Itoa(i) + strings.Repeat("x", 450), Revision: "7", ParentID: "camp:parent"})
+	}
+	if err := validateHistoryCatalog(nil, history); err != nil {
+		t.Fatal(err)
+	}
+	grant := contextGrant{history: history}
+	if len(grant.instructions()) > 4096 || strings.Contains(grant.instructions(), "Unique child") || strings.Contains(grant.attachmentLinks(), "Unique child") {
+		t.Fatal("Child catalog entered the initial prompt")
+	}
+	denied := false
+	calls := 0
+	tool := contextTool{history: history, reader: func(_ context.Context, in HistoryRead) (HistoryPage, error) {
+		calls++
+		if denied {
+			return HistoryPage{}, errors.New("revoked")
+		}
+		if in.SessionID != "camp:parent" || in.Limit != 1 {
+			t.Fatal("Missing narrow parent authorization probe")
+		}
+		return HistoryPage{SessionID: in.SessionID, Revision: "7", Messages: []HistoryMessage{}}, nil
+	}}
+	listed, err := tool.listSubagents(contextArguments(t, `{"offset":50,"limit":50}`))
+	if err != nil || len(listed["children"].([]map[string]string)) != 50 || listed["next_offset"] != int64(100) || calls != 1 {
+		t.Fatal(listed, err, calls)
+	}
+	for _, bad := range []string{`{"offset":-1}`, `{"limit":51}`, `{"session_id":"other"}`, `{"offset":true}`} {
+		if _, err = tool.listSubagents(contextArguments(t, bad)); err == nil {
+			t.Fatal("Unbounded child listing", bad)
+		}
+	}
+	denied = true
+	if _, err = tool.listSubagents(contextArguments(t, `{}`)); err == nil {
+		t.Fatal("Revoked turn still listed child metadata")
 	}
 }

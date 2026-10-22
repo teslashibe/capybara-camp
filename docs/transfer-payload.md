@@ -224,8 +224,9 @@ The final move shows the chosen destination and requires explicit tool
 permissions for implementation. A completed transfer changes the execution
 epoch only through the source-fenced server commit below.
 
-This path preserves main-history context. Child sessions, attachments, unpushed
-commit transport, Cloud-to-Local moves and live two-Mac validation remain open.
+This path preserves main and saved child history as context. Attachments,
+unpushed commit transport, Cloud-to-Local moves and live two-Mac validation
+remain open.
 
 ### Child history export
 
@@ -247,8 +248,8 @@ files and their metadata.
 
 The native publisher sends these pages through the cloud storage contract
 below. Child navigation uses the same sidebar and transcript component as local
-children. Runner context-tool reads and durable offline child caching are still
-required for the complete workflow.
+children. The runner reads these histories through the context tool described
+below. Durable offline child caching is still required.
 
 ### Cloud child histories
 
@@ -281,6 +282,13 @@ the parent's transcript snapshot; zero means current. The response includes the
 resolved parent revision, current parent permission revision, child metadata and
 the normal paged transcript. Current parent access is checked on every read,
 including older snapshots. A removed child cannot be read through an old URL.
+
+`POST /v1/camps/{camp}/sessions/{parent}/children/{child}/message` accepts
+`revision` and `message_id` to inspect one cited message. The revision is the
+parent snapshot revision, and the message must belong to that child's complete
+snapshot. It shares the transcript endpoint's current access and removal
+checks, with a 1 MiB message budget. The native inspector opens that exact
+message and links back to the child conversation.
 
 Children do not appear as standalone board tickets and cannot receive prompts,
 change execution location or bypass the parent access check through ordinary
@@ -511,16 +519,19 @@ prompt is started or replayed during recovery.
 
 ## Remaining integration
 
-The cloud runtime can now read the stored main transcript through a paged
-context tool, without loading the whole history into a startup request. Its
-reads use the queued transcript revision and current request permissions.
-This removes the earlier 120-message startup boundary. It does not yet supply
-child histories or file attachments.
+The cloud runtime can read the stored main transcript and complete child
+histories through a paged context tool, without loading them into a startup
+request. `list_subagents` returns up to 50 child descriptors per page;
+`read_session` then reads the selected history. The catalog uses the queued
+parent revision, and every read rechecks current request permissions and child
+removal. Later child edits do not change the queued snapshot. These reads remove
+the earlier 120-message startup boundary. File attachments remain separate work.
 
 The agreed transfer flow still requires:
 
-1. Finish transcript transfer, child-session and attachment provenance, including
-   provider continuation and commits not available from the remote repository
+1. Finish complete migration acceptance, durable offline child caching and
+   attachment provenance, including provider continuation and commits not
+   available from the remote repository
 2. Native conflict review and the complete base-repository credential policy,
    followed by cloud-to-local and cross-account destination acceptance
 3. Connect native conflict review to the existing destination receipt and atomic
@@ -568,6 +579,13 @@ starting another provider turn. Native tests cover claim and acknowledgement
 response loss, relaunch, retained locks, changed files, scope erasure and the
 real helper against a temporary Git repository. Live provider, native transfer
 review and two-Mac acceptance remain separate gates.
+
+Child-history tests read 150 messages through each provider's actual context
+tool connection and preserve a 300,000-byte Unicode response across pages. They
+check pinned revisions, incomplete/removed children, foreign parents and
+bounded catalog lookup. Native tests verify exact-message citation projection
+and reject cross-parent snapshots. These use synthetic provider processes;
+they do not replace live-provider acceptance.
 
 Final-commit tests cover explicit implementation permissions, concurrent
 confirmation replay, expiry and revision changes after approval, owner/source

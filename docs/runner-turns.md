@@ -52,7 +52,8 @@ errors remain private. A regression test checks an actual oversized Git blob.
 
 The runner requests `?history=paged` when loading a turn. Its own conversation
 is exposed through the existing `read_session` context tool at the transcript
-revision pinned when the prompt was queued. This remains available when the
+revision pinned when the prompt was queued. Complete saved child histories at
+that same parent revision are available too. This remains available when the
 provider already has a native conversation ID. The older inline response is
 retained for earlier clients; it still has its original context limits.
 
@@ -62,22 +63,35 @@ most 16 KiB. `next_offset` selects the next message ordinal;
 `next_text_offset` continues within a long message using UTF-8 byte positions
 at character boundaries. Clients use the returned values together. There is
 no 120-message cap on this conversation history. Selected `@` attachments keep
-their existing limits.
+their existing limits. The child source ID has the form
+`camp:<parent>/child:<child>`. Its public revision is the parent snapshot;
+the server resolves the corresponding child transcript revision internally.
+
+The initial prompt includes the parent source and a short instruction to use
+`list_subagents` when needed. That read-only tool pages through at most 50 child
+descriptors at a time and rechecks the active parent request before returning
+metadata. It accepts only an offset and limit. `read_session` only accepts
+sources from that turn's catalog, even though its schema does not enumerate all
+child IDs. This keeps large catalogs out of provider startup context.
 
 Every page rechecks the runner grant, account, workspace, request lease,
 execution assignment and session permissions. Cancelled, finished or revoked
 work cannot fetch more history. Reads retain original message IDs and pinned
 revision links; a later transcript edit does not replace the queued snapshot.
+Incomplete or unrelated child histories are excluded, and current removal
+blocks an older child's history. Child citations open the exact saved child
+message in the Mac app, under the parent's current permissions.
 
 The context helper calls a temporary loopback reader owned by the running
 conversation. Its private manifest contains a random read capability and the
-allowed source, not the runner credential. The parent runner makes the
+allowed source descriptors, not the runner credential. The parent runner makes the
 authenticated Camp request. The reader accepts no other sources, file paths
 or mutations, limits concurrent reads, and closes with the conversation.
 
-This supplies the stored main transcript to a new provider conversation.
-It does not copy an opaque provider session ID between accounts. Child-session
-and attachment migration and the final reviewed transfer remain separate work.
+This supplies stored main and child transcripts to a new provider conversation.
+It does not copy an opaque provider session ID between accounts. Durable offline
+child caching, attachment migration and full reviewed-transfer acceptance remain
+separate work.
 
 ## Multiple tickets on one account
 

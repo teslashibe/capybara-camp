@@ -52,7 +52,8 @@ cursors and overflowing child lists. Codex database history remains available
 after its rollout file rotates; fallback files must identify the selected child.
 The packaged Mac helper exposes and exercises both commands. Cloud storage and
 inherited access controls are now implemented by the schema-24 API below.
-Native publication, runner context and native cloud navigation are still required.
+Native publication, runner context and native cloud navigation are implemented
+below; live acceptance remains open.
 
 Schema 24 adds versioned child history beneath a parent session. Updates reuse
 the existing message store and advance the parent's transcript revision. Child
@@ -74,8 +75,8 @@ The existing chat sidebar and transcript component can list and read cloud child
 histories with older-page loading. Child refreshes preserve the current
 selection; a late result is discarded after changing parents or revoking access.
 Local source activity supplies observed child status without relabeling stored
-messages. The remaining child work includes runner context-tool access,
-durable offline child caching and native/live two-Mac acceptance. The Mac is
+messages. The remaining child work includes durable offline child caching and
+native/live two-Mac acceptance. The Mac is
 still locked, so the new cloud UI has not had its computer-use walkthrough.
 The focused native suites pass for sharing, cloud child navigation state, cloud
 state and the packaged helper. They verify a 230-message child upload, replay of
@@ -83,6 +84,19 @@ a lost response without duplicate writes, removal/reappearance with the same
 identity, separate parent/child message hashes and an untruncated model ID.
 Parent refresh, navigation into a plan and revocation reject stale child reads.
 The source-only publication endpoint also passes the Go database and HTTP tests.
+
+The cloud runner now exposes complete child histories through its read-only
+context tool at the queued parent revision. Catalog lookup is lazy and bounded
+to 50 descriptors per call; history retains the existing 16 KiB segments and
+48 KiB page budget. Synthetic Codex and Claude processes each read 150 child
+messages through the actual tool connection. Database tests preserve a 300,000-byte
+Unicode response and reject incomplete, removed and unrelated children; later
+edits do not replace the queued snapshot. Native citation tests open the exact
+child message and reject cross-parent snapshots. The focused backend race tests
+and native child/context suites pass. The full Go race suite and vet also pass
+with disposable PostgreSQL, and Linux server/runner/controller/migration builds
+succeed. The staged secret scan found no secrets. This is local synthetic
+evidence, not live-provider or two-Mac acceptance.
 
 The transfer work includes a read-only Go capture layer for selected Git
 changes and owner-bound, encrypted, resumable upload storage. Completion checks

@@ -535,6 +535,7 @@ final class TranscriptWatch {
             self.loadHistory(silent: true)
         }
         cloud.childrenChanged = { [weak self] id in
+            if self?.contextInspection?.sourceID=="camp:"+id,self?.contextInspection?.childID != nil {self?.contextInspection=nil}
             guard let self,let session=self.selected,session.id=="camp:"+id else{return}
             self.loadChildren(session)
         }

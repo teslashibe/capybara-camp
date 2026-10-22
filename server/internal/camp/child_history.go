@@ -243,6 +243,17 @@ func (s *Store) childHistories(ctx context.Context, a auth.Actor, campID, parent
 }
 
 func (s *Store) ChildTranscript(ctx context.Context, a auth.Actor, campID, parentID, id string, revision, before int64, limit int) (ChildTranscript, error) {
+	return s.childTranscript(ctx, a, campID, parentID, id, revision, before, limit, "")
+}
+
+func (s *Store) ChildMessage(ctx context.Context, a auth.Actor, campID, parentID, id string, revision int64, messageID string) (ChildTranscript, error) {
+	if messageID == "" || len(messageID) > 256 || revision < 1 {
+		return ChildTranscript{}, ErrInput
+	}
+	return s.childTranscript(ctx, a, campID, parentID, id, revision, 0, 1, messageID)
+}
+
+func (s *Store) childTranscript(ctx context.Context, a auth.Actor, campID, parentID, id string, revision, before int64, limit int, messageID string) (ChildTranscript, error) {
 	return retryRead(ctx, func() (ChildTranscript, error) {
 		var out ChildTranscript
 		if !validID(id) || revision < 0 || before < 0 || limit < 1 || limit > 200 {
@@ -281,7 +292,14 @@ func (s *Store) ChildTranscript(ctx context.Context, a auth.Actor, campID, paren
 		if !child.Complete || child.Removed {
 			return out, ErrTransition
 		}
-		transcript, err := readTranscriptAt(ctx, tx, id, child.TranscriptRevision, before, limit)
+		var transcript Transcript
+		if messageID == "" {
+			transcript, err = readTranscriptAt(ctx, tx, id, child.TranscriptRevision, before, limit)
+		} else {
+			var messages []Message
+			messages, err = readContextMessagesBudget(ctx, tx, SourceRef{SessionID: id, TranscriptRevision: child.TranscriptRevision, MessageIDs: []string{messageID}}, 1<<20)
+			transcript = Transcript{Revision: child.TranscriptRevision, Messages: messages}
+		}
 		if err != nil {
 			return out, err
 		}

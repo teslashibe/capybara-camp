@@ -26,6 +26,11 @@ actor ChildReadGate {
         let parent=session(scope),other=session(scope),first=list(parent),second=list(other)
         precondition(first.valid(parent:parent.id) && !first.valid(parent:other.id))
         precondition(first.children[0].childSession.model=="recorded-model")
+        let cited=CloudMessage(id:"cited",ordinal:0,role:"assistant",text:"Original child answer",removed:false,model:"recorded-model",effort:"high",speed:"standard",revision:1)
+        let snapshot=CloudChildTranscript(parentRevision:2,permissionRevision:1,child:first.children[0],transcript:CloudTranscript(revision:1,messages:[cited],before:0,hasMore:false))
+        let inspection=try inspectChildHistoryMessage(parent:parent,childID:first.children[0].id,scope:scope.key,revision:2,messageID:"cited",snapshot:snapshot)
+        precondition(inspection.sourceID=="camp:"+parent.id && inspection.childID==first.children[0].id && inspection.messages[0].text==cited.text)
+        do {_=try inspectChildHistoryMessage(parent:other,childID:first.children[0].id,scope:scope.key,revision:2,messageID:"cited",snapshot:snapshot);preconditionFailure("Child citation crossed parents")}catch{}
         store.applyCloud([parent,other],projects:[])
         let local=store.sessions.first{$0.id=="camp:"+parent.id}!,otherLocal=store.sessions.first{$0.id=="camp:"+other.id}!
         store.selectedID=local.id;store.cloudChildReader={_ in first}

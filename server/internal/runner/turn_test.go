@@ -77,9 +77,9 @@ func runTurnFixture(provider, mode, record string) {
 			case "configRequirements/read":
 				result["requirements"] = map[string]any{}
 			case "thread/start", "thread/resume":
-				if mode == "history" {
+				if mode == "history" || mode == "child-history" {
 					server := object(object(object(params["config"])["mcp_servers"])["camp_context"])
-					if err := readFixtureHistory(server, record); err != nil {
+					if err := readFixtureHistory(server, record, mode == "child-history"); err != nil {
 						fixtureRecord(record, "history-error:"+err.Error())
 						os.Exit(6)
 					}
@@ -143,8 +143,8 @@ func runTurnFixture(provider, mode, record string) {
 		init["mcp_servers"] = []any{map[string]any{"name": "camp_context", "status": "connected"}}
 	}
 	out(init)
-	if mode == "history" {
-		if err := readFixtureHistory(campContext, record); err != nil {
+	if mode == "history" || mode == "child-history" {
+		if err := readFixtureHistory(campContext, record, mode == "child-history"); err != nil {
 			fixtureRecord(record, "history-error:"+err.Error())
 			os.Exit(6)
 		}

@@ -170,7 +170,10 @@ func (g *GitStore) runnerTurn(ctx context.Context, token, workspaceID, id string
 			if e != nil {
 				return RunnerTurn{}, e
 			}
-			history = append(history, localcli.HistorySource{ID: "camp:" + r.SessionID, Title: session.Title, Revision: strconv.FormatInt(r.ContextRevision, 10)})
+			history, e = runnerHistorySources(ctx, tx, session, r.ContextRevision)
+			if e != nil {
+				return RunnerTurn{}, e
+			}
 		}
 	}
 	for index, ref := range refs {

@@ -55,6 +55,13 @@ func TestChildHistoryRevisionPrivacyAndReadOnlyBoundary(t *testing.T) {
 	if err != nil || len(got.Transcript.Messages) != 1 || got.Transcript.Messages[0].Text != "Original child" || got.Transcript.Messages[0].Effort != "high" {
 		t.Fatal(got, err)
 	}
+	message, err := s.ChildMessage(ctx, member, c.ID, parent.ID, id, first.Revision, "child-message")
+	if err != nil || len(message.Transcript.Messages) != 1 || message.Transcript.Messages[0].Text != "Original child" {
+		t.Fatal("Cited child message unavailable", message, err)
+	}
+	if _, err = s.ChildMessage(ctx, member, c.ID, parent.ID, id, first.Revision, "main"); err == nil {
+		t.Fatal("Child message link read its parent")
+	}
 	in.ExpectedParentRevision = first.Revision
 	in.ExpectedTranscriptRevision = first.TranscriptRevision
 	in.Messages[0].Text = "Updated child"

@@ -62,14 +62,26 @@ extension CampConnection {
         return value
     }
     func childTranscript(session:CloudSession,childID:String,before:Int64=0,revision:Int64=0) async throws->CloudChildTranscript {
+        try await readChildResponse(session:session,childID:childID,before:before,revision:revision,messageID:nil)
+    }
+    func childMessage(session:CloudSession,childID:String,revision:Int64,messageID:String)async throws->CloudChildTranscript {
+        guard revision>0,!messageID.isEmpty,messageID.utf8.count<=256 else{throw CampCloudError.invalidResponse}
+        return try await readChildResponse(session:session,childID:childID,before:0,revision:revision,messageID:messageID)
+    }
+    private func readChildResponse(session:CloudSession,childID:String,before:Int64,revision:Int64,messageID:String?)async throws->CloudChildTranscript {
         guard UUID(uuidString:childID) != nil,before>=0,revision>=0,let scope,let client,let credential,let cache else{throw CampCloudError.invalidResponse}
         let epoch=try await cache.epoch(scope)
-        let value=try await client.get(CloudChildTranscript.self,path:"/v1/camps/\(scope.campId)/sessions/\(session.id)/children/\(childID)/transcript?limit=120&before=\(before)&revision=\(revision)",token:credential.token)
+        let path="/v1/camps/\(scope.campId)/sessions/\(session.id)/children/\(childID)"
+        let raw:Data
+        if let messageID {raw=try await client.data("POST",path:path+"/message",body:CampWire.body(["revision":revision,"message_id":messageID]),token:credential.token)}
+        else {raw=try await client.data("GET",path:path+"/transcript?limit=120&before=\(before)&revision=\(revision)",token:credential.token)}
+        let value=try CampWire.decoder().decode(CloudChildTranscript.self,from:raw)
         guard self.scope==scope,self.credential?.token==credential.token,try await cache.epoch(scope)==epoch,!Task.isCancelled else{throw CancellationError()}
         guard childReadAllowed(session),value.permissionRevision==session.permissionRevision,value.child.valid(parent:session.id),value.child.id==childID,
               value.child.complete,!value.child.removed,value.child.revision<=value.parentRevision,
               revision==0 || value.parentRevision==revision,value.transcript.revision==value.child.transcriptRevision,
               value.transcript.messages.count<=120 else{throw CampCloudError.invalidResponse}
+        if let messageID {guard value.transcript.messages.count==1,value.transcript.messages[0].id==messageID else{throw CampCloudError.invalidResponse}}
         return value
     }
 }

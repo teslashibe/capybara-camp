@@ -87,6 +87,7 @@ struct ContextInspection: Identifiable {
     var selectedMessage: String
     var scope: String? = nil
     var permissionRevision: Int64? = nil
+    var childID: String? = nil
     func remainsVisible(scope current: String?, permissionRevision observed: Int64?) -> Bool {
         guard let scope else { return true }
         return scope == current && observed != nil && permissionRevision == observed
@@ -98,6 +99,14 @@ func inspectHistoryMessage(id:String,title:String,scope:String,reference:CloudSo
           let expected=reference.messageIds, expected.count==1, let value=snapshot.messages.first,
           value.id==expected[0], !value.removed else {throw CampCloudError.invalidResponse}
     return ContextInspection(sourceID:id,title:title,messages:[value.transcriptMessage],selectedMessage:value.id,scope:scope,permissionRevision:reference.permissionRevision)
+}
+
+func inspectChildHistoryMessage(parent:CloudSession,childID:String,scope:String,revision:Int64,messageID:String,snapshot:CloudChildTranscript)throws->ContextInspection {
+    guard snapshot.parentRevision==revision,snapshot.permissionRevision==parent.permissionRevision,
+          snapshot.child.valid(parent:parent.id),snapshot.child.id==childID,snapshot.child.complete,!snapshot.child.removed,
+          snapshot.transcript.revision==snapshot.child.transcriptRevision,snapshot.transcript.messages.count==1,
+          let message=snapshot.transcript.messages.first,message.id==messageID,!message.removed else{throw CampCloudError.invalidResponse}
+    return ContextInspection(sourceID:"camp:"+parent.id,title:snapshot.child.name,messages:[message.transcriptMessage],selectedMessage:messageID,scope:scope,permissionRevision:parent.permissionRevision,childID:childID)
 }
 
 struct ContextPreview: Sendable {
@@ -126,6 +135,8 @@ extension CampStore {
         }
     }
     private func openCloudHistoryLink(id:String,revision:String,message:String) {
+        let childParts=id.components(separatedBy:"/child:")
+        if childParts.count==2 {openCloudChildHistoryLink(parentID:childParts[0],childID:childParts[1],revision:revision,message:message);return}
         guard id.hasPrefix("camp:"),let remote=cloudSessions[id],let scope=cloud.scope,
               remote.campId==scope.campId,let version=Int64(revision),version>0,version<=remote.transcriptRevision else {
             banner = "This source snapshot is not saved in this Camp";return
@@ -142,6 +153,29 @@ extension CampStore {
                 guard cloud.scope==scope,cloudSessions[id]?.permissionRevision==reference.permissionRevision else {throw CampCloudError.invalidResponse}
                 contextInspection=try inspectHistoryMessage(id:id,title:remote.title,scope:scope.key,reference:reference,snapshot:snapshot)
             } catch is CancellationError {} catch {if cloud.scope==scope {banner=error.localizedDescription}}
+        }
+    }
+    private func openCloudChildHistoryLink(parentID:String,childID:String,revision:String,message:String) {
+        guard let parent=cloudSessions[parentID],let scope=cloud.scope,UUID(uuidString:childID) != nil,
+              let version=Int64(revision),version>0,version<=parent.transcriptRevision,message.utf8.count<=256 else{banner="This child snapshot is not saved in this Camp";return}
+        if message.isEmpty {openCloudChild(parentID:parentID,childID:childID);return}
+        Task {
+            do {
+                let value=try await cloud.childMessage(session:parent,childID:childID,revision:version,messageID:message)
+                guard cloud.scope==scope,cloudSessions[parentID]?.permissionRevision==parent.permissionRevision else{throw CancellationError()}
+                contextInspection=try inspectChildHistoryMessage(parent:parent,childID:childID,scope:scope.key,revision:version,messageID:message,snapshot:value)
+            } catch is CancellationError {} catch {if cloud.scope==scope{banner=error.localizedDescription}}
+        }
+    }
+    func openCloudChild(parentID:String,childID:String) {
+        guard let parent=cloudSessions[parentID],let local=sessions.first(where:{$0.id==parentID}),let scope=cloud.scope else{return}
+        open(local)
+        Task {
+            do {
+                let values=try await cloud.childHistories(session:parent)
+                guard cloud.scope==scope,selectedID==parentID,let child=values.children.first(where:{$0.id==childID && !$0.removed && $0.complete}) else{return}
+                children=values.children.filter{!$0.removed}.map(\.childSession);selectedChildID=child.id
+            } catch {if selectedID==parentID{banner=error.localizedDescription}}
         }
     }
     func contextTitle(_ reference: SessionReference) -> String {
@@ -235,7 +269,10 @@ struct ContextInspectionView: View {
                     .onAppear { proxy.scrollTo(inspection.selectedMessage, anchor: .top) }
             }
             if let original = store.sessions.first(where: { $0.id == inspection.sourceID }) {
-                Button("Open original session") { store.open(original); dismiss() }
+                Button("Open original session") {
+                    if let childID=inspection.childID {store.openCloudChild(parentID:original.id,childID:childID)} else {store.open(original)}
+                    dismiss()
+                }
             }
         }.padding(22).frame(width: 680, height: 600)
     }

@@ -49,9 +49,13 @@ Cloud conversations also expose their own complete stored transcript through
 history is pinned to the queued prompt's transcript revision and read in pages;
 it is separate from the limits on selected `@` attachments above. Long messages
 continue at the returned UTF-8 byte offset without splitting a character.
-Every page checks the active request and current permissions. The parent runner
-keeps its service credential; a temporary local reader gives the context helper
-access to that one transcript. See [provider turns](runner-turns.md#conversation-history).
+Every page checks the active request and current permissions. Complete child
+histories from that same parent revision are available through `list_subagents`
+(up to 50 descriptors per page) followed by `read_session`. Child titles and
+transcripts are not expanded into the initial prompt. Unrelated, incomplete or
+currently removed children cannot be read. The parent runner keeps its service
+credential; a temporary local reader gives the context helper access to these
+authorized histories. See [provider turns](runner-turns.md#conversation-history).
 
 History citations use the same native snapshot inspector. For a citation not
 stored as an `@` attachment, the app requests exactly that message and revision
@@ -61,11 +65,16 @@ message, up to 1 MiB, so a long historical response can be inspected without
 increasing the model-context selection limit. Missing or mismatched revisions
 and message IDs are rejected. The fetched citation is not added to the local
 attachment archive.
+Child citations use
+`POST /v1/camps/{camp}/sessions/{session}/children/{child}/message` with the
+parent revision and child message ID. The inspector keeps the parent access
+boundary, shows only that child message, and can open the original child chat.
 The inspector closes when the Camp changes, the source disappears or its
-permission revision changes.
+permission revision changes. A child update also closes an open child inspector
+so removed content cannot remain on screen after an observed update.
 
-Child histories, file attachments, live-provider acceptance and the release
-performance/soak gates remain in the V1 delivery scope.
+Durable offline child caching, file attachments, live-provider acceptance and
+the release performance/soak gates remain in the V1 delivery scope.
 
 Integration references: [Codex app-server](https://learn.chatgpt.com/docs/app-server)
 and [Claude CLI reference](https://code.claude.com/docs/en/cli-reference).
