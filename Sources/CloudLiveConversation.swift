@@ -59,6 +59,10 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
     private var completed: [Message] = []
     private var committed: Set<String> = []
     private var headPath = ""
+    private var implementationRequest: (id: String, implementation: String, plan: String, version: Int)?
+    private var reportedModel: String?
+    private var reportedEffort: String?
+    private var reportedSpeed: String?
     private var textLimit = 16 << 20
     var changed: (() -> Void)?
     deinit { task?.cancel(); retryTask?.cancel() }
@@ -79,14 +83,27 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
         textLimit = 8192
         invalidate(sessionID)
     }
+    func watchImplementation(_ request: CloudRequest, scope: CloudScope, client: any CampAccountTransport, credential: CloudCredential) {
+        guard request.isImplementation, request.contentRestricted != true, request.campId == scope.campId,
+              UUID(uuidString: request.id) != nil, let implementation = request.implementationId, UUID(uuidString: implementation) != nil,
+              let plan = request.planId, UUID(uuidString: plan) != nil, let version = request.planVersion, version > 0 else { stop(); return }
+        let key = "\(scope.key):implementation:\(implementation):\(request.id)"
+        if binding != key { stop(); binding = key; sessionID = request.sessionId; self.scope = scope }
+        self.client = client; self.credential = credential
+        implementationRequest = (request.id, implementation, plan, version)
+        headPath = "/v1/camps/\(scope.campId)/requests/\(request.id)"
+        textLimit = 16 << 20
+        invalidate(request.sessionId)
+    }
     func stop() {
         generation = UUID(); task?.cancel(); task = nil; retryTask?.cancel(); retryTask = nil; dirty = false
         binding = nil; sessionID = nil; scope = nil; client = nil; credential = nil
-        headPath = ""; textLimit = 16 << 20
+        headPath = ""; implementationRequest = nil; textLimit = 16 << 20
         reset(); committed = []
     }
     private func reset() {
         head = nil; cursor = 0; text = ""; completed = []; messages = []; approvals = []; approvalSequences = [:]; notice = ""
+        reportedModel = nil; reportedEffort = nil; reportedSpeed = nil
         revision &+= 1; changed?()
     }
     func acknowledge(_ values: [CloudMessage]) {
@@ -111,7 +128,16 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
                     let data = try await client.data("GET", path: self.headPath, body: nil, key: nil, token: credential.token)
                     guard self.generation == token, !Task.isCancelled else { return }
                     let decoded: CloudStreamHead?
-                    do { decoded = try CampWire.decoder().decode(CloudStreamHead?.self, from: data) }
+                    do {
+                        if let expected = self.implementationRequest {
+                            let request = try CampWire.decoder().decode(CloudRequest.self, from: data)
+                            guard request.isImplementation, request.id == expected.id, request.campId == scope.campId,
+                                  request.sessionId == self.sessionID, request.implementationId == expected.implementation,
+                                  request.planId == expected.plan, request.planVersion == expected.version else { throw CampCloudError.invalidResponse }
+                            if request.contentRestricted == true { self.stop(); return }
+                            decoded = CloudStreamHead(id: request.id, state: request.state, seq: request.streamSeq ?? 0, model: request.model, effort: request.effort, speed: request.speed)
+                        } else { decoded = try CampWire.decoder().decode(CloudStreamHead?.self, from: data) }
+                    }
                     catch { throw CampCloudError.invalidResponse }
                     guard let result = decoded else { self.reset(); return }
                     if self.notice == "Live output disconnected · Reconnecting" { self.notice = "" }
@@ -119,6 +145,9 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
                     if self.head?.id != result.id { self.reset() }
                     guard result.seq >= self.cursor else { throw CampCloudError.invalidResponse }
                     self.head = result
+                    if let model = self.reportedModel { self.head?.model = model }
+                    if let effort = self.reportedEffort { self.head?.effort = effort }
+                    if let speed = self.reportedSpeed { self.head?.speed = speed }
                     if self.committed.contains(result.id) { self.publish(); continue }
                     while self.cursor < result.seq {
                         let bytes = try await client.data("GET", path: "/v1/camps/\(scope.campId)/requests/\(result.id)/events?after=\(self.cursor)", body: nil, key: nil, token: credential.token)
@@ -161,9 +190,9 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
             case "text": text = event.text ?? ""
             case "reset": text = ""
             case "settings":
-                if let model = event.model, !model.isEmpty { head?.model = model }
-                if let effort = event.effort, !effort.isEmpty { head?.effort = effort }
-                if let speed = event.speed, !speed.isEmpty { head?.speed = speed }
+                if let model = event.model, !model.isEmpty { head?.model = model; reportedModel = model }
+                if let effort = event.effort, !effort.isEmpty { head?.effort = effort; reportedEffort = effort }
+                if let speed = event.speed, !speed.isEmpty { head?.speed = speed; reportedSpeed = speed }
             case "boundary":
                 if !text.isEmpty { completed.append(liveMessage(text, segment: completed.count)); text = "" }
             case "approval":

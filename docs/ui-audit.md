@@ -4,6 +4,24 @@ Reference: the approved [interactive design](http://127.0.0.1:8770/capybara-camp
 The native app has **not passed the full design audit**. This is the working
 discrepancy list, not a release approval.
 
+## Shared implementation history
+
+The native shared-plan History and Implementation sections now discover saved
+runs and page through their requests. They reuse the provider marks, model
+settings, transcript viewport and stream renderer. Only the selected request
+has an active stream projection; history pages replace one another rather than
+accumulating transcripts.
+
+Computer use reported a locked Mac and disabled browser control during this
+pass. Native discovery, paging, stream and revocation regressions pass. The new
+view still needs matching-size comparison with the approved design,
+pointer-edge and keyboard checks, direct opening of the only run,
+version switching, empty/error/revoked states and stream-following checks. Its
+executor setup, owner approval and follow-up controls are not complete. Do not
+treat the compiled view or API tests as visual acceptance.
+The signed development candidate is `build/Capybara Camp Shared History.app`,
+with the isolated bundle ID `com.capybaracamp.shared-history-review`.
+
 ## Saved planning history
 
 The October 22 native walkthrough signed in to the actual Go API backed by a

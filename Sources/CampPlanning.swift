@@ -35,6 +35,7 @@ struct CampPlanningState: Codable, Sendable {
     private var saveTask: Task<Void, Never>?
     private var dirty = false
     private var visibleSessions: Set<String> = []
+    private var sourceGrants: [String: Int64] = [:]
     @Published private var executionTargets: [String: CloudPlanningExecution] = [:]
     private var sourceProviders: [String: String] = [:]
     private var accessRevision: UInt64 = 0
@@ -43,18 +44,19 @@ struct CampPlanningState: Codable, Sendable {
 
     func attach(scope: CloudScope?, actor: CloudActor?, transport: (any CampPublishingTransport)?, sessions: [CloudSession]) {
         guard let scope, let actor, let transport, let cache else {
-            context = nil; task?.cancel(); task = nil; saveTask?.cancel(); ready = false; state = CampPlanningState(); executionTargets = [:]; sourceProviders = [:]; selectedID = nil; selectedVersion = 0; error = ""; publish(); return
+            context = nil; task?.cancel(); task = nil; saveTask?.cancel(); ready = false; state = CampPlanningState(); executionTargets = [:]; sourceProviders = [:]; sourceGrants = [:]; selectedID = nil; selectedVersion = 0; error = ""; publish(); return
         }
         let visible = Set(sessions.map(\.id))
+        let grants = sessions.reduce(into: [String: Int64]()) { $0[$1.id] = $1.permissionRevision }
         sourceProviders = sessions.reduce(into: [:]) { $0[$1.id] = $1.provider }
         let targets = sessions.reduce(into: [String: CloudPlanningExecution]()) { values, session in
             if session.campId == scope.campId, let target = CloudPlanningExecution(session: session) { values[session.id] = target }
         }
         if targets != executionTargets { executionTargets = targets }
         if context?.scope == scope, context?.actor.deviceId == actor.deviceId {
-            if visible != visibleSessions {
-                let lostAccess = !visibleSessions.isSubset(of: visible)
-                visibleSessions = visible; accessRevision &+= 1
+            if visible != visibleSessions || grants != sourceGrants {
+                let lostAccess = !visibleSessions.isSubset(of: visible) || sourceGrants.contains { grants[$0.key] != $0.value }
+                visibleSessions = visible; sourceGrants = grants; accessRevision &+= 1
                 state.details = state.details.filter { $0.value.referencedSessions.isSubset(of: visible) }
                 if lostAccess { state.tickets = []; state.details = [:] }
                 publish(); refresh()
@@ -63,7 +65,7 @@ struct CampPlanningState: Codable, Sendable {
             return
         }
         task?.cancel(); saveTask?.cancel(); ready = false; state = CampPlanningState(); selectedID = nil; selectedVersion = 0; error = ""; publish()
-        visibleSessions = visible; accessRevision &+= 1
+        visibleSessions = visible; sourceGrants = grants; accessRevision &+= 1
         let generation = UUID()
         context = Context(scope: scope, actor: actor, transport: transport, generation: generation, epoch: 0)
         task = Task { [weak self] in
@@ -250,6 +252,20 @@ struct CampPlanningState: Codable, Sendable {
         return data
     }
     func implementationSourceVisible(_ id: String) -> Bool { visibleSessions.contains(id) }
+    func readImplementationRuns(_ ticket: CloudPlanningResult, implementationID: String? = nil, before: String? = nil) async throws -> Data {
+        guard let c = context, ticket.valid, ticket.campId == c.scope.campId,
+              ticket.referencedSessions.isSubset(of: visibleSessions),
+              implementationID == nil || implementationID.flatMap(UUID.init(uuidString:)) != nil,
+              before == nil || before.flatMap(UUID.init(uuidString:)) != nil else { throw CampCloudError.invalidResponse }
+        let access = accessRevision
+        let resource = implementationID.map { "/\($0)/requests" } ?? ""
+        let cursor = before.map { "&before=\($0)" } ?? ""
+        let data = try await c.transport.perform(CampPublication(kind: "read", method: "GET",
+            path: "/v1/camps/\(c.scope.campId)/planning/\(ticket.id)/implementation-runs\(resource)?version=\(ticket.version.version)&limit=20\(cursor)", body: Data()))
+        try check(c)
+        guard access == accessRevision else { throw CancellationError() }
+        return data
+    }
     func flush() async {
         saveTask?.cancel(); saveTask = nil
         if ready { do { try await persist() } catch { self.error = "The planning draft could not be saved" } }

@@ -93,7 +93,9 @@ signed revocation webhooks; it exposes no Git token readback endpoint.
 | `POST /v1/camps/{camp}/requests/claim` | Claim one eligible request on its owning device; explicit `session_ids` plus `include_planning: true` opts into planning, or `include_implementation: true` into all supported work |
 | `POST /v1/camps/{camp}/requests/{id}/actions` | Approve, start, heartbeat, cancel, finish or reconcile |
 | `POST /v1/camps/{camp}/planning/{plan}/execution-approvals/{approval}/dispatch` | Consume the approved revision and queue one implementation conversation |
-| `GET /v1/camps/{camp}/planning/{plan}/implementation-runs/{id}` | Authorized implementation identity and latest 100 requests |
+| `GET /v1/camps/{camp}/planning/{plan}/implementation-runs` | Required `version`, optional `before` UUID and `limit` up to 20; authorized run summaries |
+| `GET /v1/camps/{camp}/planning/{plan}/implementation-runs/{id}` | Authorized implementation identity and up to 100 recent requests within a 2 MiB encoded-content budget, with `requests_before` for older history |
+| `GET /v1/camps/{camp}/planning/{plan}/implementation-runs/{id}/requests` | Optional `before` request UUID and `limit` up to 100 (default 20); rechecks source grants on every page |
 | `POST /v1/camps/{camp}/planning/{plan}/implementation-runs/{id}/requests` | Follow-up on the same provider conversation, subject to owner approval |
 | `POST /v1/camps/{camp}/requests/{id}/implementation-events` | Assigned local worker's ordered stream with its current lease |
 | `POST /v1/camps/{camp}/requests/{id}/local-controls` | Assigned implementation worker reads pending owner-approved controls with its current lease |

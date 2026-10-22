@@ -22,8 +22,8 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: connect shared implementation approval and history to the native planning
-workspace, validate the worker against the local API, then finish the remaining transfer cases,
+Next: finish shared implementation executor setup, owner approval, follow-up
+controls and board-card conversion in the native planning workspace, validate the worker against the local API, then finish the remaining transfer cases,
 full-history migration and shared skills. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
@@ -88,6 +88,37 @@ the shared implementation UI remain acceptance work, not completed deployment.
 The HTTP stream limit now admits valid escaped output within the stream's
 existing per-event bound; its regression and focused backend suites pass
 (`build/native-implementation-event-limits.log`).
+
+Shared implementation history now has authorized, paged discovery and request
+history. Reopening a plan no longer requires retaining its implementation ID,
+and request history extends beyond the latest 100 turns. The native History and
+Implementation sections reuse the existing provider marks, model controls,
+transcript viewport and live reader. They retain a bounded page and replay only
+the selected request. Provider-reported settings survive state refreshes.
+Permission-revision changes fence in-flight native reads, and changing the
+executor session's grant also invalidates saved implementation content.
+
+The full PostgreSQL Go race suite and vet pass
+(`build/implementation-history-full-suite.log`), including equal-timestamp
+pagination, older requests, unrelated members and revoked empty-page reads.
+The shared Swift module compiles, and shared implementation, planning, planning
+stream, imported implementation and cloud/cache regressions pass
+(`build/shared-implementation-history-native.log`). They include a run arriving
+while discovery is in flight, older pages, actual reported settings and content
+clearing after revocation or closure. Linux backend command builds also pass.
+The final encoded-size regression and focused Camp/HTTP/migration race suites
+and vet pass (`build/implementation-history-final-focused.log`). Request pages
+stay within a 2 MiB encoded-content budget and preserve an older-history cursor.
+The isolated development app builds with the existing Ambient Local Development
+identity and passes strict deep signature verification
+(`build/Capybara Camp Shared History.app`, `build/shared-history-build.log`).
+This is an arm64 review build with a separate review bundle ID, not a notarized
+universal release. The staged secret scan found no leaks.
+These are synthetic API/native checks; live providers and visual acceptance
+remain open. Computer use currently reports a locked Mac and disabled browser control; this does not
+prevent the remaining implementation and automated checks. Shared executor
+setup, owner approval and the follow-up composer/controls remain unfinished.
+No deployment or release was made.
 
 The shared implementation review found an existing request-content leak after
 tagged-source revocation. Regression tests reproduced it through detail reads,

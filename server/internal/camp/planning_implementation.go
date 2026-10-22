@@ -3,6 +3,7 @@ package camp
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"maps"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ type PlanningImplementation struct {
 	ProviderSessionID string    `json:"provider_session_id,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 	Requests          []Request `json:"requests"`
+	RequestsBefore    string    `json:"requests_before,omitempty"`
 }
 
 func (s *Store) implementationAccess(ctx context.Context, tx pgx.Tx, r Request) error {
@@ -209,8 +211,12 @@ func (s *Store) ContinueImplementation(ctx context.Context, a auth.Actor, campID
 }
 
 func (s *Store) readImplementation(ctx context.Context, tx pgx.Tx, a auth.Actor, campID, planID, id string) (PlanningImplementation, error) {
+	return s.readImplementationPage(ctx, tx, a, campID, planID, id, "", 100)
+}
+
+func (s *Store) readImplementationPage(ctx context.Context, tx pgx.Tx, a auth.Actor, campID, planID, id, before string, limit int) (PlanningImplementation, error) {
 	var out PlanningImplementation
-	if !validID(id) {
+	if !validID(id) || (before != "" && !validID(before)) || limit < 1 || limit > 100 {
 		return out, ErrDenied
 	}
 	err := tx.QueryRow(ctx, `SELECT i.id,i.approval_id,i.plan_id,i.plan_version,COALESCE(i.provider_session_id,''),i.created_at FROM planning_implementations i JOIN planning_execution_approvals a ON a.id=i.approval_id WHERE i.id=$1 AND i.camp_id=$2 AND i.plan_id=$3 AND (a.creator_user_id=$4 OR a.owner_user_id=$4)`, id, campID, planID, a.UserID).Scan(&out.ID, &out.ApprovalID, &out.PlanID, &out.PlanVersion, &out.ProviderSessionID, &out.CreatedAt)
@@ -224,30 +230,67 @@ func (s *Store) readImplementation(ctx context.Context, tx pgx.Tx, a auth.Actor,
 	if err = s.checkPlanningSources(ctx, tx, a, p); err != nil {
 		return out, err
 	}
-	rows, err := tx.Query(ctx, `SELECT `+requestColumns+` FROM prompt_requests r JOIN sessions s ON s.id=r.session_id WHERE r.implementation_id=$2 AND `+readableRequestContentSQL+` ORDER BY r.created_at DESC,r.id DESC LIMIT 100`, a.UserID, id)
+	// A cursor beyond the final page must not bypass the pinned source grants
+	// or disclose a provider identity after every request became inaccessible.
+	var readable bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM prompt_requests r JOIN sessions s ON s.id=r.session_id WHERE r.implementation_id=$2 AND `+readableRequestContentSQL+`)`, a.UserID, id).Scan(&readable); err != nil {
+		return out, err
+	}
+	if !readable {
+		return PlanningImplementation{}, ErrDenied
+	}
+	rows, err := tx.Query(ctx, `SELECT `+requestColumns+` FROM prompt_requests r JOIN sessions s ON s.id=r.session_id WHERE r.implementation_id=$2 AND `+readableRequestContentSQL+`
+ AND ($3::uuid IS NULL OR (r.created_at,r.id)<(SELECT cursor.created_at,cursor.id FROM prompt_requests cursor WHERE cursor.id=$3 AND cursor.implementation_id=$2))
+ ORDER BY r.created_at DESC,r.id DESC LIMIT $4`, a.UserID, id, nullableID(before), limit+1)
 	if err != nil {
 		return out, err
 	}
 	defer rows.Close()
 	out.Requests = []Request{}
+	pageBytes := 0
 	for rows.Next() {
 		r, err := scanRequest(rows)
 		if err != nil {
 			return out, err
 		}
 		r.LeaseToken = ""
+		encoded, err := json.Marshal(r)
+		if err != nil {
+			return out, err
+		}
+		// Count JSON escaping, not raw prompt bytes, so every native page fits
+		// the transport bound even with long control-character-heavy prompts.
+		if len(out.Requests) > 0 && pageBytes+len(encoded) > 2<<20 {
+			out.RequestsBefore = out.Requests[len(out.Requests)-1].ID
+			break
+		}
+		pageBytes += len(encoded)
 		out.Requests = append(out.Requests, r)
 	}
 	if err = rows.Err(); err != nil {
 		return out, err
 	}
-	if len(out.Requests) == 0 {
+	if len(out.Requests) == 0 && before == "" {
 		return out, ErrDenied
+	}
+	if len(out.Requests) > limit {
+		out.Requests = out.Requests[:limit]
+		out.RequestsBefore = out.Requests[limit-1].ID
 	}
 	return out, nil
 }
 func (s *Store) Implementation(ctx context.Context, a auth.Actor, campID, planID, id string) (PlanningImplementation, error) {
-	tx, err := s.pool.Begin(ctx)
+	return s.ImplementationRequests(ctx, a, campID, planID, id, "", 100)
+}
+
+func (s *Store) ImplementationRequests(ctx context.Context, a auth.Actor, campID, planID, id, before string, limit int) (PlanningImplementation, error) {
+	return retryRead(ctx, func() (PlanningImplementation, error) {
+		return s.implementationRequestsOnce(ctx, a, campID, planID, id, before, limit)
+	})
+}
+
+func (s *Store) implementationRequestsOnce(ctx context.Context, a auth.Actor, campID, planID, id, before string, limit int) (PlanningImplementation, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
 		return PlanningImplementation{}, err
 	}
@@ -255,7 +298,7 @@ func (s *Store) Implementation(ctx context.Context, a auth.Actor, campID, planID
 	if _, err = s.lock(ctx, tx, a, campID, false); err != nil {
 		return PlanningImplementation{}, err
 	}
-	out, err := s.readImplementation(ctx, tx, a, campID, planID, id)
+	out, err := s.readImplementationPage(ctx, tx, a, campID, planID, id, before, limit)
 	if err != nil {
 		return out, err
 	}

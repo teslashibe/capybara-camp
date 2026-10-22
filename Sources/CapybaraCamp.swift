@@ -515,7 +515,7 @@ final class TranscriptWatch {
         }
         cloud.requestChanged = { [weak self] value in
             self?.cloud.worker.changed(value)
-            if value.isPlanning { self?.sharedPlanning.refresh() }
+            if value.isIsolatedWork { self?.sharedPlanning.refresh() }
         }
         cloud.notificationsChanged = { [weak self] values, scope, live in self?.notifications.applyCloud(values, scope: scope, live: live) }
         cloud.planningChanged = { [weak self] id in

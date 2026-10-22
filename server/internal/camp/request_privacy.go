@@ -12,7 +12,7 @@ import (
 // paged request list bounded without per-row queries or hiding lifecycle state.
 const readableRequestContentSQL = `
  (s.shared OR s.owner_user_id=$1)
- AND (r.kind<>'implementation' OR EXISTS(SELECT 1 FROM planning_implementations i JOIN planning_execution_approvals a ON a.id=i.approval_id WHERE i.id=r.implementation_id AND (a.creator_user_id=$1 OR a.owner_user_id=$1)))
+ AND (r.kind<>'implementation' OR EXISTS(SELECT 1 FROM planning_implementations i JOIN planning_execution_approvals a ON a.id=i.approval_id WHERE i.id=r.implementation_id AND a.permission_revision=s.permission_revision AND (a.creator_user_id=$1 OR a.owner_user_id=$1)))
  AND NOT EXISTS(SELECT 1 FROM request_sources x JOIN sessions source ON source.id=x.session_id
    WHERE x.request_id=r.id AND (source.permission_revision<>x.permission_revision
      OR source.transcript_revision<x.transcript_revision OR NOT(source.shared OR source.owner_user_id=$1)))

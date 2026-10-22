@@ -7,6 +7,36 @@ import (
 )
 
 func (a *API) implementationRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/camps/{camp}/planning/{plan}/implementation-runs", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		version, ok := queryInt(w, r, "version")
+		if !ok {
+			return
+		}
+		limit, ok := queryInt(w, r, "limit")
+		if !ok {
+			return
+		}
+		if limit == 0 {
+			limit = 20
+		}
+		out, err := a.Camps.Implementations(r.Context(), u, r.PathValue("camp"), r.PathValue("plan"), version, r.URL.Query().Get("before"), int(limit))
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
+	mux.HandleFunc("GET /v1/camps/{camp}/planning/{plan}/implementation-runs/{implementation}/requests", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		limit, ok := queryInt(w, r, "limit")
+		if !ok {
+			return
+		}
+		if limit == 0 {
+			limit = 20
+		}
+		out, err := a.Camps.ImplementationRequests(r.Context(), u, r.PathValue("camp"), r.PathValue("plan"), r.PathValue("implementation"), r.URL.Query().Get("before"), int(limit))
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
 	mux.HandleFunc("POST /v1/camps/{camp}/requests/{request}/local-controls", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		var in struct {
 			LeaseToken string `json:"lease_token"`

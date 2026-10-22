@@ -90,6 +90,19 @@ func TestPlanningApprovalHTTPReviewAndImplementationDispatch(t *testing.T) {
 	if len(implementation.Requests) != 1 || implementation.Requests[0].LeaseToken != "" {
 		t.Fatal("implementation read contract")
 	}
+	runsPath := "/v1/camps/" + c.ID + "/planning/" + plan.ID + "/implementation-runs"
+	var runs camp.PlanningImplementationPage
+	client.call("GET", runsPath+"?version=1", "", nil, &runs, 200)
+	if len(runs.Implementations) != 1 || runs.Implementations[0].ID != dispatched.ImplementationID {
+		t.Fatal("implementation discovery")
+	}
+	anonymous.call("GET", runsPath+"?version=1", "", nil, nil, 401)
+	client.call("GET", runsPath+"?version=1&limit=21", "", nil, nil, 400)
+	client.call("GET", runsPath+"?version=1&before=invalid", "", nil, nil, 400)
+	client.call("GET", runsPath+"/"+dispatched.ImplementationID+"/requests?limit=20", "", nil, &implementation, 200)
+	if len(implementation.Requests) != 1 || implementation.RequestsBefore != "" {
+		t.Fatal("request history route")
+	}
 	requestPath := "/v1/camps/" + c.ID + "/requests/" + claimed.ID
 	lease := claimed.LeaseToken
 	client.call("POST", requestPath+"/actions", "", camp.RequestAction{Action: "start", LeaseToken: lease, ExecutionContext: strings.Repeat("a", 64)}, nil, 200)

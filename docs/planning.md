@@ -109,13 +109,39 @@ assigned profile, project and permissions before starting, compares its
 fingerprint with the saved approval, and cancels admission when they differ.
 The bridge checks that fingerprint again before provider submission.
 
-`GET /implementation-runs/{id}` returns the saved provider identity and latest
-100 requests. `POST /implementation-runs/{id}/requests` queues a follow-up;
+`GET /implementation-runs?version=1&limit=20` discovers implementations for a
+specific plan revision, newest first. Follow its `before` UUID cursor to read
+earlier pages. Summaries contain the executor, settings and latest request state,
+without prompts or provider conversation identities.
+
+`GET /implementation-runs/{id}` returns the saved provider identity and up to
+100 recent requests, with `requests_before` when earlier requests exist. Read those
+through `GET /implementation-runs/{id}/requests?before={cursor}&limit=20`.
+Both collections use creation time and UUID ordering, so equal timestamps do
+not cause duplicates or gaps. Cursors belong to the same implementation or
+plan revision; they cannot redirect reads into another Camp.
+Request pages also have a 2 MiB encoded-content budget, including JSON escapes.
+Large prompts reduce the number of requests on a page without losing access to
+the remaining history.
+
+`POST /implementation-runs/{id}/requests` queues a follow-up;
 another person's prompt needs the executor owner's ordinary approval. Reads
 are currently limited to the plan creator and executor owner and recheck the
 plan and pinned source grants. Follow-ups preserve the original plan context.
 The usual request stream endpoint supplies ordered output; local workers publish
 through `/requests/{id}/implementation-events` with their lease.
+Changes to the executor session's permission revision also invalidate its
+implementation content, even if the session is shared again. Empty pages retain
+the same access checks as populated pages.
+
+The native planning History section lists shared implementation runs alongside
+imported history. Each opens within the same ticket. Request history loads in
+bounded pages and the selected request reuses the chat renderer, stream reader
+and model controls. Opening an implementation never subscribes to the account
+source chat. Provider-reported model, effort and speed remain visible when a
+state refresh returns the original request settings. The shared executor setup,
+owner approval, follow-up composer and controls still need their native flow and
+computer-use acceptance before release.
 
 The Mac worker persists each bounded stream event before sending it and retries
 the same sequence after a lost response. Cumulative text is sent as small deltas;
