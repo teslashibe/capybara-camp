@@ -1183,6 +1183,7 @@ struct RootView: View {
     @ObservedObject var onboarding: CampOnboarding
     @Environment(\.openWindow) private var openWindow
     @State private var showCamp = false
+    @FocusState private var notificationButtonFocused: Bool
     init(store: CampStore) { self.store = store; self.onboarding = store.onboarding }
     var body: some View {
         HStack(spacing: 0) {
@@ -1200,7 +1201,8 @@ struct RootView: View {
                 else if let id = store.selectedID, let plan = store.planning.ticket(id), plan.implementation == nil || store.reviewingPlan == id { PlanningWorkspace(store: store, planning: store.planning, id: id) }
                 else { ChatView(store: store) }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.foregroundStyle(campInk).background(campCream).tint(campGreen)
+        }.disabled(store.notificationSheet).accessibilityHidden(store.notificationSheet)
+        .foregroundStyle(campInk).background(campCream).tint(campGreen)
         .frame(minWidth: 1060, minHeight: 720)
         .onAppear {
             store.refresh(); store.startBackgroundObservation()
@@ -1212,8 +1214,23 @@ struct RootView: View {
             }
         }
         .campWindowBehavior()
-        .sheet(isPresented: $store.notificationSheet) { CampNotificationsView(store: store, notices: store.notifications).campWindowBehavior() }
-        .overlay(alignment: .topTrailing) { CampNotificationToast(store: store, notices: store.notifications).padding(22) }
+        .overlay {
+            if store.notificationSheet {
+                ZStack(alignment: .topTrailing) {
+                    Button { store.notificationSheet = false } label: {
+                        campInk.opacity(0.08).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityHidden(true)
+                    CampNotificationsView(store: store, notices: store.notifications)
+                        .frame(width: 430).padding(.top, 90).padding(.bottom, 65).padding(.trailing, 24)
+                }.tint(campGreen).foregroundStyle(campInk)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if !store.notificationSheet { CampNotificationToast(store: store, notices: store.notifications).padding(.horizontal, 25).padding(.bottom, 43) }
+        }
+        .onChange(of: store.notificationSheet) { _, showing in
+            if showing { store.notifications.dismissToast() } else { notificationButtonFocused = true }
+        }
         .onChange(of: store.view) { _, value in store.observeHistory(); if value == "Chat" { store.loadHistory() } }
         .sheet(isPresented: $store.sourceSheet) { SourcesView(store: store).campWindowBehavior() }
         .sheet(isPresented: Binding(get: { onboarding.presented }, set: { if !$0 { onboarding.pause() } })) {
@@ -1288,7 +1305,7 @@ struct RootView: View {
                     Button("Compare in shared Camp", systemImage: "person.2") { store.newSharedPlan(mode: .comparison) }.disabled(!store.sharedPlanning.ready || store.cloud.projects.isEmpty)
                 } label: { Text("Plan") } primaryAction: { store.newPlan(mode: .single) }
                 CampConnectionButton(cloud: store.cloud) { showCamp = true }
-                CampNotificationButton(notices: store.notifications) { store.notificationSheet = true }
+                CampNotificationButton(notices: store.notifications) { store.notificationSheet = true }.focusable().focused($notificationButtonFocused)
             }
             HStack {
                 HStack(spacing: 9) {

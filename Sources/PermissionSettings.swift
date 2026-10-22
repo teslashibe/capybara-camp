@@ -167,7 +167,7 @@ struct SessionPermissionsView: View {
     var implementation: Bool { store.planning.ticket(session.id)?.implementation != nil }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack { Text("Permissions").font(.title2); Spacer(); Button { store.permissionSheet = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Close permissions").accessibilityLabel("Close permissions") }
+            HStack { Text("Permissions").font(.system(size: 20, weight: .medium)); Spacer(); Button { store.permissionSheet = nil } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }.buttonStyle(.plain).help("Close permissions").accessibilityLabel("Close permissions").keyboardShortcut(.cancelAction) }
             Text(session.title).font(.headline).lineLimit(2)
             if !implementation { Toggle("Chat preview only", isOn: $preview).toggleStyle(.switch) }
             if let catalog { PermissionFields(provider: session.provider, catalog: catalog, selection: $selection).disabled(preview) }
@@ -190,7 +190,7 @@ struct SessionPermissionsView: View {
                     }
                 }.buttonStyle(.borderedProminent).tint(campGreen).disabled(busy || (!preview && !(catalog?.accepts(selection) ?? false)))
             }
-        }.padding(24).frame(width: 480).disabled(busy)
+        }.padding(24).frame(width: 480).background(campCream).foregroundStyle(campInk).tint(campGreen).disabled(busy)
         .task {
             selection = store.permissionSettings(session)
             preview = !implementation && store.sessionPermissions.grants[session.id] == nil

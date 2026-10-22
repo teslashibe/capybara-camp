@@ -438,10 +438,16 @@ struct CampNotificationButton: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: notices.unread == 0 ? "bell" : "bell.badge")
-                if notices.unread > 0 { Text(notices.unread > 99 ? "99+" : String(notices.unread)).font(.system(size: 10, weight: .semibold)) }
-            }.frame(minWidth: 28, minHeight: 28)
+            Image(systemName: "bell").frame(width: 32, height: 32)
+                .overlay(alignment: .topTrailing) {
+                    if notices.unread > 0 {
+                        Text(notices.unread > 99 ? "99+" : String(notices.unread))
+                            .font(.system(size: 10, weight: .semibold)).foregroundStyle(.white)
+                            .padding(.horizontal, 4).frame(minWidth: 17, minHeight: 17)
+                            .background(campGreen, in: Capsule())
+                            .overlay(Capsule().stroke(campCream, lineWidth: 2)).offset(x: 3, y: -3)
+                    }
+                }
         }.buttonStyle(.plain).help("Notifications").accessibilityLabel("Notifications, \(notices.unread) unread")
     }
 }
@@ -449,25 +455,30 @@ struct CampNotificationButton: View {
 struct CampNotificationToast: View {
     @ObservedObject var store: CampStore
     @ObservedObject var notices: CampNotifications
-    @FocusState private var focused: Bool
+    private enum Focus: Hashable { case open, dismiss }
+    @FocusState private var focused: Focus?
     var body: some View {
         if let notice = notices.toast {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: notice.kind == "attention" ? "exclamationmark.circle" : "checkmark.circle").foregroundStyle(campGreen)
-                Button { if notices.toastCount > 1 { store.notificationSheet = true; notices.dismissToast() } else { notices.pendingOpen = notice.id } } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(notices.toastCount > 1 ? "\(notices.toastCount) task updates" : notice.summary).font(.system(size: 12, weight: .semibold))
-                        Text(notices.toastCount > 1 ? "Your results are in Notifications" : notice.title).font(.system(size: 11)).foregroundStyle(campMuted).lineLimit(2)
-                        Text(notices.toastCount > 1 ? "Open notifications" : "Open result").font(.system(size: 11)).foregroundStyle(campGreen)
-                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                }.buttonStyle(.plain).focused($focused)
+            HStack(spacing: 10) {
+                Text(notices.toastCount > 1 ? "\(notices.toastCount) task updates" : notice.summary + " · " + notice.title)
+                    .lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                Button {
+                    if notices.toastCount > 1 { store.notificationSheet = true; notices.dismissToast() }
+                    else { notices.pendingOpen = notice.id }
+                } label: {
+                    Text(notices.toastCount > 1 ? "View all" : "View").fontWeight(.medium)
+                        .padding(.horizontal, 9).frame(minHeight: 28)
+                        .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
+                }.buttonStyle(.plain).focusable().focused($focused, equals: .open)
+                    .accessibilityLabel(notices.toastCount > 1 ? "Open notifications" : "Open result")
                 Button { notices.dismissToast() } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }
-                    .buttonStyle(.plain).help("Dismiss notification").accessibilityLabel("Dismiss notification")
-            }.padding(14).frame(width: 320).background(campCream)
-                .clipShape(RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(campInk.opacity(0.12)))
-                .shadow(color: .black.opacity(0.08), radius: 12, y: 5)
+                    .buttonStyle(.plain).focusable().focused($focused, equals: .dismiss).help("Dismiss notification").accessibilityLabel("Dismiss notification")
+            }.font(.system(size: 11)).foregroundStyle(.white)
+                .padding(.leading, 13).padding(.trailing, 10).padding(.vertical, 9)
+                .background(Color(hex: 0x405849), in: RoundedRectangle(cornerRadius: 7))
+                .frame(maxWidth: 660).shadow(color: campInk.opacity(0.15), radius: 9, y: 5)
                 .onHover { notices.pauseToast("hover", paused: $0) }
-                .onChange(of: focused) { _, value in notices.pauseToast("focus", paused: value) }
+                .onChange(of: focused) { _, value in notices.pauseToast("focus", paused: value != nil) }
                 .onExitCommand { notices.dismissToast() }
                 .onDisappear { notices.pauseToast("hover", paused: false); notices.pauseToast("focus", paused: false) }
         }
@@ -479,58 +490,128 @@ struct CampNotificationsView: View {
     @ObservedObject var notices: CampNotifications
     @State private var showRead = true
     @State private var count = 50
+    @State private var settings = false
+    @FocusState private var closeFocused: Bool
+    private var values: [CampNotice] { notices.visible.filter { showRead || !$0.read } }
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let shown = Array(values.prefix(count))
+        let ids = Set(shown.map(\.sessionID))
+        let providers = Dictionary(store.sessions.lazy.filter { ids.contains($0.id) }.map { ($0.id, $0.provider) }, uniquingKeysWith: { first, _ in first })
+        VStack(alignment: .leading, spacing: 15) {
             HStack {
-                Text("Notifications").font(.title2)
+                Text("Notifications").font(.system(size: 20, weight: .medium))
                 Spacer()
                 Button { store.notificationSheet = false } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }
                     .buttonStyle(.plain).help("Close notifications").accessibilityLabel("Close notifications")
+                    .keyboardShortcut(.cancelAction).focusable().focused($closeFocused)
             }
-            HStack {
-                CampSegmentedControl(options: [(true, "All"), (false, "Unread")], selection: $showRead).frame(width: 200)
+            HStack(spacing: 6) {
+                CampSegmentedControl(options: [(true, "All"), (false, notices.unread > 0 ? "Unread · \(notices.unread)" : "Unread")], selection: $showRead).frame(width: 142)
                 Spacer()
-                Button("Mark all read") { Task { await notices.markAllRead() } }.disabled(notices.unread == 0)
-                Button("Clear read") { Task { await notices.clearRead() } }.disabled(!notices.visible.contains(where: \.read))
+                Button { Task { await notices.markAllRead() } } label: { Image(systemName: "checkmark").frame(width: 28, height: 28) }
+                    .buttonStyle(.plain).help("Mark all as read").accessibilityLabel("Mark all as read").disabled(notices.unread == 0)
+                Button { settings = true } label: { Image(systemName: "gearshape").frame(width: 28, height: 28) }
+                    .buttonStyle(.plain).help("Notification settings").accessibilityLabel("Notification settings")
             }
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    let values = notices.visible.filter { showRead || !$0.read }
-                    if values.isEmpty { Text("You’re all caught up").foregroundStyle(campMuted).frame(maxWidth: .infinity).padding(40) }
-                    ForEach(values.prefix(count)) { notice in
-                        HStack(alignment: .top, spacing: 10) {
-                            Button { notices.pendingOpen = notice.id } label: {
-                                HStack(alignment: .top, spacing: 10) {
-                                    Image(systemName: notice.kind == "attention" ? "exclamationmark.circle" : notice.kind == "plan" ? "lightbulb" : "checkmark.circle").foregroundStyle(campGreen).frame(width: 20)
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        Text(notice.summary).font(.system(size: 12, weight: notice.read ? .regular : .semibold))
-                                        Text(notice.title).font(.system(size: 11)).foregroundStyle(campMuted).lineLimit(2)
-                                        Text(notice.created.formatted(date: .abbreviated, time: .shortened)).font(.system(size: 10)).foregroundStyle(campMuted)
-                                    }
-                                    Spacer()
-                                }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
-                            }.buttonStyle(.plain)
-                            if !notice.read {
-                                Button { Task { await notices.markRead(notice.id) } } label: { Image(systemName: "circle.fill").font(.system(size: 7)).frame(width: 28, height: 28) }
-                                    .buttonStyle(.plain).help("Mark read").accessibilityLabel("Mark read")
-                            }
-                        }.padding(12).background(.white.opacity(0.7)).clipShape(RoundedRectangle(cornerRadius: 8))
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if values.isEmpty {
+                        VStack(spacing: 12) {
+                            Image(systemName: "bell").font(.system(size: 26))
+                            Text(showRead ? "No notifications yet" : "You’re all caught up").font(.system(size: 15, weight: .medium)).foregroundStyle(campInk)
+                            Text("Finished tasks and plans appear here\nSelect one to pick up where you left off").font(.system(size: 12)).multilineTextAlignment(.center)
+                        }.foregroundStyle(campMuted).frame(maxWidth: .infinity, minHeight: 280)
                     }
-                    if values.count > count { Button("Show 50 more") { count += 50 } }
+                    ForEach(shown) { notice in notificationRow(notice, provider: providers[notice.sessionID]) }
+                    if values.count > count { Button("Show 50 more") { count += 50 }.padding(12) }
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
-            Toggle("In-app toasts", isOn: Binding(get: { notices.preferences.toasts }, set: { value in notices.updatePreferences { $0.toasts = value } }))
-            Toggle("Desktop notifications", isOn: Binding(get: { notices.preferences.desktop }, set: { value in Task { await notices.enableDesktop(value) } })).disabled(notices.permissionBusy)
-            HStack(spacing: 24) {
-                Toggle("Include session titles", isOn: Binding(get: { notices.preferences.titles }, set: { value in notices.updatePreferences { $0.titles = value } }))
-                Toggle("Play a sound", isOn: Binding(get: { notices.preferences.sound }, set: { value in notices.updatePreferences { $0.sound = value } }))
-            }.disabled(!notices.preferences.desktop)
-            Text("Desktop alerts appear while Camp runs in the background. Titles stay private unless enabled.").font(.system(size: 11)).foregroundStyle(campMuted)
+            HStack {
+                Text(notices.unread > 0 ? "\(notices.unread) unread" : "All caught up").font(.system(size: 11)).foregroundStyle(campMuted)
+                Spacer()
+                Button("Clear read") { Task { await notices.clearRead() } }.disabled(!notices.visible.contains(where: \.read))
+            }
+        }.padding(19).frame(maxHeight: .infinity).background(campCream, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(campInk.opacity(0.08)))
+            .shadow(color: campInk.opacity(0.15), radius: 20, y: 8)
+            .onAppear { closeFocused = true; notices.dismissToast() }
+            .onReceive(notices.$toast) { if $0 != nil { notices.dismissToast() } }
+            .onExitCommand { store.notificationSheet = false }
+            .sheet(isPresented: $settings) { CampNotificationSettings(notices: notices) { settings = false }.campWindowBehavior() }
+    }
+    private func notificationRow(_ notice: CampNotice, provider: String?) -> some View {
+        return Button { notices.pendingOpen = notice.id } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Group {
+                    if notice.kind == "attention" { Image(systemName: "exclamationmark.circle") }
+                    else if notice.kind == "plan" { Image(systemName: "lightbulb") }
+                    else if let provider { ProviderMark(provider: provider, size: 14) }
+                    else { Image(systemName: "terminal") }
+                }.foregroundStyle(campGreen).frame(width: 29, height: 29)
+                    .background(Color(hex: 0xE3E9DC), in: RoundedRectangle(cornerRadius: 7))
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(notice.summary).font(.system(size: 12, weight: .semibold))
+                        Spacer(minLength: 4)
+                        Text(notice.created.formatted(date: Calendar.current.isDateInToday(notice.created) ? .omitted : .abbreviated, time: .shortened))
+                            .font(.system(size: 10)).foregroundStyle(campMuted).fixedSize()
+                    }
+                    Text(notice.title).font(.system(size: 12)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(detail(notice, provider: provider)).font(.system(size: 10)).foregroundStyle(campMuted)
+                }
+                Circle().fill(notice.read ? .clear : campGreen).frame(width: 6, height: 6).padding(.top, 8)
+            }.padding(.horizontal, 8).padding(.vertical, 13).frame(maxWidth: .infinity, minHeight: 95, alignment: .topLeading)
+                .background(notice.read ? Color.clear : Color(hex: 0xEDF0E7), in: RoundedRectangle(cornerRadius: 7))
+                .overlay(alignment: .bottom) { Rectangle().fill(campInk.opacity(0.08)).frame(height: 1) }
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityValue(notice.read ? "Read" : "Unread")
+            .contextMenu { Button("Mark read") { Task { await notices.markRead(notice.id) } }.disabled(notice.read) }
+    }
+    private func detail(_ notice: CampNotice, provider: String?) -> String {
+        switch notice.kind {
+        case "attention": return "Open the session to review"
+        case "plan": return "Planning · Ready for your review"
+        default: return provider.map { $0 + " · Response ready" } ?? "Response ready"
+        }
+    }
+}
+
+private struct CampNotificationSettings: View {
+    @ObservedObject var notices: CampNotifications
+    let close: () -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("Notification settings").font(.system(size: 20, weight: .medium))
+                Spacer()
+                Button(action: close) { Image(systemName: "xmark").frame(width: 28, height: 28) }
+                    .buttonStyle(.plain).help("Close notification settings").accessibilityLabel("Close notification settings").keyboardShortcut(.cancelAction)
+            }
+            VStack(spacing: 5) {
+                preference("In-app toasts", detail: "A quiet banner when work finishes while Camp is open", binding: Binding(get: { notices.preferences.toasts }, set: { value in notices.updatePreferences { $0.toasts = value } }))
+                preference("Desktop notifications", detail: "Show a macOS banner when Camp is in the background", binding: Binding(get: { notices.preferences.desktop }, set: { value in Task { await notices.enableDesktop(value) } })).disabled(notices.permissionBusy)
+                preference("Task names in desktop previews", detail: "Off keeps task titles private outside Camp", binding: Binding(get: { notices.preferences.titles }, set: { value in notices.updatePreferences { $0.titles = value } })).disabled(!notices.preferences.desktop)
+                preference("Play a sound", detail: "Use the sound allowed by your macOS notification settings", binding: Binding(get: { notices.preferences.sound }, set: { value in notices.updatePreferences { $0.sound = value } })).disabled(!notices.preferences.desktop)
+            }
+            Text("Every completion stays in Notifications, even with banners turned off").font(.system(size: 11)).foregroundStyle(campMuted)
             if !notices.error.isEmpty {
                 Text(notices.error).font(.system(size: 11)).foregroundStyle(.orange)
                 Button("Open System Settings") { NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app")) }
             }
-        }.toggleStyle(.checkbox).padding(24).frame(width: 620, height: 600)
+            HStack { Button("Back", action: close); Spacer() }
+        }.padding(24).frame(width: 530).background(campCream).foregroundStyle(campInk).tint(campGreen)
+            .onExitCommand(perform: close)
+    }
+    private func preference(_ title: String, detail: String, binding: Binding<Bool>) -> some View {
+        HStack(spacing: 20) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title).font(.system(size: 13, weight: .medium))
+                Text(detail).font(.system(size: 11)).foregroundStyle(campMuted)
+            }
+            Spacer(minLength: 0)
+            Toggle(title, isOn: binding).labelsHidden().toggleStyle(.checkbox).accessibilityLabel(title)
+        }.padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .bottom) { Rectangle().fill(campInk.opacity(0.08)).frame(height: 1) }
     }
 }

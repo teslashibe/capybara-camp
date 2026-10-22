@@ -67,8 +67,10 @@ struct ProviderApprovalView: View {
             Label(approval.title, systemImage: "hand.raised").font(.system(size: 12, weight: .semibold))
             ScrollView {
               if approval.kind == "question" {
+                VStack(alignment: .leading, spacing: 14) {
                 ForEach(approval.questions) { question in
                     VStack(alignment: .leading, spacing: 6) {
+                        if !question.header.isEmpty { Text(question.header).font(.system(size: 11, weight: .medium)).foregroundStyle(campMuted) }
                         Text(question.prompt).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
                         ForEach(question.options, id: \.self) { option in
                             Toggle(option, isOn: Binding(get: { selections[question.id, default: []].contains(option) }, set: { selected in
@@ -82,12 +84,13 @@ struct ProviderApprovalView: View {
                             if question.secret { SecureField("Your answer", text: Binding(get: { text[question.id, default: ""] }, set: { text[question.id] = $0 })) }
                             else { TextField("Your answer", text: Binding(get: { text[question.id, default: ""] }, set: { text[question.id] = $0 })) }
                         }
-                    }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                 }
+                }.frame(maxWidth: .infinity, alignment: .leading)
               } else {
                 Text(approval.detail).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
               }
-            }.frame(minHeight: 60, idealHeight: 90, maxHeight: 120)
+            }.frame(height: approval.kind == "question" ? 180 : 90)
             HStack {
                 if !approval.canApprove { Text("The full action is unavailable for review").font(.caption).foregroundStyle(campMuted) }
                 Spacer()

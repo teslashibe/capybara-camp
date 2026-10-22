@@ -38,7 +38,7 @@ struct CampSegmentedControl<Value: Hashable>: View {
                         .frame(maxWidth: .infinity).frame(minHeight: 26)
                         .background(selection == option.value ? Color(hex: 0xCDCCC6) : .clear)
                         .clipShape(RoundedRectangle(cornerRadius: 7))
-                }.buttonStyle(.plain).focused($focused, equals: option.value)
+                }.buttonStyle(.plain).focusable().focused($focused, equals: option.value)
                     .accessibilityLabel(option.title)
                     .accessibilityValue(selection == option.value ? "Selected" : "")
             }

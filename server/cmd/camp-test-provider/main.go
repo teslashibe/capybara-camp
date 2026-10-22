@@ -162,7 +162,22 @@ func run(scenario string, args []string) error {
 		}
 		_ = emit(message{"type": "text", "text": "Synthetic streaming response\n\nThis deliberately long paragraph checks wrapping, readable response spacing, and whether the chat follows its latest content when the window changes width. It uses the native conversation transport without calling Codex or Claude.\n\nThe next input can steer this response, queue a separate prompt, or stop it. The final line must remain visible.\n\nLatest synthetic streaming marker"})
 		approvalID := "e8a1e25a-2b71-4fb9-8122-9ad03a842993"
-		if strings.Contains(prompt, "approval") {
+		if strings.Contains(prompt, "question") {
+			_ = emit(message{"type": "approval", "id": approvalID, "kind": "question", "title": "Choose the next step", "detail": "", "canApprove": true, "acceptLabel": "Submit answers", "questions": []any{
+				message{"id": "path", "header": "Approach", "prompt": "Which approach should the synthetic planner use for this layout review?", "options": []string{"Review the current screen", "Compare both layouts", "Inspect keyboard navigation"}, "multiple": false, "secret": false, "allowText": false},
+				message{"id": "note", "header": "Context", "prompt": "What should this review focus on?", "options": []string{}, "multiple": false, "secret": false, "allowText": true},
+			}})
+		} else if strings.Contains(prompt, "permission") {
+			request := approval(approvalID, "permissions")
+			request["title"] = "Review synthetic permissions"
+			request["detail"] = "Read the synthetic project files for this layout review"
+			request["decisions"] = []any{
+				message{"id": "decline", "label": "Decline", "allows": false},
+				message{"id": "once", "label": "Allow once", "allows": true},
+				message{"id": "session", "label": "Allow for this session", "allows": true},
+			}
+			_ = emit(request)
+		} else if strings.Contains(prompt, "approval") {
 			_ = emit(approval(approvalID, "command"))
 		}
 		for {

@@ -70,6 +70,11 @@ recorded implementation and acceptance evidence, not just an updated spec.
    artifacts and checksums, GitHub v1.0.0 notes, website updates, and a recorded
    native demo with playback controls and reduced-motion support.
 
+The current UI audit pass has corrected the notification drawer and toast,
+verified local onboarding through project creation, and added native question
+and permission-choice fixtures. The [audit ledger](ui-audit.md) distinguishes
+these checks from the remaining full design, cloud and release gates.
+
 ## Final design acceptance
 
 The active discrepancy list and screen inventory are in [the UI audit](ui-audit.md).

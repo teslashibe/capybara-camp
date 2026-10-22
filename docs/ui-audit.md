@@ -32,13 +32,14 @@ the release candidate after remaining capabilities are implemented.
 | UI-08 | Memory, skills and cloud execution controls are in the design but not fully implemented natively | Open. Integrate the real services, then audit these screens; a placeholder does not pass |
 | UI-09 | Quit did not take effect while Manage sources was open in earlier QA | Corrected using AppKit's per-window termination setting and the existing save/delegate path. Audit 9 verified Command-Q from Sources, Projects and Notifications, actual process exit, helper exit, and reopening the saved five-step plan. Remaining sheets and interrupted/in-flight operations still belong to the final keyboard audit |
 | UI-10 | Message metadata, composer/context placement and notification styling need detailed comparison | Planner metadata and long-transcript append passed earlier. The native interaction fixture verified reported High/Ultra Fast for Codex, High/Fast for Claude, queue/edit/requeue, steering, command approval and completion notifications. Main-chat historical metadata, dictation, question/permission variants and notification navigation remain |
-| UI-11 | Projects and new account onboarding need visual integration with the approved style | Open. Preserve the agreed project/account functionality while checking spacing, icons and shared control treatment |
+| UI-11 | Projects and new account onboarding need visual integration with the approved style | Native click-through verified automatic discovery of two synthetic profiles, optional Camp validation, Accounts/Git steps, pause and resume at step four, empty project-name validation, project creation, and the final summary. The new project appeared in the sidebar. Signed-in, loading and recovery states remain open |
 | UI-12 | Remaining native segmented controls still use the system-blue treatment | Projects, Sources, notifications and Board/Chat now share one neutral segmented component. Native pass 6 verified distinct Local profiles, Cloud accounts and GitHub accessible names and successful source-tab switching. Full keyboard navigation and other sheets remain open |
 | UI-13 | Implementation's shorter planning panes allowed text to spill into the adjacent provider | Pass 5 verifies transcript wrapping inside both columns after constraining each scroll viewport's content width. Bottom-following is preserved; repeat at the minimum window size |
 | UI-14 | Completed planning stages were all reported as selected to accessibility | Native passes 6 and 9 verify button roles, correct selection/completion values and the unavailable description. The unfinished Implementation control is disabled and refuses activation |
 | UI-15 | Resizing a planning pane can leave the latest lines below its scroll position | Pass 7 verifies that both planner transcripts follow the bottom after narrowing the window. Model controls and response metadata wrap without overlapping, and the final line stays visible. The size-bound task cancels when the viewport disappears or resizes again |
 | UI-16 | Main chat watched only height changes; child chat did not follow a resize | Both now use the same width-constrained transcript viewport as planning. The live fixture's last marker stayed visible after resizing. Parent/child switching stayed isolated while the parent ran |
-| UI-17 | Toast placement and main-chat response metadata differ from the reference | Open. The current top-right native toast and generic historical Assistant header still need the final design treatment. Do not fabricate model metadata for older messages that do not report it |
+| UI-17 | Toast placement and main-chat response metadata differ from the reference | The foreground toast now uses the compact dark bottom-center layout. Notification history uses the right-side drawer, unread rows, separate settings and count badge. The second native pass verified Escape returns focus to the bell, Tab and arrow-key filtering, result navigation and mark-all-read. Historical Assistant metadata remains open; do not fabricate model metadata for older messages that do not report it |
+| UI-18 | Provider questions were centered and the scroll area collapsed to a partial option list | Left alignment and question headers are corrected. The review caught that an ideal height still shrank under the main transcript, so the question viewport now reserves 180 points and scrolls longer content. Verified the final form at 1370×860 and after native zoom to 1728×1005 and back: both questions and all choices remained visible, and submitting a selected option plus text resolved the request. The 1060×720 minimum and larger question sets remain in the final audit |
 
 Local captures are in `build/ui-audit/`: `reference-chat.png`,
 `reference-board.png`, `reference-planning.png`, `native-chat-before.png`, and
@@ -129,3 +130,46 @@ The regular signed development build at `build/Capybara Camp Chat Review.app`
 also opened the 65-message fixture at its latest marker. Its read-only capture
 is `build/ui-audit/regular-chat-resize-build.png`. It contains the viewport fix
 without the synthetic conversation transport.
+
+## Notification and setup review
+
+The notification pass compared the approved drawer and settings with the native
+views, then rebuilt after finding an Escape/focus regression. Notifications now
+use the existing neutral segmented control, a 32-point bell and count badge,
+95-point rows with unread treatment, and separate settings. Opening the drawer
+dismisses its toast; an incoming toast stays hidden while history is open.
+Clicking a result marks it read and opens its session. Native desktop delivery
+still uses the existing opt-in macOS implementation. This pass did not validate
+real desktop delivery, background system settings, or Focus mode.
+
+Notification provider lookup scans the session list once per render, only for
+the displayed notification IDs. It does not search the entire library again for
+every row. This is an implementation bound, not a completed performance or
+memory-leak acceptance test.
+
+Captures: `reference-notifications.png`, `notification-drawer-final.png`,
+`notification-settings.png`, `onboarding-profiles.png`, and
+`onboarding-ready.png` in `build/ui-audit/`. The reference and native captures
+have different window dimensions; this pass verifies the recorded details and
+interactions, not a complete same-size pixel comparison.
+
+The synthetic transport now includes multiple questions and provider-offered
+permission choices. It exposes both Allow once and Allow for this session; the
+recorded test selected Allow once, resolved the request and finished the turn.
+No project command was run. Question submission was tested with one selected
+option and a free-text answer. The final viewport passed the recorded 1370×860 and 1728×1005 resize checks.
+The native permission sheet also showed its unavailable-catalog error, disabled
+Apply, and closed with Escape. Its synthetic profile cannot establish a real
+Codex CLI handshake, so this is an error-state check, not provider authentication.
+
+Additional captures: `question-approval-wide.png`,
+`question-approval-resized.png`, and `permissions-unavailable.png`.
+The latest normal development build is `build/Capybara Camp Notification Review.app`;
+it uses its own bundle identity, synthetic state and no registered source-link
+scheme. The real running app was not replaced. The development signature is
+Apple Development, not Developer ID or notarization. No release was published.
+
+The normal signed app also opened the saved notification history, with unread
+rows and the new drawer visible in `notification-normal-final.png`. The focused
+notification, onboarding and permission suites passed, as did the final
+conversation and execution-approval suites. Full UI acceptance is still open.
