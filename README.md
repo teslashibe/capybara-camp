@@ -247,9 +247,11 @@ Camp copy. Child transcripts stay under the parent's permissions and have their
 own message IDs and paged history. The sidebar refreshes after child updates,
 and a child can be opened without mixing its messages into the main chat.
 Model citations open the specific child message in the native snapshot
-inspector, with a link back to that child conversation. Reading cloud child
-history currently requires a connection; durable offline child caching remains
-open V1 work.
+inspector, with a link back to that child conversation. Previously opened child
+catalogs and pages are saved in a bounded offline cache. An **Offline copy**
+label identifies a saved transcript; access changes and removals invalidate
+it when observed. Uncached history and exact citation inspection require a
+connection. See [offline child history](docs/offline-child-history.md).
 
 The native review stores its selected payload separately from its small recovery
 journal. Interrupted uploads reuse their saved command keys and missing chunks.

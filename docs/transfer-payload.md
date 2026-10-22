@@ -249,7 +249,8 @@ files and their metadata.
 The native publisher sends these pages through the cloud storage contract
 below. Child navigation uses the same sidebar and transcript component as local
 children. The runner reads these histories through the context tool described
-below. Durable offline child caching is still required.
+below. Previously opened catalogs and pages also use a bounded
+[offline cache](offline-child-history.md).
 
 ### Cloud child histories
 
@@ -529,8 +530,8 @@ the earlier 120-message startup boundary. File attachments remain separate work.
 
 The agreed transfer flow still requires:
 
-1. Finish complete migration acceptance, durable offline child caching and
-   attachment provenance, including provider continuation and commits not
+1. Finish complete migration acceptance and attachment provenance, including
+   provider continuation and commits not
    available from the remote repository
 2. Native conflict review and the complete base-repository credential policy,
    followed by cloud-to-local and cross-account destination acceptance

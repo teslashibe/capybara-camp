@@ -495,3 +495,19 @@ did not cover this boundary.
 This is a focused local review, not completion of the final whole-app audit or
 of the missing native transfer workflow. No live provider or user files were
 moved during this check.
+
+## Cloud child history — October 22
+
+The native child view now opens separately published cloud transcripts and
+exact child-message citations. Previously opened child catalogs and pages have
+a bounded offline cache. Saved children show **Saved**, and a cached transcript
+shows **Offline copy** with the save time in its help text. The existing main
+chat link and transcript layout are retained.
+
+The focused native checks cover cache restart, pagination, parent/account
+isolation, access changes, late responses and size limits. The final iteration
+also tests a real connection failure against a reserved loopback port.
+Computer use still reports that the Mac is locked. These checks do not verify
+the final visual layout; compare the online, offline, reconnect, removed-child
+and citation states against the reference once the Mac is available. The
+native transfer review also still needs its full click-through.

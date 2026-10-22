@@ -89,9 +89,9 @@ authenticated Camp request. The reader accepts no other sources, file paths
 or mutations, limits concurrent reads, and closes with the conversation.
 
 This supplies stored main and child transcripts to a new provider conversation.
-It does not copy an opaque provider session ID between accounts. Durable offline
-child caching, attachment migration and full reviewed-transfer acceptance remain
-separate work.
+It does not copy an opaque provider session ID between accounts. The Mac's
+[offline child cache](offline-child-history.md) serves previously opened pages;
+attachment migration and full reviewed-transfer acceptance remain separate work.
 
 ## Multiple tickets on one account
 

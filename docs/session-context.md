@@ -73,8 +73,10 @@ The inspector closes when the Camp changes, the source disappears or its
 permission revision changes. A child update also closes an open child inspector
 so removed content cannot remain on screen after an observed update.
 
-Durable offline child caching, file attachments, live-provider acceptance and
-the release performance/soak gates remain in the V1 delivery scope.
+Previously opened child pages use a bounded [offline cache](offline-child-history.md).
+Exact citation inspection still requires an authenticated server read.
+File attachments, live-provider acceptance and the release performance/soak
+gates remain in the V1 delivery scope.
 
 Integration references: [Codex app-server](https://learn.chatgpt.com/docs/app-server)
 and [Claude CLI reference](https://code.claude.com/docs/en/cli-reference).

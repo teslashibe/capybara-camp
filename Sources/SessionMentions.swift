@@ -174,7 +174,7 @@ extension CampStore {
             do {
                 let values=try await cloud.childHistories(session:parent)
                 guard cloud.scope==scope,selectedID==parentID,let child=values.children.first(where:{$0.id==childID && !$0.removed && $0.complete}) else{return}
-                children=values.children.filter{!$0.removed}.map(\.childSession);selectedChildID=child.id
+                children=values.displayChildren;selectedChildID=child.id
             } catch {if selectedID==parentID{banner=error.localizedDescription}}
         }
     }

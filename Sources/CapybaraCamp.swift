@@ -832,7 +832,9 @@ final class TranscriptWatch {
                     if let cloudChildReader {result=try await cloudChildReader(remote)} else {result=try await cloud.childHistories(session:remote)}
                     guard childrenRequestID==requestID,subagentsParent?.id==s.id else{return}
                     guard result.valid(parent:remote.id) else{throw CampCloudError.invalidResponse}
-                    children=result.children.filter{!$0.removed}.map(\.childSession)
+                    children=result.displayChildren
+                    if result.cachedAt != nil {banner="Offline · Showing saved subagents"}
+                    else if banner=="Offline · Showing saved subagents" {banner=""}
                 } catch {if childrenRequestID==requestID{banner=error.localizedDescription}}
             }
             return

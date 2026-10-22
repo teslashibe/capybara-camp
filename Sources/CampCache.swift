@@ -38,7 +38,7 @@ actor CampCache {
         let versionReady = sqlite3_prepare_v2(database, "PRAGMA user_version", -1, &versionStatement, nil) == SQLITE_OK
         let version = versionReady && sqlite3_step(versionStatement) == SQLITE_ROW ? sqlite3_column_int(versionStatement, 0) : -1
         sqlite3_finalize(versionStatement)
-        guard (0...4).contains(version) else { sqlite3_close(database); db = nil; throw CampCloudError.cacheUnavailable }
+        guard (0...5).contains(version) else { sqlite3_close(database); db = nil; throw CampCloudError.cacheUnavailable }
         let schema = """
         PRAGMA journal_mode=WAL;
         PRAGMA synchronous=FULL;
@@ -49,6 +49,8 @@ actor CampCache {
         CREATE TABLE IF NOT EXISTS requests(scope TEXT NOT NULL,id TEXT NOT NULL,revision INTEGER NOT NULL,body BLOB NOT NULL,PRIMARY KEY(scope,id));
         CREATE TABLE IF NOT EXISTS messages(scope TEXT NOT NULL,session_id TEXT NOT NULL,id TEXT NOT NULL,revision INTEGER NOT NULL,ordinal INTEGER NOT NULL,removed INTEGER NOT NULL,body BLOB NOT NULL,PRIMARY KEY(scope,session_id,id));
         CREATE INDEX IF NOT EXISTS transcript_window ON messages(scope,session_id,ordinal DESC);
+        CREATE TABLE IF NOT EXISTS child_cache(scope TEXT NOT NULL,parent_id TEXT NOT NULL,cache_key TEXT NOT NULL,permission_revision INTEGER NOT NULL,parent_revision INTEGER NOT NULL,body BLOB NOT NULL,saved_at INTEGER NOT NULL,PRIMARY KEY(scope,parent_id,cache_key));
+        CREATE INDEX IF NOT EXISTS child_cache_age ON child_cache(saved_at);
         CREATE TABLE IF NOT EXISTS outbox(id TEXT PRIMARY KEY,scope TEXT NOT NULL,method TEXT NOT NULL,path TEXT NOT NULL,body BLOB NOT NULL,state TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',created REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS outbox_pending ON outbox(scope,state,created);
         CREATE TABLE IF NOT EXISTS attempts(id TEXT PRIMARY KEY,scope TEXT NOT NULL,state TEXT NOT NULL,body BLOB NOT NULL);
@@ -60,7 +62,7 @@ actor CampCache {
         \(version < 4 ? "ALTER TABLE outbox ADD COLUMN session_id TEXT NOT NULL DEFAULT '';" : "")
         UPDATE outbox SET state='pending' WHERE state='sending';
         UPDATE attempts SET state='uncertain' WHERE state IN ('start_pending','running');
-        PRAGMA user_version=4;
+        PRAGMA user_version=5;
         COMMIT;
         """
         guard sqlite3_exec(database, schema, nil, nil, nil) == SQLITE_OK else { sqlite3_close(database); db = nil; throw CampCloudError.cacheUnavailable }
@@ -211,13 +213,14 @@ actor CampCache {
             try checkEpoch(scope, expectedEpoch)
             try execute("DELETE FROM sessions WHERE scope=?", [.text(scope.key)])
             for session in sessions { try save(session, scope: scope) }
+            try purgeUnavailableChildren(scope)
             try execute("DELETE FROM messages WHERE scope=? AND session_id NOT IN (SELECT id FROM sessions WHERE scope=?)", [.text(scope.key), .text(scope.key)])
             try execute("DELETE FROM requests WHERE scope=? AND json_extract(CAST(body AS TEXT),'$.session_id') NOT IN (SELECT id FROM sessions WHERE scope=?)", [.text(scope.key), .text(scope.key)])
             try execute("DELETE FROM outbox WHERE scope=? AND session_id<>'' AND session_id NOT IN (SELECT id FROM sessions WHERE scope=?)", [.text(scope.key),.text(scope.key)])
             try setMetadata("cursor:" + scope.key, Data(String(cursor).utf8))
         }
     }
-    func ingest(scope: CloudScope, cursor: Int64? = nil, session: CloudSession? = nil, request: CloudRequest? = nil, removed: (String, Int64)? = nil, expectedEpoch: Int64? = nil) throws {
+    func ingest(scope: CloudScope, cursor: Int64? = nil, session: CloudSession? = nil, request: CloudRequest? = nil, removed: (String, Int64)? = nil, expectedEpoch: Int64? = nil, childrenChanged: String? = nil) throws {
         if let cursor, cursor <= (try self.cursor(scope)) { return }
         try transaction {
             try checkEpoch(scope, expectedEpoch)
@@ -230,6 +233,8 @@ actor CampCache {
                 try execute("DELETE FROM requests WHERE scope=? AND json_extract(CAST(body AS TEXT),'$.session_id')=? AND NOT EXISTS(SELECT 1 FROM sessions WHERE scope=? AND id=? AND revision>?)", [.text(scope.key), .text(id), .text(scope.key), .text(id), .integer(revision)])
                 try execute("DELETE FROM outbox WHERE scope=? AND session_id=? AND NOT EXISTS(SELECT 1 FROM sessions WHERE scope=? AND id=? AND revision>?)", [.text(scope.key),.text(id),.text(scope.key),.text(id),.integer(revision)])
             }
+            if session != nil || removed != nil {try purgeUnavailableChildren(scope)}
+            if let childrenChanged {try invalidateChildHistory(scope:scope,parent:childrenChanged)}
             if let cursor { try setMetadata("cursor:" + scope.key, Data(String(cursor).utf8)) }
         }
     }
@@ -369,10 +374,88 @@ actor CampCache {
             var result = try CampWire.decoder().decode(CloudAttempt.self, from: blob($0, 1)); result.state = text($0, 0); return result
         }
     }
+    private func purgeUnavailableChildren(_ scope:CloudScope)throws {
+        try execute("DELETE FROM child_cache WHERE scope=? AND NOT EXISTS(SELECT 1 FROM sessions s WHERE s.scope=child_cache.scope AND s.id=child_cache.parent_id AND json_extract(CAST(s.body AS TEXT),'$.permission_revision')=child_cache.permission_revision)",[.text(scope.key)])
+    }
+    func childEpoch(_ scope:CloudScope,parent:String)throws->Int64 {
+        guard let data=try metadata("child-epoch:"+scope.key+":"+parent) else{return 0}
+        guard let value=Int64(String(decoding:data,as:UTF8.self)),value>=0 else{throw CampCloudError.cacheUnavailable}
+        return value
+    }
+    private func checkChildEpoch(_ scope:CloudScope,parent:String,expected:Int64)throws {
+        guard try childEpoch(scope,parent:parent)==expected else{throw CancellationError()}
+    }
+    private func invalidateChildHistory(scope:CloudScope,parent:String)throws {
+        let epoch=try childEpoch(scope,parent:parent)
+        guard epoch<Int64.max else{throw CampCloudError.cacheUnavailable}
+        try setMetadata("child-epoch:"+scope.key+":"+parent,Data(String(epoch+1).utf8))
+        try execute("DELETE FROM child_cache WHERE scope=? AND parent_id=?",[.text(scope.key),.text(parent)])
+    }
+    func invalidateChildHistory(scope:CloudScope,parent:String,expectedEpoch:Int64,expectedChildEpoch:Int64)throws {
+        try transaction {
+            try checkEpoch(scope,expectedEpoch);try checkChildEpoch(scope,parent:parent,expected:expectedChildEpoch)
+            try invalidateChildHistory(scope:scope,parent:parent)
+        }
+    }
+    private func requireChildParent(_ scope:CloudScope,_ parent:String,_ permission:Int64)throws {
+        let values=try rows("SELECT json_extract(CAST(body AS TEXT),'$.permission_revision') FROM sessions WHERE scope=? AND id=?",[.text(scope.key),.text(parent)]){sqlite3_column_int64($0,0)}
+        guard permission>0,values.first==permission else{throw CampCloudError.server(404,"session_unavailable")}
+    }
+    private func childCacheWrite(_ data:Data,scope:CloudScope,parent:String,key:String,permission:Int64,revision:Int64)throws {
+        guard data.count<=4<<20 else{throw CampCloudError.responseTooLarge}
+        try execute("INSERT INTO child_cache(scope,parent_id,cache_key,permission_revision,parent_revision,body,saved_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(scope,parent_id,cache_key) DO UPDATE SET permission_revision=excluded.permission_revision,parent_revision=excluded.parent_revision,body=excluded.body,saved_at=excluded.saved_at",[.text(scope.key),.text(parent),.text(key),.integer(permission),.integer(revision),.blob(data),.integer(Int64(Date().timeIntervalSince1970*1000))])
+        // One shared ceiling across Camps bounds retained payload and row count.
+        try execute("DELETE FROM child_cache WHERE rowid IN (SELECT rowid FROM (SELECT rowid,SUM(length(body)) OVER(ORDER BY (cache_key='catalog') DESC,saved_at DESC,rowid DESC) AS bytes,ROW_NUMBER() OVER(ORDER BY (cache_key='catalog') DESC,saved_at DESC,rowid DESC) AS entries FROM child_cache) WHERE bytes>33554432 OR entries>128)")
+        try execute("DELETE FROM child_cache WHERE cache_key<>'catalog' AND NOT EXISTS(SELECT 1 FROM child_cache c WHERE c.scope=child_cache.scope AND c.parent_id=child_cache.parent_id AND c.cache_key='catalog')")
+    }
+    func saveChildCatalog(_ value:CloudChildHistoryList,scope:CloudScope,parent:String,expectedEpoch:Int64,expectedChildEpoch:Int64)throws {
+        guard value.valid(parent:parent) else{throw CampCloudError.invalidResponse}
+        var value=value;value.cachedAt=nil
+        let data=try CampWire.encoder().encode(value)
+        try transaction {
+            try checkEpoch(scope,expectedEpoch);try requireChildParent(scope,parent,value.permissionRevision)
+            try checkChildEpoch(scope,parent:parent,expected:expectedChildEpoch)
+            if let old=try childCatalog(scope,parent:parent,permission:value.permissionRevision) {
+                guard old.parentRevision<=value.parentRevision else{return}
+                if old.parentRevision != value.parentRevision || old.children != value.children {
+                    try execute("DELETE FROM child_cache WHERE scope=? AND parent_id=?",[.text(scope.key),.text(parent)])
+                }
+            }
+            try childCacheWrite(data,scope:scope,parent:parent,key:"catalog",permission:value.permissionRevision,revision:value.parentRevision)
+        }
+    }
+    func childCatalog(_ scope:CloudScope,parent:String,permission:Int64)throws->CloudChildHistoryList? {
+        try requireChildParent(scope,parent,permission)
+        return try rows("SELECT body,saved_at FROM child_cache WHERE scope=? AND parent_id=? AND cache_key='catalog' AND permission_revision=?",[.text(scope.key),.text(parent),.integer(permission)]) {
+            var value=try CampWire.decoder().decode(CloudChildHistoryList.self,from:blob($0,0))
+            guard value.valid(parent:parent),value.permissionRevision==permission else{throw CampCloudError.invalidResponse}
+            value.cachedAt=Date(timeIntervalSince1970:Double(sqlite3_column_int64($0,1))/1000);return value
+        }.first
+    }
+    func saveChildPage(_ value:CloudChildTranscript,scope:CloudScope,parent:String,before:Int64,expectedEpoch:Int64,expectedChildEpoch:Int64)throws {
+        guard value.valid(parent:parent,before:before) else{throw CampCloudError.invalidResponse}
+        var value=value;value.cachedAt=nil
+        let data=try CampWire.encoder().encode(value)
+        try transaction {
+            try checkEpoch(scope,expectedEpoch);try requireChildParent(scope,parent,value.permissionRevision)
+            try checkChildEpoch(scope,parent:parent,expected:expectedChildEpoch)
+            guard let catalog=try childCatalog(scope,parent:parent,permission:value.permissionRevision),catalog.parentRevision==value.parentRevision,catalog.children.contains(value.child) else{return}
+            try childCacheWrite(data,scope:scope,parent:parent,key:"page:\(value.child.id):\(before)",permission:value.permissionRevision,revision:value.parentRevision)
+        }
+    }
+    func childPage(_ scope:CloudScope,parent:String,child:String,permission:Int64,before:Int64,revision:Int64)throws->CloudChildTranscript? {
+        guard before>=0,revision>=0,let catalog=try childCatalog(scope,parent:parent,permission:permission),revision==0 || revision==catalog.parentRevision else{return nil}
+        guard let metadata=catalog.children.first(where:{$0.id==child && $0.complete && !$0.removed}) else{return nil}
+        return try rows("SELECT body,saved_at FROM child_cache WHERE scope=? AND parent_id=? AND cache_key=? AND permission_revision=? AND parent_revision=?",[.text(scope.key),.text(parent),.text("page:\(child):\(before)"),.integer(permission),.integer(catalog.parentRevision)]) {
+            var value=try CampWire.decoder().decode(CloudChildTranscript.self,from:blob($0,0))
+            guard value.valid(parent:parent,before:before),value.child==metadata else{throw CampCloudError.invalidResponse}
+            value.cachedAt=Date(timeIntervalSince1970:Double(sqlite3_column_int64($0,1))/1000);return value
+        }.first
+    }
     func clear(_ scope: CloudScope) throws {
         try transaction {
             try setMetadata("epoch:" + scope.key, Data(String(try epoch(scope) + 1).utf8))
-            for table in ["sessions", "requests", "messages", "tombstones", "outbox", "share_bindings", "published_message_hashes"] { try execute("DELETE FROM \(table) WHERE scope=?", [.text(scope.key)]) }
+            for table in ["sessions", "requests", "messages", "child_cache", "tombstones", "outbox", "share_bindings", "published_message_hashes"] { try execute("DELETE FROM \(table) WHERE scope=?", [.text(scope.key)]) }
             try execute("DELETE FROM metadata WHERE key=?", [.text("cursor:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("snapshot:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("notifications:" + scope.key)])
@@ -383,6 +466,7 @@ actor CampCache {
             try execute("DELETE FROM metadata WHERE key=?", [.text("transfer-review:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("transfer-cancel:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-payload:" + scope.key + ":%")])
+            try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("child-epoch:" + scope.key + ":%")])
             for var attempt in try attempts(scope) {
                 if ["completed", "failed", "cancelled"].contains(attempt.state) {
                     try execute("DELETE FROM attempts WHERE id=?", [.text(attempt.id)]); continue

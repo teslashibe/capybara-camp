@@ -259,7 +259,7 @@ import SwiftUI
             catch CampCloudError.server(404, _) {} // Other members can see task activity, not its private request.
         }
         guard generation == token else { throw CancellationError() }
-        try await cache.ingest(scope: scope, cursor: event.cursor, session: changedSession, request: changedRequest, removed: removed, expectedEpoch: epoch)
+        try await cache.ingest(scope: scope, cursor: event.cursor, session: changedSession, request: changedRequest, removed: removed, expectedEpoch: epoch, childrenChanged:event.kind=="children.updated" ? event.payload.sessionId : nil)
         if let value = changedSession, accepts(value) { sessionIndex[value.id] = value }
         if let value = changedRequest, value.revision >= (requestIndex[value.id]?.revision ?? 0) { requestIndex[value.id] = value; requestChanged?(value) }
         if let (id, revision) = removed, (sessionIndex[id]?.revision ?? 0) <= revision {

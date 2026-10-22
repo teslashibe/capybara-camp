@@ -14,13 +14,15 @@ struct ChildTranscriptView: View {
     @State private var cloudRevision:Int64 = 0
     @State private var cloudHasMore=false
     @State private var requestID=UUID()
+    @State private var cachedAt:Date?
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 7) {
                 Image(systemName: "arrow.turn.down.right").foregroundStyle(campMuted)
                 Text("Subagent · \(child.name)").font(.system(size: 11, weight: .medium))
                 Spacer()
-                Text("Read-only").font(.system(size: 10)).foregroundStyle(campMuted)
+                Text(cachedAt==nil ? "Read-only" : "Offline copy").font(.system(size: 10)).foregroundStyle(campMuted)
+                    .help(cachedAt.map{"Saved \($0.formatted(date:.abbreviated,time:.shortened))"} ?? "This subagent transcript is read-only")
                 if loading { ProgressView().controlSize(.small) }
             }.padding(.horizontal, 22).padding(.vertical, 8)
             HStack(spacing: 8) {
@@ -49,7 +51,7 @@ struct ChildTranscriptView: View {
                 Spacer(minLength: 8)
                 Button(action: openMain) { Label("Main chat", systemImage: "bubble.left") }.controlSize(.small)
             }.padding(.horizontal, 22).padding(.vertical, 12)
-        }.task(id: "\(parent.id):\(child.id):\(child.updated):\(fileRevision)") {
+        }.task(id: "\(parent.id):\(child.id):\(child.updated):\(child.status):\(fileRevision)") {
             watch.stop()
             if parent.isCloud {await readCloud(more:false);return}
             loading = true; error = ""
@@ -77,10 +79,11 @@ struct ChildTranscriptView: View {
             guard !Task.isCancelled,requestID==token else{return}
             let values=result.transcript.messages.map(\.transcriptMessage)
             messages=more ? values+messages : values
+            cachedAt=result.cachedAt
             cloudBefore=result.transcript.before;cloudRevision=result.parentRevision;cloudHasMore=result.transcript.hasMore
         } catch {
             if !Task.isCancelled,requestID==token {
-                if case CampCloudError.server(let code,_) = error,code==403 || code==404 {messages=[];cloudHasMore=false}
+                if childHistoryAccessDenied(error) {messages=[];cloudHasMore=false;cachedAt=nil}
                 self.error=error.localizedDescription
             }
         }

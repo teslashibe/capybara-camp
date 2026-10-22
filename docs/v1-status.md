@@ -75,8 +75,8 @@ The existing chat sidebar and transcript component can list and read cloud child
 histories with older-page loading. Child refreshes preserve the current
 selection; a late result is discarded after changing parents or revoking access.
 Local source activity supplies observed child status without relabeling stored
-messages. The remaining child work includes durable offline child caching and
-native/live two-Mac acceptance. The Mac is
+messages. The remaining child work includes native/live two-Mac acceptance.
+The Mac is
 still locked, so the new cloud UI has not had its computer-use walkthrough.
 The focused native suites pass for sharing, cloud child navigation state, cloud
 state and the packaged helper. They verify a 230-message child upload, replay of
@@ -97,6 +97,20 @@ and native child/context suites pass. The full Go race suite and vet also pass
 with disposable PostgreSQL, and Linux server/runner/controller/migration builds
 succeed. The staged secret scan found no secrets. This is local synthetic
 evidence, not live-provider or two-Mac acceptance.
+
+Native cache version 5 adds saved child catalogs and fetched transcript pages,
+with a shared 32 MiB/128-entry limit. Network failures can return a labelled
+offline copy; server denials and certificate failures cannot trigger fallback.
+Observed child events invalidate cached pages atomically with the event cursor.
+Parent revocation/removal and cache erasure also invalidate them. A persisted
+per-parent counter rejects reads and writes started before an observed child
+update; the Camp epoch rejects late writes after cache erasure. Offline reads
+cannot observe a remote change until reconnection. The child, cloud (84 checks),
+state, context and sharing suites pass, including a real connection failure
+against a reserved loopback port. Final visual and first-paint/reconnection
+timing acceptance remains open; computer use is still blocked by the locked Mac.
+The final shared-module build and child suite pass after adding automatic
+reload when a saved child returns to a live state. The staged secret scan passes.
 
 The transfer work includes a read-only Go capture layer for selected Git
 changes and owner-bound, encrypted, resumable upload storage. Completion checks
