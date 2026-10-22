@@ -39,7 +39,7 @@ func (a *API) gitRoutes(mux *http.ServeMux) {
 			}
 		}
 	}))
-	for _, operation := range []string{"claim", "heartbeat", "token", "report"} {
+	for _, operation := range []string{"claim", "heartbeat", "token", "report", "status"} {
 		mux.HandleFunc("POST /v1/runner/workspaces/{workspace}/"+operation, a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
 			var in struct {
 				ClaimID string `json:"claim_id"`
@@ -63,6 +63,8 @@ func (a *API) gitRoutes(mux *http.ServeMux) {
 				out, err = a.Git.RunnerWorkspaceToken(r.Context(), token(r), r.PathValue("workspace"), in.ClaimID)
 			case "report":
 				out, err = a.Git.ReportRunnerWorkspace(r.Context(), token(r), r.PathValue("workspace"), in.ClaimID, in.WorkspaceReport)
+			case "status":
+				out, err = a.Git.RunnerWorkspaceStatus(r.Context(), token(r), r.PathValue("workspace"), in.ClaimID)
 			}
 			if !fail(w, err) {
 				write(w, 200, out)

@@ -1,9 +1,10 @@
 # Cloud runner provisioning
 
-The optional Go controller creates one isolated auth worker per provider
+The optional Go controller creates one isolated worker per provider
 installation. It is implemented and fixture-tested, but has not yet been
-validated on a live Kubernetes cluster. The worker currently handles provider
-sign-in; cloud chat execution, Git workspaces and transfers remain separate work.
+validated on a live Kubernetes cluster. The worker handles provider sign-in and
+isolated Git checkout preparation; cloud chat execution and transfers remain
+separate work.
 
 ## Control and worker permissions
 

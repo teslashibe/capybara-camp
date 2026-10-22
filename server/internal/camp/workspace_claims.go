@@ -92,7 +92,7 @@ func (g *GitStore) NextRunnerWorkspace(ctx context.Context, token string) (*Work
 		return nil, nil
 	}
 	var id string
-	err = g.store.pool.QueryRow(ctx, `SELECT w.id FROM ticket_workspaces w WHERE w.provider_installation_id=$1 AND w.provider_epoch=$2 AND (w.state='preparing' OR (w.state='queued' AND NOT EXISTS(SELECT 1 FROM ticket_workspaces active WHERE active.provider_installation_id=w.provider_installation_id AND active.state IN ('preparing','ready')))) ORDER BY (w.state='preparing') DESC,w.created_at,w.id LIMIT 1`, state.InstallationID, state.Epoch).Scan(&id)
+	err = g.store.pool.QueryRow(ctx, `SELECT w.id FROM ticket_workspaces w WHERE w.provider_installation_id=$1 AND w.provider_epoch=$2 AND (w.state IN ('preparing','ready') OR (w.state='queued' AND NOT EXISTS(SELECT 1 FROM ticket_workspaces active WHERE active.provider_installation_id=w.provider_installation_id AND active.state IN ('preparing','ready')))) ORDER BY (w.state IN ('preparing','ready')) DESC,w.created_at,w.id LIMIT 1`, state.InstallationID, state.Epoch).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -109,6 +109,27 @@ func (g *GitStore) NextRunnerWorkspace(ctx context.Context, token string) (*Work
 		return nil, err
 	}
 	return &lease.value, nil
+}
+
+// Status lets a claimant reconcile a lost response without minting another
+// credential or adopting work owned by a different grant.
+func (g *GitStore) RunnerWorkspaceStatus(ctx context.Context, token, id, claim string) (Workspace, error) {
+	if !validID(claim) {
+		return Workspace{}, ErrInput
+	}
+	tx, err := g.store.pool.Begin(ctx)
+	if err != nil {
+		return Workspace{}, err
+	}
+	defer tx.Rollback(ctx)
+	lease, err := g.lockRunnerWorkspace(ctx, tx, token, id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if lease.claim != claim || lease.grant != lease.runner.grantID {
+		return Workspace{}, ErrDenied
+	}
+	return lease.value, nil
 }
 
 func (g *GitStore) ClaimRunnerWorkspace(ctx context.Context, token, id, claim string) (RunnerWorkspaceClaim, error) {

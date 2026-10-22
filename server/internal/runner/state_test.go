@@ -139,3 +139,24 @@ func TestRunnerRejectsRedirectAndUnsafeConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestRunnerRejectsWorkspaceAliasOfState(t *testing.T) {
+	parent := privateTemp(t)
+	state := filepath.Join(parent, "state")
+	if err := os.Mkdir(state, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(parent, "alias")
+	if err := os.Symlink(parent, alias); err != nil {
+		t.Fatal(err)
+	}
+	grant := filepath.Join(t.TempDir(), "grant")
+	if err := os.WriteFile(grant, []byte(testGrant()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := New(config.Runner{Origin: "https://camp.example", GrantFile: grant, StateDir: state, WorkspaceDir: filepath.Join(alias, "state")}, nil)
+	if err == nil {
+		w.Close()
+		t.Fatal("workspace aliases provider state")
+	}
+}

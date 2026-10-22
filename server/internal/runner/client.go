@@ -1,5 +1,5 @@
-// Package runner executes fixed provider sign-in operations under a single
-// installation grant. It does not execute prompts or accept shell commands.
+// Package runner signs in to a provider and prepares Git workspaces under a
+// single installation grant. It does not accept arbitrary shell commands.
 package runner
 
 import (
@@ -26,6 +26,10 @@ type client struct {
 }
 
 func (c *client) call(ctx context.Context, method, path string, input, output any) error {
+	return c.callTimeout(ctx, method, path, input, output, 5*time.Second)
+}
+
+func (c *client) callTimeout(ctx context.Context, method, path string, input, output any, timeout time.Duration) error {
 	var body []byte
 	var err error
 	if input != nil {
@@ -34,7 +38,7 @@ func (c *client) call(ctx context.Context, method, path string, input, output an
 			return ErrState
 		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, c.origin+path, bytes.NewReader(body))
 	if err != nil {
@@ -103,4 +107,50 @@ func (c *client) takeCode(ctx context.Context, r *record) (*camp.RunnerLoginCode
 
 func (c *client) ackCode(ctx context.Context, r *record, code *camp.RunnerLoginCode) error {
 	return c.call(ctx, "POST", "/v1/runner/logins/"+r.AttemptID+"/code/ack", map[string]string{"claim_id": r.ClaimID, "delivery_id": r.DeliveryID, "code_id": code.CodeID}, nil)
+}
+
+func (c *client) nextWorkspace(ctx context.Context) (*camp.Workspace, error) {
+	var out *camp.Workspace
+	err := c.call(ctx, "GET", "/v1/runner/workspaces/next", nil, &out)
+	return out, err
+}
+
+func (c *client) workspaceClaim(ctx context.Context, r *workspaceRecord, operation string) (camp.RunnerWorkspaceClaim, error) {
+	var out camp.RunnerWorkspaceClaim
+	err := c.call(ctx, "POST", "/v1/runner/workspaces/"+r.Workspace.ID+"/"+operation, map[string]string{"claim_id": r.ClaimID}, &out)
+	if err == nil && (out.ClaimID != r.ClaimID || !sameWorkspace(out.Workspace, r.Workspace) || out.Workspace.State != "preparing" || !out.LeaseUntil.After(time.Now()) || out.Deadline.Before(out.LeaseUntil)) {
+		err = ErrState
+	}
+	return out, err
+}
+
+func (c *client) workspaceToken(ctx context.Context, r *workspaceRecord) (camp.RunnerWorkspaceToken, error) {
+	var out camp.RunnerWorkspaceToken
+	err := c.callTimeout(ctx, "POST", "/v1/runner/workspaces/"+r.Workspace.ID+"/token", map[string]string{"claim_id": r.ClaimID}, &out, 35*time.Second)
+	if err == nil && (out.WorkspaceID != r.Workspace.ID || out.ClaimID != r.ClaimID || !validGitToken(out.Token) || !out.ExpiresAt.After(time.Now())) {
+		err = ErrState
+	}
+	return out, err
+}
+
+func (c *client) workspaceStatus(ctx context.Context, r *workspaceRecord) (camp.Workspace, error) {
+	var out camp.Workspace
+	err := c.call(ctx, "POST", "/v1/runner/workspaces/"+r.Workspace.ID+"/status", map[string]string{"claim_id": r.ClaimID}, &out)
+	if err == nil && !sameWorkspace(out, r.Workspace) {
+		err = ErrState
+	}
+	return out, err
+}
+
+func (c *client) workspaceReport(ctx context.Context, r *workspaceRecord) (camp.Workspace, error) {
+	var out camp.Workspace
+	in := struct {
+		ClaimID string `json:"claim_id"`
+		camp.WorkspaceReport
+	}{r.ClaimID, *r.Report}
+	err := c.call(ctx, "POST", "/v1/runner/workspaces/"+r.Workspace.ID+"/report", in, &out)
+	if err == nil && (!sameWorkspace(out, r.Workspace) || out.State != r.Report.State || out.FailureCode != r.Report.FailureCode) {
+		err = ErrState
+	}
+	return out, err
 }

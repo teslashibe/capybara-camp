@@ -11,12 +11,12 @@ import (
 // Runner is intentionally separate from the server: a provider workload never
 // receives database, mail or human Camp credentials.
 type Runner struct {
-	Origin, GrantFile, StateDir string
-	Environment                 []string
+	Origin, GrantFile, StateDir, WorkspaceDir string
+	Environment                               []string
 }
 
 func LoadRunner() (Runner, error) {
-	c := Runner{Origin: strings.TrimRight(os.Getenv("CAMP_RUNNER_ORIGIN"), "/"), GrantFile: os.Getenv("CAMP_RUNNER_GRANT_FILE"), StateDir: os.Getenv("CAMP_RUNNER_STATE_DIR"), Environment: os.Environ()}
+	c := Runner{Origin: strings.TrimRight(os.Getenv("CAMP_RUNNER_ORIGIN"), "/"), GrantFile: os.Getenv("CAMP_RUNNER_GRANT_FILE"), StateDir: os.Getenv("CAMP_RUNNER_STATE_DIR"), WorkspaceDir: os.Getenv("CAMP_RUNNER_WORKSPACE_DIR"), Environment: os.Environ()}
 	return c, c.Validate()
 }
 
@@ -31,5 +31,20 @@ func (c Runner) Validate() error {
 	if rel, err := filepath.Rel(c.StateDir, c.GrantFile); err != nil || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return errors.New("The runner grant file must be outside its state directory")
 	}
+	if c.WorkspaceDir != "" {
+		if !filepath.IsAbs(c.WorkspaceDir) || filepath.Clean(c.WorkspaceDir) != c.WorkspaceDir {
+			return errors.New("Runner workspace path must be absolute")
+		}
+		for _, other := range []string{c.StateDir, c.GrantFile} {
+			for _, pair := range [][2]string{{c.WorkspaceDir, other}, {other, c.WorkspaceDir}} {
+				rel, err := filepath.Rel(pair[0], pair[1])
+				if err != nil || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					return errors.New("Runner workspace, state and grant paths must be separate")
+				}
+			}
+		}
+	}
 	return nil
 }
+
+func GitCredentialFile() string { return os.Getenv("CAMP_GIT_CREDENTIAL_FILE") }

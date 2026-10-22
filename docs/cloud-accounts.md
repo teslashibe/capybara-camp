@@ -2,11 +2,11 @@
 
 The Go service stores owner-bound accounts, installation grants and login
 attempts. Go sign-in adapters now drive the official CLIs inside disposable
-private profiles. An auth-only Go worker now claims those attempts, relays codes
+private profiles. A Go worker now claims those attempts, relays codes
 and persists recovery state. Native account setup uses these endpoints in Manage
-sources and onboarding. Workload provisioning and cloud execution are still
-required. These endpoints alone do
-not start a cloud chat session.
+sources and onboarding. The worker also prepares isolated Git checkouts, and a
+Go controller provisions its workloads. Cloud model execution is still pending;
+these endpoints alone do not start a cloud chat session.
 
 ## Ownership and storage
 
@@ -119,7 +119,7 @@ The challenge is fixed once published. Changed challenges conflict, preventing
 an already-submitted code from being rebound to another browser flow. Completion,
 failure, cancellation, expiry, grant replacement and account disconnect all erase
 any pending code. Every take and acknowledgment rechecks ownership, grant, claim,
-epoch and attempt state under the account lock. The auth-only worker implements
+epoch and attempt state under the account lock. The worker implements
 this delivery protocol. The native form keeps code entry in memory and does not
 save it in its setup journal.
 
@@ -171,7 +171,7 @@ not an independent JWT verification API for caller-supplied credentials.
 Snapshots include only fixed provider credential files, with a 256 KiB total
 limit. Reads reject symlinks, pipes and foreign-owned files. The candidate profile
 is removed on success, cancellation or failure; a cleanup failure is reported.
-The auth-only runner encrypts and persists a successful snapshot before reporting
+The runner encrypts and persists a successful snapshot before reporting
 completion and handles uncertain delivery without repeating provider sign-in.
 
 Tests exercise each adapter with fake CLIs, credential identity checks, inherited
@@ -179,17 +179,19 @@ credential rejection, one-code input, cancellation and profile cleanup. An opt-i
 preflight also exercised the installed Claude CLI's actual authorization URL and
 cancelled before signing in. It proves URL compatibility, not a completed login.
 
-## Auth-only worker
+## Installation worker
 
 `server/cmd/camp-runner` polls only its installation routes and invokes the fixed
-Go sign-in adapters. It cannot read human Camp history, execute prompts or accept
-shell commands. Configure it through these environment variables:
+Go sign-in adapters and [Git checkout preparation](github.md#isolated-checkout).
+It cannot read human Camp history, execute prompts or accept arbitrary shell
+commands. Configure it through these environment variables:
 
 | Variable | Purpose |
 | --- | --- |
 | `CAMP_RUNNER_ORIGIN` | HTTPS Camp service origin |
 | `CAMP_RUNNER_GRANT_FILE` | Absolute path to an owner-only regular file containing its installation grant |
 | `CAMP_RUNNER_STATE_DIR` | Existing owner-only directory dedicated to this installation |
+| `CAMP_RUNNER_WORKSPACE_DIR` | Optional existing owner-only directory for isolated checkouts, separate from state and grant paths |
 
 Keep the grant file outside the state directory. The worker rejects symlink
 grant files, shared state permissions, concurrent workers using the same state

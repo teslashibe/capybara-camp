@@ -20,6 +20,12 @@ func main() {
 }
 
 func run() error {
+	if len(os.Args) > 1 {
+		if len(os.Args) != 3 || os.Args[1] != "git-credential" {
+			return errors.New("Unsupported runner operation")
+		}
+		return runner.GitCredential(os.Args[2], config.GitCredentialFile(), os.Stdin, os.Stdout)
+	}
 	cfg, err := config.LoadRunner()
 	if err != nil {
 		return err

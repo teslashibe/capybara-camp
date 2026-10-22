@@ -32,6 +32,7 @@ type fixture struct {
 	grant   camp.RunnerGrant
 	login   camp.ProviderLogin
 	worker  *Worker
+	api     *httpapi.API
 }
 
 func workerFixture(t *testing.T, provider string, wrap func(http.Handler) http.Handler) fixture {
@@ -75,7 +76,7 @@ func workerFixture(t *testing.T, provider string, wrap func(http.Handler) http.H
 	}
 	t.Cleanup(w.Close)
 	w.interval = 10 * time.Millisecond
-	return fixture{s, owner, a, g, l, w}
+	return fixture{s, owner, a, g, l, w, api}
 }
 
 func startWorker(t *testing.T, w *Worker) (context.CancelFunc, <-chan error) {

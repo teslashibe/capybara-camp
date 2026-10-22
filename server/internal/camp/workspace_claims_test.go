@@ -40,6 +40,13 @@ func TestWorkspaceClaimTokenReplayAndCompletion(t *testing.T) {
 	if err != nil || c.Workspace.State != "preparing" {
 		t.Fatal(c, err)
 	}
+	status, err := g.RunnerWorkspaceStatus(t.Context(), grant.Token, w.ID, claim)
+	if err != nil || status != c.Workspace {
+		t.Fatal("claim status did not reconcile", err)
+	}
+	if _, err = g.RunnerWorkspaceStatus(t.Context(), grant.Token, w.ID, uuid.NewString()); !errors.Is(err, ErrDenied) {
+		t.Fatal("another claimant read status", err)
+	}
 	again, err := g.ClaimRunnerWorkspace(t.Context(), grant.Token, w.ID, claim)
 	if err != nil || again != c {
 		t.Fatal("claim response loss", err)
@@ -98,6 +105,10 @@ func TestWorkspaceClaimTokenReplayAndCompletion(t *testing.T) {
 	done, err := g.ReportRunnerWorkspace(t.Context(), grant.Token, w.ID, claim, report)
 	if err != nil || done.State != "ready" {
 		t.Fatal(done, err)
+	}
+	next, err = g.NextRunnerWorkspace(t.Context(), grant.Token)
+	if err != nil || next == nil || *next != done {
+		t.Fatal("prepared workspace unavailable after restart", err)
 	}
 	dup, err := g.ReportRunnerWorkspace(t.Context(), grant.Token, w.ID, claim, report)
 	if err != nil || dup != done {

@@ -7,17 +7,16 @@ installations and repositories. Repository links on a client project still
 describe its work; those links do not grant access.
 
 The Go service queues owner-bound workspace preparation and pins its repository,
-commit, branch and identities. Isolated checkouts, execution grants, pushes and
-pull-request publication are still being implemented. A queued workspace does
+commit, branch and identities. The Go runner prepares an isolated checkout.
+Execution grants, pushes and pull-request publication remain pending. A queued workspace does
 not authorize a teammate to use someone else's Git identity or start execution.
 
 The Go provider adapter can now resolve a ref to an exact commit and request a
 read-only token through GitHub's [scoped user-token endpoint](https://docs.github.com/en/rest/apps/apps#create-a-scoped-access-token).
 It checks the returned user, permissions and single-repository access, and
 revokes a rejected candidate. The broad user authorization stays in the API.
-Workspace jobs use the commit resolver. Connecting the read-token adapter and
-those jobs to the isolated runner remains pending; there is no execution-grant
-endpoint yet.
+Workspace jobs and the isolated runner use those adapters. There is no
+execution-grant endpoint yet.
 
 ## Workspace preparation
 
@@ -60,20 +59,23 @@ Schema 13 adds these records without changing existing sessions or credentials.
 A queued response means preparation was saved; it does not mean a checkout
 exists, a CLI is running, or execution moved from the Mac. The control plane
 supports worker claims and scoped checkout credentials as described below. The
-runner binary's filesystem checkout loop is still pending.
+runner reports ready only after checking out and validating the pinned commit.
 
 ## Worker claims and checkout credentials
 
 Only an active installation grant can use `/v1/runner/workspaces/next` or the
-`claim`, `heartbeat`, `token` and `report` POST routes beneath
+`claim`, `heartbeat`, `token`, `status` and `report` POST routes beneath
 `/v1/runner/workspaces/{workspace}`. Human Camp tokens cannot use these routes.
 All POST requests carry the same worker-generated `claim_id`. Each installation
 has at most one preparing or ready workspace; other tickets remain queued.
 
 A claim leases preparation for 90 seconds with a fixed ten-minute deadline.
 Heartbeats extend the lease within that deadline. A different claim or a
-replacement runner grant cannot adopt it. The worker must save its claim ID
-before submitting a claim and reconcile a lost reply using that same ID.
+replacement runner grant cannot adopt it. The worker saves its claim ID before
+submitting a claim and reconciles a lost reply using that same ID. The status
+route returns metadata only to the grant and claim that own the preparation.
+The next-work route also returns the installation's ready workspace so a
+restarted worker can verify its retained files without another checkout.
 
 The token route revalidates Camp membership, source/project revisions, account
 epochs, and the selected GitHub installation/repository. It then requests a
@@ -94,8 +96,7 @@ erase the cached token and make its revocation due. A revocation is also queued
 for its permitted expiry when the token is first saved. The existing bounded
 Git cleanup worker performs those calls. Reaping closes stale leases and
 workspaces whose membership, source, project, account or Git authority changed.
-This protocol still needs the real filesystem and CLI integration before cloud
-execution can be accepted.
+Cloud inference and publication still need their own execution protocol.
 
 Schema 14 adds these claims and retains older preparation records. New records
 also retain their installation/repository page selections. Older records use
@@ -113,8 +114,41 @@ during issuance, terminal-report replay, stale grants and expiry cleanup. The
 HTTP tests follow a complete claim/token/report sequence and verify that the
 token is absent from the owner's ordinary workspace response.
 The upgrade check retains the prior Git and provider credential bytes and
-epochs. The full Go race-test suite and vet checks pass. These tests do not
-prove a real checkout, cloud provider turn or two-user GitHub operation.
+epochs. Runner tests use real Git over a local smart-HTTP server with disposable
+PostgreSQL. They cover dropped claim, token and report replies, a restart during
+fetch, and cancellation while Git is blocked. These checks do not prove a
+cloud provider turn or two-user GitHub operation.
+
+## Isolated checkout
+
+`CAMP_RUNNER_WORKSPACE_DIR` points to a private directory separate from the
+provider state and grant file. The worker holds an exclusive directory lock,
+checks ownership and permissions, and rejects overlapping paths, including
+aliases through symlinks. Each ticket gets its own `workspace-<UUID>` directory.
+
+The worker runs a shallow fetch of the exact commit, validates the tree, and
+creates the server-assigned branch. It disables Git hooks, global/system
+configuration, credential stores, submodule recursion and HTTP redirects.
+Only HTTPS GitHub transport is enabled in production. The temporary credential
+helper returns the read token only for the authorized repository path and
+expiry. Tokens stay out of command arguments, remotes, journals and logs. The
+temporary token file is removed before reporting ready; restart removes any
+abandoned token files.
+
+Preparation permits at most 20,000 files, 32 MiB per file and 512 MiB of tree
+content. Unsafe paths, escaping symlinks and submodules are rejected before
+checkout. Subprocess output and execution time are bounded; the deployment's
+1 GiB workspace volume also bounds downloaded pack storage. Cancellation,
+lease loss and shutdown kill and join the Git process group. All limits apply
+to preparation; larger repositories need an explicit product decision.
+
+An owner-only, atomically written journal stores the claim and checkout
+metadata, without credentials. A restart can repeat a partial safe fetch with
+the same claim and cached token. Once a ready report is saved, it verifies the
+existing commit, branch and clean worktree and retries that report without
+fetching again. A missing or modified prepared checkout fails visibly. A
+confirmed cancellation removes the managed preparation directory. This loop
+does not invoke a model, run repository code, push, or transfer Mac execution.
 
 ## Self-hosted registration
 

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,16 +18,34 @@ import (
 type loginFunc func(context.Context, string, string, func(localcli.ProviderLoginChallenge) error, <-chan string) (localcli.ProviderLoginResult, error)
 
 type Worker struct {
-	stateDir string
-	client   *client
-	journal  *journal
-	login    loginFunc
-	interval time.Duration
+	stateDir       string
+	client         *client
+	journal        *journal
+	checkout       *checkout
+	readyWorkspace string
+	login          loginFunc
+	interval       time.Duration
 }
 
 func New(cfg config.Runner, transport *http.Client) (*Worker, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
+	}
+	if cfg.WorkspaceDir != "" {
+		resolved := cfg
+		var err error
+		if resolved.StateDir, err = filepath.EvalSymlinks(cfg.StateDir); err != nil {
+			return nil, ErrState
+		}
+		if resolved.WorkspaceDir, err = filepath.EvalSymlinks(cfg.WorkspaceDir); err != nil {
+			return nil, ErrState
+		}
+		if resolved.GrantFile, err = filepath.EvalSymlinks(cfg.GrantFile); err != nil {
+			return nil, ErrState
+		}
+		if resolved.Validate() != nil {
+			return nil, ErrState
+		}
 	}
 	raw, err := privateFile(cfg.GrantFile, 128)
 	if err != nil {
@@ -48,15 +67,28 @@ func New(cfg config.Runner, transport *http.Client) (*Worker, error) {
 		transport = http.DefaultClient
 	}
 	copyClient := *transport
-	copyClient.Timeout = 10 * time.Second
+	copyClient.Timeout = 40 * time.Second
 	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	adapter := localcli.New(config.Local{Environment: cfg.Environment})
-	return &Worker{stateDir: cfg.StateDir, client: &client{origin: cfg.Origin, token: token, http: &copyClient}, journal: j, login: adapter.LoginProvider, interval: 2 * time.Second}, nil
+	w := &Worker{stateDir: cfg.StateDir, client: &client{origin: cfg.Origin, token: token, http: &copyClient}, journal: j, login: adapter.LoginProvider, interval: 2 * time.Second}
+	if cfg.WorkspaceDir != "" {
+		w.checkout, err = openCheckout(cfg.WorkspaceDir)
+		if err != nil {
+			j.close()
+			return nil, err
+		}
+	}
+	return w, nil
 }
 
-func (w *Worker) Close() { w.journal.close() }
+func (w *Worker) Close() {
+	if w.checkout != nil {
+		w.checkout.close()
+	}
+	w.journal.close()
+}
 
-// Run is an auth-only control loop. Container isolation must terminate all
+// Run serializes provider sign-in and workspace preparation. Container isolation must terminate all
 // children before restarting a worker. A started journal never launches again;
 // it fails the interrupted attempt unless its final proof was already saved.
 func (w *Worker) Run(ctx context.Context) error {
@@ -66,6 +98,11 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 	if err = w.journal.cleanScratch(); err != nil {
 		return err
+	}
+	if w.checkout != nil {
+		if err = w.checkout.cleanCredentials(); err != nil {
+			return err
+		}
 	}
 	for {
 		if err = ctx.Err(); err != nil {
@@ -85,6 +122,14 @@ func (w *Worker) Run(ctx context.Context) error {
 			return ErrState
 		}
 		if state.Action == "erase" {
+			if w.checkout != nil {
+				if err = w.checkout.cleanAll(); err != nil {
+					return err
+				}
+			}
+			if err = w.journal.clearWorkspace(); err != nil {
+				return err
+			}
 			if err = w.journal.clear(); err != nil {
 				return err
 			}
@@ -99,6 +144,11 @@ func (w *Worker) Run(ctx context.Context) error {
 					return err
 				}
 				r = nil
+			}
+			if w.checkout != nil {
+				if err = w.workspaceTick(ctx, state); err != nil && !errors.Is(err, ErrUnavailable) {
+					return err
+				}
 			}
 			if err = w.wait(ctx); err != nil {
 				return err
