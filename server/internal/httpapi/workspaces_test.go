@@ -340,6 +340,36 @@ func TestWorkspaceHTTPRequiresOwnerAndReplaysReceipt(t *testing.T) {
 	call("GET", ownerHandoffPath, tokens[1], "", nil, 404)
 	call("POST", ownerHandoffPath+"/release", tokens[0], "", []byte(`{}`), 200)
 	call("POST", ownerHandoffPath+"/release", tokens[0], "", []byte(`{}`), 200)
-	call("POST", transferPath+"/cancel", tokens[0], "", []byte(`{}`), 200)
-	call("POST", destinationPath+"/transfer/chunks/0", grant.Token, "", claimBody, 409)
+	if err = json.Unmarshal(call("POST", transferPath+"/handoffs", tokens[0], uuid.NewString(), handoffInput, 201), &handoff); err != nil {
+		t.Fatal(err)
+	}
+	handoffPath = "/v1/handoffs/" + handoff.ID
+	ownerHandoffPath = "/v1/camps/" + c.ID + "/sessions/" + session.ID + "/handoffs/" + handoff.ID
+	call("POST", handoffPath+"/claim", tokens[0], "", handoffBody, 200)
+	if err = json.Unmarshal(call("POST", handoffPath+"/ack", tokens[0], "", ackBody, 200), &handoff); err != nil {
+		t.Fatal(err)
+	}
+	commitBody, _ := json.Marshal(camp.HandoffCommitInput{ExpectedHandoffRevision: handoff.Revision})
+	commitKey := uuid.NewString()
+	call("POST", ownerHandoffPath+"/commit", "", commitKey, commitBody, 401)
+	call("POST", ownerHandoffPath+"/commit", tokens[1], commitKey, commitBody, 404)
+	if err = json.Unmarshal(call("POST", ownerHandoffPath+"/commit", tokens[0], commitKey, commitBody, 202), &handoff); err != nil {
+		t.Fatal(err)
+	}
+	call("POST", ownerHandoffPath+"/commit", tokens[0], commitKey, commitBody, 202)
+	proof, _ := json.Marshal(camp.HandoffFinishInput{HandoffAck: camp.HandoffAck{ClaimID: handoffClaim, Stopped: true, PayloadSHA256: digest(payload), ReviewSHA256: review}, CommitNonce: handoff.CommitNonce})
+	call("POST", handoffPath+"/finish", tokens[1], "", proof, 404)
+	call("POST", "/v1/runner/handoffs/"+handoff.ID+"/finish", grant.Token, "", proof, 404)
+	if err = json.Unmarshal(call("POST", handoffPath+"/finish", tokens[0], "", proof, 200), &handoff); err != nil {
+		t.Fatal(err)
+	}
+	if handoff.State != "committed" || handoff.ExecutionEpoch != current.ExecutionEpoch+1 {
+		t.Fatal("HTTP handoff did not commit")
+	}
+	call("POST", handoffPath+"/finish", tokens[0], "", proof, 200)
+	call("POST", handoffPath+"/claim", tokens[0], "", handoffBody, 200)
+	call("POST", handoffPath+"/chunks/0", tokens[0], "", handoffBody, 404)
+	call("POST", ownerHandoffPath+"/release", tokens[0], "", []byte(`{}`), 409)
+	call("POST", transferPath+"/cancel", tokens[0], "", []byte(`{}`), 409)
+	call("POST", destinationPath+"/transfer/chunks/0", grant.Token, "", claimBody, 404)
 }

@@ -18,7 +18,8 @@ and acceptance are separate milestones.
 | Memory and skills | Approved Cortex/shared Markdown design | Actual native and Go integrations, provider/model consolidation, memory inspection, skill editing/version rollout and permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: finish local-plan promotion and reviewed transfers, then memory/skills
+Next: add durable local transfer fencing, finish native transfer review and
+local-plan promotion, then memory/skills
 and shared execution. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
@@ -38,7 +39,7 @@ and reports the required file-verification receipt. The integration test uses
 the real Go API and Git transport with disposable PostgreSQL, drops download and
 completion responses, and verifies recovery without changing the source. Schema
 21 retains older uploads and adds the destination binding. Ordinary Run on
-assignment rejects these workspaces until the final handoff exists. Complete
+assignment rejects these workspaces outside the reviewed handoff. Complete
 history/commit migration and native transfer review remain open.
 The targeted upload, staging and runner tests pass, including an abrupt
 staging-process exit and recovery, owner-only access, stale snapshots, concurrent
@@ -61,7 +62,7 @@ The cloud source worker now reconciles its terminal turn, verifies the reviewed
 source files and acknowledges the handoff under a durable claim. Tests for both
 provider protocols confirm the actual fixture processes have exited, recover
 lost finish and handoff responses, and reject changed files without starting
-another model turn. History migration and the final assignment commit remain
+another model turn. Complete history migration remains
 open. The complete Go race suite, vet and Linux command
 build pass with this integration at schema 22.
 
@@ -70,7 +71,7 @@ profile and holds the local conversation lock through the bundled Go helper.
 It verifies the reviewed Git files before acknowledging and retains the lock
 until release or expiry. Reconnection rechecks the source. A session still open
 in an external client is refused. Full native transfer review, live-provider
-acceptance and the final assignment change are still pending.
+acceptance are still pending.
 The full native regression suite passes, including source verification with
 the real Go helper and temporary Git files. It covers lost claim/acknowledgement
 responses, app-worker restart, concurrent-start refusal, file drift, expiry,
@@ -88,12 +89,29 @@ protocols read all 150 fixture messages, including a 300 KB Unicode message,
 through the actual helper and Go API. History links use the existing native
 snapshot inspector and an authorized single-message read, including messages
 larger than the `@` selection budget. Child histories, attachments, complete
-transfer review and the final assignment commit remain open.
+transfer review remain open.
 The Go race suite and vet passed for the paged runtime, followed by focused
 citation authorization tests. Native state, cloud and context suites passed
 after adding citation inspection and dismissal on sign-out, source removal or
 permission changes. Linux commands build and the staged secret scan is clean.
 Live provider and full native transfer acceptance remain open.
+
+The final cloud-assignment operation now separates owner approval from fresh
+source confirmation. Schema 23 saves the permission choice, challenge and
+committed receipt. Completion changes the execution epoch once, retires the old
+cloud token and removes temporary upload chunks in the same transaction.
+The cloud worker retains its claim through response loss. Within its timed
+source hold, the Mac waits for saved and published routing before releasing
+the lock. Durable local fencing across an expired hold or app restart must
+land before enabling native transfer commits. Native review UI,
+child histories, attachments, unpushed commits, cloud-to-local transfer and
+live two-user acceptance remain open.
+The full Go race suite and vet pass at schema 23 with disposable PostgreSQL 17.
+Both provider fixtures continue in the destination after a lost completion
+response while retaining the source files. Native handoff, cloud and worker
+regressions pass, including failed routing persistence and late file changes.
+Linux command builds and the staged secret scan pass. These checks do not
+replace the pending durable local fence, native transfer UI or live deployment.
 
 The native account form and synthetic provider walkthrough now pass locally.
 The Go controller provisions per-installation workers, renews managed grants,

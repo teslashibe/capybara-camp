@@ -22,16 +22,29 @@ actor HandoffFixture: CampPublishingTransport {
     var payload = Data("{}".utf8)
     var loseClaim = false
     var loseAck = false
+    var loseFinish = false
+    var loseSession = false
     var corrupt = false
     var claims: [String] = []
     var acknowledgements = 0
+    var completions = 0
     init(handoff: CloudHandoff, source: CloudTransferSource) { self.handoff = handoff; self.source = source }
     func configure(claim: Bool = false, ack: Bool = false, corrupt: Bool = false) { loseClaim = claim; loseAck = ack; self.corrupt = corrupt }
     func finish() { handoff.state = "released" }
+    func requestCommit(loseFinish: Bool = false, loseSession: Bool = false) {
+        precondition(handoff.state == "acknowledged")
+        handoff.commitNonce = UUID().uuidString
+        self.loseFinish = loseFinish; self.loseSession = loseSession
+    }
+    func completionCount() -> Int { completions }
     func stats() -> ([String],Int,String) { (claims,acknowledgements,handoff.state) }
     func perform(_ operation: CampPublication) async throws -> Data {
         if operation.path.hasSuffix("/next") { return ["pending","claimed"].contains(handoff.state) ? try CampWire.body(["id":handoff.id]) : Data() }
-        guard ["pending","claimed","acknowledged"].contains(handoff.state) else { throw CampCloudError.server(409,"invalid_transition") }
+        if operation.method == "GET" && operation.path.hasSuffix("/sessions/"+source.session.id) {
+            if loseSession { loseSession = false; throw URLError(.networkConnectionLost) }
+            return try CampWire.encoder().encode(source.session)
+        }
+        guard ["pending","claimed","acknowledged","committed"].contains(handoff.state) else { throw CampCloudError.server(409,"invalid_transition") }
         let body = try JSONSerialization.jsonObject(with:operation.body) as! [String:Any]
         let claim = body["claim_id"] as! String
         if operation.path.hasSuffix("/claim") {
@@ -50,6 +63,12 @@ actor HandoffFixture: CampPublishingTransport {
                 precondition(body["stopped"] as? Bool == true && body["payload_sha256"] as? String == source.transfer.payloadSha256 && body["review_sha256"] as? String == source.transfer.reviewSha256)
                 acknowledgements += 1; handoff.state = "acknowledged"
                 if loseAck { loseAck = false; throw URLError(.networkConnectionLost) }
+            } else if operation.path.hasSuffix("/finish") {
+                precondition(body["commit_nonce"] as? String == handoff.commitNonce && handoff.state == "acknowledged")
+                completions += 1; handoff.state = "committed"; handoff.executionEpoch = handoff.sourceEpoch+1
+                source.session.executionEpoch = handoff.executionEpoch!
+                source.session.executionLocation = "cloud"; source.session.executionWorkspaceId = handoff.workspaceId
+                if loseFinish { loseFinish = false; throw URLError(.networkConnectionLost) }
             } else if operation.path.hasSuffix("/reject") { handoff.state = "invalidated" }
             else { preconditionFailure("Unexpected handoff call") }
         }
@@ -144,6 +163,42 @@ actor HandoffFixture: CampPublishingTransport {
         let interruptedStats = await interruptedAPI.stats()
         check(!interruptedGuard.active && interruptedStats.1 == 0,"Revoked source sent an acknowledgement")
         interrupted.attach(scope:nil,actor:nil,transport:nil)
+        let commitCache = try CampCache(directory:root.appendingPathComponent("commit"))
+        let commitAPI = HandoffFixture(handoff:h,source:source), commit = CampLocalHandoff(cache:commitCache)
+        let commitGuard = SourceGuardFixture(receipt)
+        commit.nativeSession = { _ in local }; commit.available = { _ in true }; commit.makeGuard = { _,_,_ in commitGuard }
+        var publications = 0, publicationFails = true
+        commit.acceptSession = { value, actualScope, epoch in
+            precondition(commitGuard.active,"Source unlocked before routing changed")
+            precondition(value.executionLocation == "cloud" && value.executionWorkspaceId == h.workspaceId && value.executionEpoch == 2 && actualScope == scope)
+            if publicationFails { publicationFails = false; throw CampCloudError.cacheUnavailable }
+            try await commitCache.ingest(scope:actualScope,session:value,expectedEpoch:epoch)
+            publications += 1
+        }
+        commit.attach(scope:scope,actor:actor,transport:commitAPI)
+        check(try await commit.poll())
+        await commitAPI.requestCommit(loseFinish:true,loseSession:true)
+        do { _ = try await commit.poll(); preconditionFailure("Lost completion response should retain guard") } catch {}
+        check(commitGuard.active && commitGuard.verifies == 2,"Commit did not recheck source")
+        do { _ = try await commit.poll(); preconditionFailure("Lost session read should retain guard") } catch {}
+        check(commitGuard.active)
+        do { _ = try await commit.poll(); preconditionFailure("Failed routing update should retain guard") } catch {}
+        check(commitGuard.active)
+        check(try await commit.poll())
+        check(!commitGuard.active && publications == 1,"Successful routing did not release source")
+        check(await commitAPI.completionCount() == 1,"Lost receipt repeated commit")
+        check(try await commit.poll() == false)
+        commit.attach(scope:nil,actor:nil,transport:nil)
+
+        let staleAPI = HandoffFixture(handoff:h,source:source), stale = CampLocalHandoff(cache:try CampCache(directory:root.appendingPathComponent("stale")))
+        let staleGuard = SourceGuardFixture(receipt)
+        stale.nativeSession = { _ in local }; stale.available = { _ in true }; stale.makeGuard = { _,_,_ in staleGuard }
+        stale.attach(scope:scope,actor:actor,transport:staleAPI)
+        check(try await stale.poll())
+        await staleAPI.requestCommit(); staleGuard.failure = true
+        do { _ = try await stale.poll(); preconditionFailure("Changed source committed") } catch {}
+        check(await staleAPI.completionCount() == 0 && !staleGuard.active)
+        stale.attach(scope:nil,actor:nil,transport:nil)
         try await cache.clear(scope)
         check(try await cache.metadata("source-handoff:"+scope.key) == nil,"Sign out retained source claim")
         try await realSourceGuard(root:root)

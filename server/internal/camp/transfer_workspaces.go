@@ -12,13 +12,16 @@ import (
 // Queries using this expression provide workspace w and source session s.
 // A staged destination cannot outlive the source snapshot it was reviewed for.
 const validWorkspaceTransferSQL = `(w.transfer_id IS NULL OR EXISTS(
- SELECT 1 FROM session_transfers t WHERE t.id=w.transfer_id AND t.state='ready' AND t.expires_at>clock_timestamp()
+ SELECT 1 FROM session_transfers t WHERE t.id=w.transfer_id
  AND t.owner_user_id=w.owner_user_id AND t.camp_id=w.camp_id AND t.session_id=w.session_id
  AND t.target_location='cloud' AND t.target_account_id=w.provider_account_id AND t.target_account_epoch=w.provider_epoch
  AND t.base_commit=w.base_commit AND t.source_revision=w.source_revision
- AND t.source_epoch=s.execution_epoch AND t.source_location=s.execution_location
+ AND ((t.state='ready' AND t.expires_at>clock_timestamp() AND t.source_epoch=s.execution_epoch AND t.source_location=s.execution_location
  AND t.source_workspace_id IS NOT DISTINCT FROM s.execution_workspace_id
- AND t.source_transcript_revision=s.transcript_revision AND t.source_permission_revision=s.permission_revision))`
+ AND t.source_transcript_revision=s.transcript_revision AND t.source_permission_revision=s.permission_revision)
+ OR (t.state='completed' AND s.execution_location='cloud' AND s.execution_workspace_id=w.id
+ AND EXISTS(SELECT 1 FROM transfer_handoffs h WHERE h.transfer_id=t.id AND h.workspace_id=w.id AND h.state='committed'
+ AND h.camp_id=t.camp_id AND h.session_id=t.session_id AND h.owner_user_id=t.owner_user_id AND h.execution_epoch=s.execution_epoch)))))`
 
 func (s *Store) cancelTransferWorkspaces(ctx context.Context, tx pgx.Tx, a auth.Actor, t Transfer) error {
 	if _, err := tx.Exec(ctx, `UPDATE transfer_handoffs SET state='invalidated',revision=revision+1 WHERE transfer_id=$1 AND state IN ('pending','claimed','acknowledged')`, t.ID); err != nil {
@@ -73,6 +76,16 @@ func (g *GitStore) transferWorkspaceSource(ctx context.Context, tx pgx.Tx, a aut
 	}
 	if t.TargetLocation != "cloud" || t.TargetAccountID != accountID {
 		return t, ErrDenied
+	}
+	if t.State == "completed" {
+		var committed bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM transfer_handoffs h WHERE h.transfer_id=$1 AND h.state='committed' AND h.execution_epoch=$2 AND h.workspace_id=$3 AND h.owner_user_id=$4 AND h.camp_id=$5 AND h.session_id=$6)`, t.ID, session.ExecutionEpoch, session.ExecutionWorkspaceID, a.UserID, campID, sessionID).Scan(&committed); err != nil {
+			return t, err
+		}
+		if !committed || session.ExecutionLocation != "cloud" {
+			return t, ErrTransition
+		}
+		return t, nil
 	}
 	if t.State != "ready" || !t.ExpiresAt.After(time.Now()) || t.BaseCommit == "" {
 		return t, ErrTransition

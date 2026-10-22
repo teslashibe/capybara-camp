@@ -222,8 +222,16 @@ the session or apply files. The source cloud runner can now verify an idle
 provider and the reviewed files under a temporary session hold. It retries lost
 acknowledgements without restarting the provider. The Mac worker also holds the
 local conversation lock while the bundled Go helper checks its source files.
-Complete history migration, the native transfer review and the final assignment
-change remain unfinished.
+The owner can request the final move with explicit destination permissions.
+The source then checks the files again before the server changes the execution
+epoch once. During the source hold, the Mac waits for saved, visible routing
+before releasing its lock. The cloud worker reconciles a lost completion
+response from its journal.
+The server retains the committed receipt and removes the temporary upload chunks.
+These internal operations do not yet provide the native transfer review flow,
+child-session and attachment migration, or cloud-to-local transfer acceptance.
+Durable local fencing across a hold timeout or app restart remains required
+before enabling native transfer commits.
 See the [transfer contract](docs/transfer-payload.md) for ownership, limits,
 recovery and the remaining handoff work.
 

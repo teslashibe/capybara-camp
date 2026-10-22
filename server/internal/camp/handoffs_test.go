@@ -12,13 +12,16 @@ import (
 	"github.com/teslashibe/capybara-camp/server/internal/transfer"
 )
 
-func handoffFixture(t *testing.T, local bool) (transferWorkspaceFixture, Handoff) {
+func handoffFixture(t *testing.T, local bool, purpose ...string) (transferWorkspaceFixture, Handoff) {
 	t.Helper()
 	var f transferWorkspaceFixture
 	if !local {
-		f = newTransferWorkspaceFixture(t)
+		f = newTransferWorkspaceFixture(t, purpose...)
 	} else {
 		g, provider, actors, c, session, input := workspaceFixture(t)
+		if len(purpose) > 0 {
+			input.Purpose = purpose[0]
+		}
 		create, raw := transferPayload(t, session, []byte("reviewed source"))
 		create.TargetLocation = "cloud"
 		create.TargetAccountID = input.ProviderAccountID

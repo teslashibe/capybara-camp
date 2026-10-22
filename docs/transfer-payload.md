@@ -4,7 +4,7 @@
 stores resumable, encrypted uploads of that manifest. The internal staging
 helper applies it to an isolated destination checkout. The cloud runner can
 prepare that destination through an owner-authorized workspace job. The native
-review flow and final session handoff remain unfinished. Upload completion
+review flow and full session migration remain unfinished. Upload completion
 means the payload passed validation and is ready for staging; it does not
 change the session's assignment. Used cloud workspaces remain protected by
 the existing transfer requirement.
@@ -230,8 +230,8 @@ Cancelling the transfer also cancels its active destination and retires that
 token in the same transaction.
 
 A ready transfer workspace remains unavailable through ordinary Run on
-assignment. The final transfer commit must provide the additional source lock,
-history and ownership guarantees below. Local staged files are retained after
+assignment. The final transfer commit uses the source lock and ownership
+checks below. Local staged files are retained after
 a rejected or cancelled job for review; normal retired-checkout cleanup does
 not delete them. Account erasure remains a separate explicit lifecycle action.
 
@@ -248,7 +248,7 @@ Existing pending, running or uncertain prompts prevent the hold from starting.
 An effective hold blocks new Camp prompts, approvals, starts and execution
 assignment changes with `409 transfer_in_progress`. It does not discard queued
 work or move the session. The hold remains effective after source acknowledgement
-until release, expiry, source/destination invalidation or a future transfer commit.
+until release, expiry, source/destination invalidation or a confirmed transfer commit.
 The effective guard checks expiry on every request; it does not depend on a
 cleanup timer running.
 
@@ -291,8 +291,9 @@ worker rechecks source files when retrying an acknowledgement, including after
 a lost response. A changed file rejects the handoff. Completed turn receipts
 remain readable and replayable during a hold, so a lost finish response cannot
 prevent the worker from reaching an idle state. New turns remain blocked, and
-the scheduler skips held sessions. The source stays assigned until the separate
-final commit is implemented and accepted.
+the scheduler skips held sessions. After acknowledgement, the worker retains
+its journal but can run other sessions on the account while the owner reviews.
+The source stays assigned until the final confirmation described below.
 
 The source Mac consumes handoff jobs through its existing local worker. It
 persists the claim before submission, resolves the original imported session,
@@ -313,8 +314,50 @@ The owner reads status at
 `GET /v1/camps/{camp}/sessions/{session}/handoffs/{handoff}` and releases it by
 posting `{}` to the same path with `/release`. A rejected, cancelled, expired
 or stale hold permits source work again. Transfer cancellation invalidates its
-holds. Events are owner-only. These endpoints contain no final assignment or
-history migration operation yet.
+holds. Events are owner-only.
+
+## Final source confirmation
+
+After the source acknowledges, the owner posts to
+`/v1/camps/{camp}/sessions/{session}/handoffs/{handoff}/commit` with an
+`Idempotency-Key` and the acknowledged `expected_handoff_revision`. A planning
+destination uses empty permissions and `execution_approved: false`. An
+implementation destination requires `execution_approved: true` and explicit
+provider permission settings, using the same validation as ordinary Run on.
+
+The response is HTTP 202 with a fresh `commit_nonce`. The session still belongs
+to the source. The original source client checks the files and stopped provider
+again, then posts its earlier acknowledgement fields plus `commit_nonce` to
+`/finish` under its source-only operation prefix. A changed file, expired hold,
+changed permission or stale destination rejects completion.
+
+The server commits these changes in one transaction:
+
+- Retire the old cloud checkout's token and mark it cancelled, retaining its files
+- Assign the prepared destination and approved permissions, incrementing the execution epoch once
+- Store the committed source proof and new epoch on the handoff
+- Mark the upload `completed` and remove its temporary encrypted chunks
+- Emit the owner-scoped handoff, transfer and session events
+
+The destination retains its transfer binding and verified file marker after
+the upload expires. Moving away from that checkout requires another reviewed
+transfer, even before its first provider turn. Replaying the exact completion
+returns the saved result. A restarted source can read that result by claiming
+with its original saved claim; it cannot reread the consumed payload. A new
+claim or changed proof is rejected.
+
+Within the five-minute hold, the Mac retains the helper's local conversation
+lock until it has fetched the current session, saved it in the scoped cache
+and synchronously published the updated routing. A failed read or cache write
+keeps the completion journal for retry. The cloud worker keeps its journal until
+it reads the committed receipt. Neither client starts a model turn to complete
+a transfer.
+
+The local process lock still expires with the hold or app exit. A durable local
+start fence is required before enabling native transfer commits: an ambiguous
+completion must prevent local execution after that deadline and across an app
+restart until the server's assignment has been reconciled. The transfer review
+UI is not enabled yet.
 
 ## Remaining integration
 
@@ -322,7 +365,7 @@ The cloud runtime can now read the stored main transcript through a paged
 context tool, without loading the whole history into a startup request. Its
 reads use the queued transcript revision and current request permissions.
 This removes the earlier 120-message startup boundary. It does not yet supply
-child histories, file attachments or the final transfer commit.
+child histories or file attachments.
 
 The agreed transfer flow still requires:
 
@@ -330,8 +373,8 @@ The agreed transfer flow still requires:
    provider continuation and commits not available from the remote repository
 2. Native conflict review and the complete base-repository credential policy,
    followed by cloud-to-local and cross-account destination acceptance
-3. A durable destination receipt followed by one atomic assignment-epoch
-   change, with replay-safe recovery and the source retained on failure
+3. Connect native conflict review to the existing destination receipt and atomic
+   assignment operation, with source and destination status visible throughout
 4. Native review, standalone-plan history migration, and local-to-cloud and
    cloud-to-local acceptance through both provider clients
 
@@ -375,3 +418,11 @@ starting another provider turn. Native tests cover claim and acknowledgement
 response loss, relaunch, retained locks, changed files, scope erasure and the
 real helper against a temporary Git repository. Live provider, native transfer
 review and two-Mac acceptance remain separate gates.
+
+Final-commit tests cover explicit implementation permissions, concurrent
+confirmation replay, expiry and revision changes after approval, owner/source
+authorization, receipt recovery and continued work in the destination after
+the upload expires. Both provider fixtures resume from the transferred files
+after a dropped completion response. The native source tests retain the lock
+through lost completion and session-read responses and a failed cache write;
+they reject files changed after the first acknowledgement.

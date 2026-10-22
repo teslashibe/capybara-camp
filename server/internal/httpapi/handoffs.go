@@ -9,6 +9,16 @@ import (
 )
 
 func (a *API) handoffRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /v1/camps/{camp}/sessions/{session}/handoffs/{handoff}/commit", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		var in camp.HandoffCommitInput
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := a.Camps.RequestHandoffCommit(r.Context(), u, r.PathValue("camp"), r.PathValue("session"), r.PathValue("handoff"), r.Header.Get("Idempotency-Key"), in)
+		if !fail(w, err) {
+			write(w, 202, out)
+		}
+	}))
 	mux.HandleFunc("POST /v1/camps/{camp}/sessions/{session}/transfers/{transfer}/handoffs", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		var in camp.HandoffInput
 		if !decode(w, r, &in) {
@@ -59,11 +69,17 @@ func (a *API) handoffRoutes(mux *http.ServeMux) {
 		if runner {
 			prefix = "/v1/runner/handoffs/{handoff}/"
 		}
-		for _, operation := range []string{"claim", "source", "chunks/{ordinal}", "ack", "reject"} {
+		for _, operation := range []string{"claim", "source", "chunks/{ordinal}", "ack", "reject", "finish"} {
 			handle := func(w http.ResponseWriter, r *http.Request, u auth.Actor, grant string) {
 				var value any
 				var err error
-				if operation == "ack" {
+				if operation == "finish" {
+					var in camp.HandoffFinishInput
+					if !decode(w, r, &in) {
+						return
+					}
+					value, err = a.Camps.FinishHandoff(r.Context(), u, grant, r.PathValue("handoff"), in)
+				} else if operation == "ack" {
 					var in camp.HandoffAck
 					if !decode(w, r, &in) {
 						return

@@ -16,6 +16,7 @@ type handoffRecord struct {
 	Origin         string `json:"origin"`
 	InstallationID string `json:"installation_id"`
 	Epoch          int64  `json:"epoch"`
+	Acknowledged   bool   `json:"acknowledged,omitempty"`
 }
 
 func (c *checkout) loadHandoff() (*handoffRecord, error) {
@@ -99,6 +100,20 @@ func (w *Worker) handoffTick(ctx context.Context, state camp.RunnerAccountState)
 	if claimed.ID != r.ID || claimed.ClaimID != r.ClaimID {
 		return true, ErrState
 	}
+	if claimed.State == "committed" {
+		if claimed.ExecutionEpoch != claimed.SourceEpoch+1 || !validUUID(claimed.CommitNonce) {
+			return true, ErrState
+		}
+		return true, w.checkout.clearHandoff()
+	}
+	if !oneOf(claimed.State, "claimed", "acknowledged") {
+		return true, ErrState
+	}
+	// The server holds the source session while the owner reviews the move.
+	// Other sessions on this account may run until fresh confirmation is needed.
+	if r.Acknowledged && claimed.State == "acknowledged" && claimed.CommitNonce == "" {
+		return false, nil
+	}
 	work, cancel := context.WithDeadline(ctx, claimed.ExpiresAt)
 	defer cancel()
 	var source camp.HandoffSource
@@ -147,6 +162,20 @@ func (w *Worker) handoffTick(ctx context.Context, state camp.RunnerAccountState)
 		return w.rejectHandoff(ctx, base, input)
 	}
 	ack := camp.HandoffAck{ClaimID: r.ClaimID, Stopped: true, PayloadSHA256: source.Transfer.PayloadSHA256, ReviewSHA256: source.Transfer.ReviewSHA256}
+	if source.Handoff.CommitNonce != "" {
+		if source.Handoff.State != "acknowledged" || !validUUID(source.Handoff.CommitNonce) {
+			return true, ErrState
+		}
+		var committed camp.Handoff
+		proof := camp.HandoffFinishInput{HandoffAck: ack, CommitNonce: source.Handoff.CommitNonce}
+		if err = w.client.call(work, "POST", base+"/finish", proof, &committed); err != nil {
+			return w.handoffError(err)
+		}
+		if committed.ID != r.ID || committed.ClaimID != r.ClaimID || committed.State != "committed" || committed.CommitNonce != proof.CommitNonce || committed.ExecutionEpoch != source.Handoff.SourceEpoch+1 {
+			return true, ErrState
+		}
+		return true, w.checkout.clearHandoff()
+	}
 	var accepted camp.Handoff
 	if err = w.client.call(work, "POST", base+"/ack", ack, &accepted); err != nil {
 		return w.handoffError(err)
@@ -154,7 +183,13 @@ func (w *Worker) handoffTick(ctx context.Context, state camp.RunnerAccountState)
 	if accepted.ID != r.ID || accepted.ClaimID != r.ClaimID || accepted.State != "acknowledged" {
 		return true, ErrState
 	}
-	return true, w.checkout.clearHandoff()
+	r.Acknowledged = true
+	return true, w.checkout.saveJSON("handoff.json", r)
+}
+
+func validUUID(value string) bool {
+	_, err := uuid.Parse(value)
+	return err == nil
 }
 
 func (w *Worker) rejectHandoff(ctx context.Context, base string, input map[string]string) (bool, error) {

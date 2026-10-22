@@ -161,8 +161,34 @@ func requiresExecutionTransfer(ctx context.Context, tx pgx.Tx, session Session) 
 		return false, nil
 	}
 	var required bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM prompt_requests r JOIN ticket_workspaces w ON w.id=r.execution_workspace_id WHERE r.session_id=$1 AND r.execution_workspace_id=$2 AND ((w.purpose='implementation' AND r.started_at IS NOT NULL) OR (r.stream_published AND r.stream_seq>0)))`, session.ID, session.ExecutionWorkspaceID).Scan(&required)
+	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM ticket_workspaces WHERE id=$2 AND transfer_id IS NOT NULL) OR EXISTS(SELECT 1 FROM prompt_requests r JOIN ticket_workspaces w ON w.id=r.execution_workspace_id WHERE r.session_id=$1 AND r.execution_workspace_id=$2 AND ((w.purpose='implementation' AND r.started_at IS NOT NULL) OR (r.stream_published AND r.stream_seq>0)))`, session.ID, session.ExecutionWorkspaceID).Scan(&required)
 	return required, err
+}
+
+func workspacePermissions(provider, purpose string, input localcli.PermissionSettings, approved bool) (localcli.PermissionSettings, error) {
+	permissions, err := localcli.NormalizePermissions(provider, input)
+	if err != nil {
+		return nil, ErrInput
+	}
+	if purpose == "planning" {
+		if len(permissions) > 0 || approved {
+			return nil, ErrInput
+		}
+		return permissions, nil
+	}
+	if purpose != "implementation" {
+		return nil, ErrInput
+	}
+	if !approved {
+		return nil, ErrDenied
+	}
+	if provider == "Codex" && ((permissions["profile"] == "" && permissions["sandbox"] == "") || permissions["approval"] == "" || permissions["reviewer"] == "") {
+		return nil, ErrInput
+	}
+	if provider == "Claude" && permissions["claudeMode"] == "" {
+		return nil, ErrInput
+	}
+	return permissions, nil
 }
 
 // AssignExecution only changes ownership of future work. The caller must
@@ -261,23 +287,9 @@ func (s *Store) AssignExecution(ctx context.Context, a auth.Actor, campID, id, k
 		if w.Revision != in.ExpectedWorkspaceRevision || w.SourceRevision != session.Revision || w.ProjectID != session.ProjectID {
 			return out, ErrRevision
 		}
-		permissions, err = localcli.NormalizePermissions(session.Provider, in.Permissions)
+		permissions, err = workspacePermissions(session.Provider, w.Purpose, in.Permissions, in.ExecutionApproved)
 		if err != nil {
-			return out, ErrInput
-		}
-		if w.Purpose == "planning" && (len(permissions) > 0 || in.ExecutionApproved) {
-			return out, ErrInput
-		}
-		if w.Purpose == "implementation" {
-			if !in.ExecutionApproved {
-				return out, ErrDenied
-			}
-			if session.Provider == "Codex" && ((permissions["profile"] == "" && permissions["sandbox"] == "") || permissions["approval"] == "" || permissions["reviewer"] == "") {
-				return out, ErrInput
-			}
-			if session.Provider == "Claude" && permissions["claudeMode"] == "" {
-				return out, ErrInput
-			}
+			return out, err
 		}
 	} else if session.OwnerDeviceID != a.DeviceID {
 		return out, ErrDenied

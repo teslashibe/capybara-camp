@@ -30,7 +30,14 @@ import SwiftUI
     private(set) var scope: CloudScope?
     private(set) var cache: CampCache?
     private(set) var client: CampHTTP?
-    lazy var worker = CampLocalWorker(cache: cache)
+    lazy var worker: CampLocalWorker = {
+        let value = CampLocalWorker(cache:cache)
+        value.acceptHandoffSession = { [weak self] session, scope, epoch in
+            guard let self else { throw CancellationError() }
+            try await self.acceptHandoffSession(session,scope:scope,epoch:epoch)
+        }
+        return value
+    }()
     lazy var providerAccounts = CampProviderAccounts(cache: cache)
     lazy var gitConnections = CampGitConnections(cache: cache)
     lazy var execution = CampExecution(cache: cache)
@@ -285,6 +292,16 @@ import SwiftUI
             schedulePublish(generation: token)
         } catch { self.error = error.localizedDescription }
     }
+    func acceptHandoffSession(_ value: CloudSession, scope expectedScope: CloudScope, epoch: Int64) async throws {
+        guard let scope, scope == expectedScope, scope.campId == value.campId, let cache else { throw CancellationError() }
+        let token = generation
+        try await cache.ingest(scope:scope,session:value,expectedEpoch:epoch)
+        guard token == generation, !Task.isCancelled else { throw CancellationError() }
+        if accepts(value) { sessionIndex[value.id] = value }
+        guard let current = sessionIndex[value.id], let currentEpoch = current.executionEpoch,
+              let valueEpoch = value.executionEpoch, currentEpoch >= valueEpoch else { throw CampCloudError.invalidResponse }
+        publishVisible()
+    }
     func acceptWorkerRequest(_ value: CloudRequest) async {
         guard let scope, value.campId == scope.campId, let cache else { return }
         let token = generation
@@ -301,10 +318,13 @@ import SwiftUI
             try? await Task.sleep(for: .milliseconds(50))
             guard let self, self.generation == token else { return }; self.publishTask = nil
             guard !Task.isCancelled else { return }
-            self.sessions = self.sessionIndex.values.sorted { $0.updatedAt > $1.updatedAt }
-            self.requests = self.requestIndex.values.sorted { $0.createdAt > $1.createdAt }
-            self.sessionsChanged?(self.sessions, self.projects, self.scope)
+            self.publishVisible()
         }
+    }
+    private func publishVisible() {
+        sessions = sessionIndex.values.sorted { $0.updatedAt > $1.updatedAt }
+        requests = requestIndex.values.sorted { $0.createdAt > $1.createdAt }
+        sessionsChanged?(sessions,projects,scope)
     }
     private func clearVisible() {
         flushRetryTask?.cancel(); flushRetryTask = nil

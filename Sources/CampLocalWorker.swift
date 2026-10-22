@@ -6,6 +6,7 @@ import SwiftUI
     @Published private(set) var issues: [CloudAttempt] = []
     var nativeSession: ((CloudSession) -> CampSession?)?
     var available: ((CampSession) -> Bool)?
+    var acceptHandoffSession: ((CloudSession, CloudScope, Int64) async throws -> Void)?
     var execute: ((CampSession, CloudRequest, String, [Message], [SessionContext], @escaping (ConversationResult) -> Void) -> LocalConversation?)?
     var requestUpdated: ((CloudRequest) -> Void)?
     var readHistory: (CampSession) async throws -> [Message] = { local in
@@ -131,7 +132,7 @@ import SwiftUI
                 try await begin(attempt, c); return
             }
             if saved.allSatisfy({ ["finish_pending","completed","failed","cancelled"].contains($0.state) }) {
-                handoff.nativeSession = nativeSession; handoff.available = available
+                handoff.nativeSession = nativeSession; handoff.available = available; handoff.acceptSession = acceptHandoffSession
                 if try await handoff.poll() { status = handoff.status; return }
             }
             guard saved.count < 200 else { status = "Review unconfirmed work before starting more requests"; return }

@@ -5,6 +5,7 @@ struct CloudHandoff: Codable, Sendable {
     var sourceDeviceId: String; var sourceLocation: String; var sourceWorkspaceId: String?
     var sourceEpoch: Int64; var workspaceId: String; var workspaceRevision: Int64
     var state: String; var claimId: String?; var revision: Int64; var expiresAt: Date
+    var commitNonce: String?; var executionEpoch: Int64?
 }
 struct CloudTransferSource: Codable, Sendable {
     struct Transfer: Codable, Sendable {
@@ -33,6 +34,7 @@ struct CloudTransferSource: Codable, Sendable {
     private var nextDiscovery = Date.distantPast
     var nativeSession: ((CloudSession) -> CampSession?)?
     var available: ((CampSession) -> Bool)?
+    var acceptSession: ((CloudSession, CloudScope, Int64) async throws -> Void)?
     var makeGuard: (CampSession, Data, Date) -> any LocalSourceGuard = { LocalTransferHold(session: $0, payload: $1, deadline: $2) }
     private(set) var status = ""
 
@@ -75,8 +77,23 @@ struct CloudTransferSource: Codable, Sendable {
               h.id == j.id, h.campId == c.scope.campId, h.ownerUserId == c.actor.userId,
               h.sourceDeviceId == c.actor.deviceId, h.sourceLocation == "local", h.sourceWorkspaceId == nil,
               h.claimId == j.claim, h.sourceEpoch > 0, h.workspaceRevision > 0, h.revision > 0,
-              h.expiresAt > Date(), h.expiresAt.timeIntervalSinceNow <= 301,
-              ["claimed","acknowledged"].contains(h.state) else { throw CampCloudError.invalidResponse }
+              ["claimed","acknowledged","committed"].contains(h.state) else { throw CampCloudError.invalidResponse }
+        if h.state == "committed" {
+            guard h.executionEpoch == h.sourceEpoch + 1, UUID(uuidString:h.commitNonce ?? "") != nil else { throw CampCloudError.invalidResponse }
+        } else {
+            guard h.expiresAt > Date(), h.expiresAt.timeIntervalSinceNow <= 301 else { throw CampCloudError.invalidResponse }
+        }
+    }
+    private func acceptCommitted(_ h: CloudHandoff, _ c: Context) async throws {
+        guard let epoch, let acceptSession, let completedEpoch = h.executionEpoch else { throw CampCloudError.invalidResponse }
+        let value = try await call(CloudSession.self,"GET","/v1/camps/\(c.scope.campId)/sessions/\(h.sessionId)",c)
+        guard value.id == h.sessionId, value.campId == c.scope.campId, value.ownerUserId == c.actor.userId,
+              let currentEpoch = value.executionEpoch, currentEpoch >= completedEpoch,
+              currentEpoch != completedEpoch || (value.executionLocation == "cloud" && value.executionWorkspaceId == h.workspaceId) else { throw CampCloudError.invalidResponse }
+        // Publish the new routing synchronously before releasing the local lock.
+        try await acceptSession(value,c.scope,epoch)
+        try await checkAuthority(c)
+        try await clear(c)
     }
     private func prepare(_ h: CloudHandoff, _ j: Journal, _ c: Context) async throws {
         let body = try CampWire.body(["claim_id":j.claim]), base = "/v1/handoffs/" + j.id
@@ -135,6 +152,7 @@ struct CloudTransferSource: Codable, Sendable {
             let body = try CampWire.body(["claim_id":j.claim]), base = "/v1/handoffs/"+j.id
             let h = try await call(CloudHandoff.self,"POST",base+"/claim",c,body:body)
             try validate(h,j,c)
+            if h.state == "committed" { try await acceptCommitted(h,c); return true }
             if guardProcess?.active != true { try await prepare(h,j,c) }
             guard let guardProcess, let source else { throw CampCloudError.invalidResponse }
             let receipt: SourceVerification
@@ -151,6 +169,15 @@ struct CloudTransferSource: Codable, Sendable {
                 throw error
             }
             guard guardProcess.active, receipt.payloadSHA256 == source.transfer.payloadSha256, receipt.reviewSHA256 == source.transfer.reviewSha256 else { throw CampCloudError.invalidResponse }
+            if let nonce = h.commitNonce {
+                guard h.state == "acknowledged", UUID(uuidString:nonce) != nil else { throw CampCloudError.invalidResponse }
+                let proof = try CampWire.body(["claim_id":j.claim,"stopped":true,"payload_sha256":receipt.payloadSHA256,"review_sha256":receipt.reviewSHA256,"commit_nonce":nonce])
+                let result = try await call(CloudHandoff.self,"POST",base+"/finish",c,body:proof)
+                try validate(result,j,c)
+                guard result.state == "committed", result.commitNonce == nonce else { throw CampCloudError.invalidResponse }
+                try await acceptCommitted(result,c)
+                return true
+            }
             if h.state != "acknowledged" {
                 let proof = try CampWire.body(["claim_id":j.claim,"stopped":true,"payload_sha256":receipt.payloadSHA256,"review_sha256":receipt.reviewSHA256])
                 let result = try await call(CloudHandoff.self,"POST",base+"/ack",c,body:proof)

@@ -25,7 +25,7 @@ type transferWorkspaceFixture struct {
 	raw      []byte
 }
 
-func newTransferWorkspaceFixture(t *testing.T) transferWorkspaceFixture {
+func newTransferWorkspaceFixture(t *testing.T, purpose ...string) transferWorkspaceFixture {
 	t.Helper()
 	g, provider, actors, c, session, input := workspaceFixture(t)
 	owner := actors[0]
@@ -65,6 +65,9 @@ func newTransferWorkspaceFixture(t *testing.T) transferWorkspaceFixture {
 	upload, err = g.store.CompleteTransfer(t.Context(), owner, c.ID, session.ID, upload.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(purpose) > 0 {
+		input.Purpose = purpose[0]
 	}
 	target, err := g.CreateTransferWorkspace(t.Context(), owner, c.ID, session.ID, upload.ID, uuid.NewString(), input)
 	if err != nil {

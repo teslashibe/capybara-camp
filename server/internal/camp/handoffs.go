@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
+	"github.com/teslashibe/capybara-camp/server/internal/localcli"
 )
 
 var ErrTransferHeld = errors.New("session is held for a reviewed transfer")
@@ -37,9 +38,14 @@ type Handoff struct {
 	ClaimID           string    `json:"claim_id,omitempty"`
 	Revision          int64     `json:"revision"`
 	ExpiresAt         time.Time `json:"expires_at"`
+	CommitNonce       string    `json:"commit_nonce,omitempty"`
+	ExecutionEpoch    int64     `json:"execution_epoch,omitempty"`
 	claimDevice       string
 	claimGrant        string
 	ackHash           []byte
+	commitHash        []byte
+	commitPermissions localcli.PermissionSettings
+	commitApproved    bool
 }
 
 type HandoffAck struct {
@@ -86,9 +92,13 @@ func readHandoff(ctx context.Context, tx pgx.Tx, id, owner string) (Handoff, err
 	if !validID(id) {
 		return h, ErrDenied
 	}
-	err := tx.QueryRow(ctx, `SELECT h.id,h.transfer_id,h.camp_id,h.session_id,h.owner_user_id,h.source_device_id,t.source_location,COALESCE(t.source_workspace_id::text,''),t.source_epoch,h.workspace_id,h.workspace_revision,h.state,COALESCE(h.claim_id::text,''),COALESCE(h.claim_device_id::text,''),COALESCE(h.claim_grant_id::text,''),h.ack_hash,h.revision,h.expires_at FROM transfer_handoffs h JOIN session_transfers t ON t.id=h.transfer_id WHERE h.id=$1 AND h.owner_user_id=$2 FOR UPDATE OF h`, id, owner).Scan(&h.ID, &h.TransferID, &h.CampID, &h.SessionID, &h.OwnerUserID, &h.SourceDeviceID, &h.SourceLocation, &h.SourceWorkspaceID, &h.SourceEpoch, &h.WorkspaceID, &h.WorkspaceRevision, &h.State, &h.ClaimID, &h.claimDevice, &h.claimGrant, &h.ackHash, &h.Revision, &h.ExpiresAt)
+	var permissions []byte
+	err := tx.QueryRow(ctx, `SELECT h.id,h.transfer_id,h.camp_id,h.session_id,h.owner_user_id,h.source_device_id,t.source_location,COALESCE(t.source_workspace_id::text,''),t.source_epoch,h.workspace_id,h.workspace_revision,h.state,COALESCE(h.claim_id::text,''),COALESCE(h.claim_device_id::text,''),COALESCE(h.claim_grant_id::text,''),h.ack_hash,h.revision,h.expires_at,COALESCE(h.commit_nonce::text,''),COALESCE(h.execution_epoch,0),h.commit_hash,COALESCE(h.commit_permissions,'{}'::jsonb),COALESCE(h.commit_approved,false) FROM transfer_handoffs h JOIN session_transfers t ON t.id=h.transfer_id WHERE h.id=$1 AND h.owner_user_id=$2 FOR UPDATE OF h`, id, owner).Scan(&h.ID, &h.TransferID, &h.CampID, &h.SessionID, &h.OwnerUserID, &h.SourceDeviceID, &h.SourceLocation, &h.SourceWorkspaceID, &h.SourceEpoch, &h.WorkspaceID, &h.WorkspaceRevision, &h.State, &h.ClaimID, &h.claimDevice, &h.claimGrant, &h.ackHash, &h.Revision, &h.ExpiresAt, &h.CommitNonce, &h.ExecutionEpoch, &h.commitHash, &permissions, &h.commitApproved)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return h, ErrDenied
+	}
+	if err == nil {
+		err = json.Unmarshal(permissions, &h.commitPermissions)
 	}
 	return h, err
 }
@@ -297,7 +307,12 @@ func (s *Store) sourceHandoff(ctx context.Context, tx pgx.Tx, a auth.Actor, toke
 	if err != nil {
 		return h, Transfer{}, "", err
 	}
-	t, err := s.validateHandoff(ctx, tx, a, h)
+	var t Transfer
+	if h.State == "committed" {
+		t, err = readTransfer(ctx, tx, a, campID, sessionID, h.TransferID)
+	} else {
+		t, err = s.validateHandoff(ctx, tx, a, h)
+	}
 	if err != nil {
 		return h, t, "", err
 	}
@@ -318,8 +333,11 @@ func (s *Store) sourceHandoff(ctx context.Context, tx pgx.Tx, a auth.Actor, toke
 	if err != nil {
 		return h, t, "", err
 	}
-	if r.cleanup || w.State != "ready" || w.ProviderAccountID != r.account.ID || w.ProviderEpoch != r.account.Epoch {
+	if r.cleanup || (h.State != "committed" && w.State != "ready") || w.ProviderAccountID != r.account.ID || w.ProviderEpoch != r.account.Epoch {
 		return h, t, "", ErrDenied
+	}
+	if h.State == "committed" {
+		return h, t, r.grantID, nil
 	}
 	session, err := s.readSession(ctx, tx, a, campID, sessionID)
 	if err != nil {

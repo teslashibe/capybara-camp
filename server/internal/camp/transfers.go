@@ -466,6 +466,9 @@ func (s *Store) CancelTransfer(ctx context.Context, a auth.Actor, campID, sessio
 	if oneOf(t.State, "cancelled", "expired") {
 		return t, tx.Commit(ctx)
 	}
+	if t.State == "completed" {
+		return t, ErrTransition
+	}
 	if err = s.cancelTransferWorkspaces(ctx, tx, a, t); err != nil {
 		return t, err
 	}

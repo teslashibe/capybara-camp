@@ -111,10 +111,15 @@ func TestRunnerHandoffVerifiesStoppedSourceAndRecoversReceipts(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			finished := make(chan struct{}, 1)
-			var finishDropped, ackDropped atomic.Bool
+			var finishDropped, ackDropped, commitDropped atomic.Bool
 			var ackCalls atomic.Int32
 			f, g, source, record := turnFixture(t, tc.provider, "complete", func(next http.Handler) http.Handler {
 				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if strings.HasPrefix(r.URL.Path, "/v1/runner/handoffs/") && strings.HasSuffix(r.URL.Path, "/finish") && commitDropped.CompareAndSwap(false, true) {
+						next.ServeHTTP(discardResponse{}, r)
+						w.WriteHeader(503)
+						return
+					}
 					if strings.HasSuffix(r.URL.Path, "/actions") && r.Method == "POST" {
 						var body camp.RequestAction
 						_ = json.NewDecoder(r.Body).Decode(&body)
@@ -173,7 +178,10 @@ func TestRunnerHandoffVerifiesStoppedSourceAndRecoversReceipts(t *testing.T) {
 				value, err := f.store.Handoff(t.Context(), f.owner, source.CampID, source.SessionID, h.ID)
 				return err == nil && value.State == want
 			})
-			eventually(t, func() bool { value, err := f.worker.checkout.loadHandoff(); return err == nil && value == nil })
+			eventually(t, func() bool {
+				value, err := f.worker.checkout.loadHandoff()
+				return err == nil && ((tc.change && value == nil) || (!tc.change && value != nil && value.Acknowledged))
+			})
 			stopWorker(t, cancel, done)
 			if !tc.change && ackCalls.Load() != 2 {
 				t.Fatal("lost source acknowledgement was not replayed", ackCalls.Load())
@@ -189,6 +197,81 @@ func TestRunnerHandoffVerifiesStoppedSourceAndRecoversReceipts(t *testing.T) {
 			if err != nil || current.ExecutionWorkspaceID != source.ID || current.ExecutionEpoch != session.ExecutionEpoch {
 				t.Fatal("source acknowledgement moved assignment", err)
 			}
+			if tc.change {
+				return
+			}
+			h, err = f.store.Handoff(t.Context(), f.owner, source.CampID, source.SessionID, h.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = f.store.RequestHandoffCommit(t.Context(), f.owner, source.CampID, source.SessionID, h.ID, uuid.NewString(), camp.HandoffCommitInput{ExpectedHandoffRevision: h.Revision}); err != nil {
+				t.Fatal(err)
+			}
+			cancel, done = startWorker(t, f.worker)
+			eventually(t, func() bool {
+				value, err := f.store.Handoff(t.Context(), f.owner, source.CampID, source.SessionID, h.ID)
+				return err == nil && value.State == "committed"
+			})
+			eventually(t, func() bool { value, err := f.worker.checkout.loadHandoff(); return err == nil && value == nil })
+			stopWorker(t, cancel, done)
+			current, err = f.store.Session(t.Context(), f.owner, source.CampID, source.SessionID)
+			if err != nil || current.ExecutionWorkspaceID != h.WorkspaceID || current.ExecutionEpoch != session.ExecutionEpoch+1 || !commitDropped.Load() {
+				t.Fatal("Lost commit was not reconciled", err)
+			}
+			request, err = f.store.CreateRequest(t.Context(), f.owner, source.CampID, source.SessionID, uuid.NewString(), camp.RequestInput{Prompt: "Continue after transfer"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cancel, done = startWorker(t, f.worker)
+			eventually(t, func() bool {
+				value, err := f.store.Request(t.Context(), f.owner, source.CampID, request.ID)
+				return err == nil && value.State == "completed"
+			})
+			stopWorker(t, cancel, done)
+			for _, id := range []string{source.ID, h.WorkspaceID} {
+				data, err = os.ReadFile(filepath.Join(f.worker.checkout.dir, "workspace-"+id, "README.md"))
+				if err != nil || string(data) != "reviewed source contents\n" {
+					t.Fatal("Reviewed files were not retained", err)
+				}
+			}
+			data, err = os.ReadFile(record)
+			if err != nil || strings.Count(string(data), "turn\n") != 2 {
+				t.Fatal("Transfer repeated or skipped provider work", err)
+			}
 		})
+	}
+}
+
+func TestRunnerHandoffRejectsSourceChangedAfterAcknowledgement(t *testing.T) {
+	f, g, source, record := turnFixture(t, "Codex", "complete")
+	h, session := prepareSourceHandoff(t, f, g, source)
+	cancel, done := startWorker(t, f.worker)
+	eventually(t, func() bool {
+		value, err := f.store.Handoff(t.Context(), f.owner, source.CampID, source.SessionID, h.ID)
+		return err == nil && value.State == "acknowledged"
+	})
+	stopWorker(t, cancel, done)
+	h, err := f.store.Handoff(t.Context(), f.owner, source.CampID, source.SessionID, h.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.store.RequestHandoffCommit(t.Context(), f.owner, source.CampID, source.SessionID, h.ID, uuid.NewString(), camp.HandoffCommitInput{ExpectedHandoffRevision: h.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(f.worker.checkout.workdir(source), "README.md"), []byte("changed during review\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cancel, done = startWorker(t, f.worker)
+	eventually(t, func() bool {
+		value, err := f.store.Handoff(t.Context(), f.owner, source.CampID, source.SessionID, h.ID)
+		return err == nil && value.State == "invalidated"
+	})
+	stopWorker(t, cancel, done)
+	current, err := f.store.Session(t.Context(), f.owner, source.CampID, source.SessionID)
+	if err != nil || current.ExecutionEpoch != session.ExecutionEpoch || current.ExecutionWorkspaceID != source.ID {
+		t.Fatal("Changed source moved", err)
+	}
+	if _, err = os.Stat(record); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("Verification started a provider", err)
 	}
 }
