@@ -17,7 +17,7 @@ APP="$ROOT/build/Capybara Camp Transfer Audit.app"
 mkdir -p "$APP/Contents/MacOS"
 cp build/test-support/libCampTestSupport.dylib build/camp-local "$APP/Contents/MacOS/"
 printf '%s\n' '@testable import CampTestSupport' > "$WORK/Audit.swift"
-cat Tests/TransferFixture.swift Tests/TransferReviewAudit.swift >> "$WORK/Audit.swift"
+cat Tests/TransferFixture.swift Tests/TransferSourceFixture.swift Tests/TransferReviewAudit.swift >> "$WORK/Audit.swift"
 swiftc -parse-as-library -swift-version 5 -I build/test-support -L build/test-support \
   -lCampTestSupport -framework SwiftUI -framework AppKit \
   -Xlinker -rpath -Xlinker @executable_path "$WORK/Audit.swift" \

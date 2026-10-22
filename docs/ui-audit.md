@@ -21,9 +21,28 @@ the final Runs in Cloud state. Back and re-entry passed, as did cancelling a
 prepared destination with Transfer cancelled · The source was kept. Captures
 are `build/ui-audit/native-transfer-completed-oct22.png` and
 `native-transfer-cancelled-oct22.png`. This used a synthetic
-server response; no files were uploaded and no cloud CLI ran. Changed-source
-and child-history walkthroughs remain, along with the full
-app's signed-in transfer and two-Mac acceptance.
+server response; no files were uploaded and no cloud CLI ran.
+
+A subsequent audit uses the real `CampLocalHandoff` coordinator and bundled Go
+source guard with a synthetic main conversation and two child transcripts. The
+mock implements only server responses; it no longer acknowledges the source
+automatically. Computer use verified rejection when a reviewed project file
+changed before verification, and when a child transcript changed after Source
+verified. Both cases removed the move action and allowed cancellation while
+keeping the source. Unchanged files/history completed the explicit Manual
+permission review and reached Runs in Cloud through the real local guard.
+Captures: `native-transfer-changed-file-oct22.png`,
+`native-transfer-changed-child-oct22.png` and
+`native-transfer-real-guard-completed-oct22.png`.
+
+This uncovered a stale confirmation state: the review stopped polling while
+the user chose permissions. It now follows the hold until commit, clearing
+Source verified when the hold changes or ends. Regression tests cover
+invalidated, expired and released holds, refusal to confirm and cancellation.
+The transfer and bundled-helper suites pass; the audit app passes strict
+signature verification. The full app's signed-in transfer, complete history
+publication and two-Mac acceptance remain open. These fixtures do not prove
+cloud execution or real transcript upload.
 
 ## Cloud child history
 
@@ -122,6 +141,7 @@ remain unverified by pointer; this retry does not close the whole-app audit.
 | UI-24 | Notification actions/rows were skipped by Tab, and duplicate row descriptions were ambiguous to accessibility automation | Rows now have stable identifiers; Tab reaches actions and rows. Native keyboard checks passed Space on the Unread filter and a saved-plan row, Return on a completion row and settings, mark-all-read, closing with Return, and Escape back to the bell. Clicking duplicate completion notices also opens the correct result. The shared segmented control supports Space/Return. Notification regression tests and strict bundle verification pass. Capture: `native-notifications-keyboard-oct22.png` |
 | UI-25 | Chat model fields stretched across the header, centered their values and put visible padding outside the menu label | Model, effort and speed share left-aligned outlined fields with a trailing chevron and a 30-point clickable label. Chat caps the group at 396 points and moves it below the heading at narrow widths. The native walkthrough verified wide and minimum-width layouts, model/effort/speed menus, a persisted effort change and Claude's restricted speed choices. Pointer clicks in the model field's lower-left padding and the effort field's lower-right padding opened the correct menus. Final accessibility inspection exposes one menu per field, including the Recent sessions filter. Native state, permission and planning suites pass. Capture: `native-chat-controls-narrow-oct22.png` |
 | UI-26 | Plain buttons left empty row space and small icon padding outside their hit areas | Explicit label hit areas cover recent sessions, main/child chats, provider/profile/project rows, planning navigation, segmented controls, context attachment and the 28-point action icons. The card model/logo layout is preserved. The full pointer/keyboard inventory remains a release gate; intermittent computer-use window errors prevented completing every edge-click case in this pass |
+| UI-27 | Transfer review kept Source verified after the source hold ended while permissions were open | The confirmation phase keeps following the source hold. Native checks using the real local guard rejected a changed project file and a changed child transcript; unchanged history completed. Invalidated/expired/released hold regressions pass. Real cloud and two-Mac transfer acceptance remain open |
 
 Local captures are in `build/ui-audit/`: `reference-chat.png`,
 `reference-board.png`, `reference-planning.png`, `native-chat-before.png`, and

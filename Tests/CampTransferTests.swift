@@ -32,6 +32,19 @@ import Foundation
         await until("Transfer did not commit"){model.job?.phase=="complete"}
         let completedCreates=await fixture.counts();precondition(completedCreates==1)
         model.attach(scope:nil,credential:nil,transport:nil)
+        for ended in ["invalidated","expired","released"] {
+            let source=TransferFixture(session),review=setup("hold-"+ended,source)
+            await review.capture(local,session:session,input:input,paths:[],history:history)
+            await review.prepare();await until("Destination not ready"){review.job?.phase=="ready"}
+            await review.hold();await until("Source did not acknowledge"){review.job?.phase=="confirm" && !review.working}
+            await source.endHold(ended)
+            await until("Ended source hold stayed verified during permission review"){review.job?.phase=="blocked"}
+            precondition(review.error.contains("source hold ended") && review.job?.handoff?.commitNonce==nil)
+            await review.confirm(permissions:PermissionSettings(),approved:false)
+            precondition(review.job?.phase=="blocked","An ended hold accepted confirmation")
+            await review.cancel();await until("Ended hold could not be cancelled"){review.job?.phase=="cancelled"}
+            review.attach(scope:nil,credential:nil,transport:nil)
+        }
         let reject=TransferFixture(session);await reject.configure(reject:true)
         let blocked=setup("blocked",reject)
         await blocked.capture(local,session:session,input:input,paths:[],history:history);await blocked.prepare()

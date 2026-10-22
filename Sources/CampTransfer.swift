@@ -203,7 +203,7 @@ struct TransferReviewJob: Codable, Sendable {
         catch{fail(error,c)}
         if connection?.generation==c.generation{working=false;wake()}
     }
-    private var active:Bool {job.map{["uploading","preparing","holding","committing","cancelling"].contains($0.phase)} ?? false}
+    private var active:Bool {job.map{["uploading","preparing","holding","confirm","committing","cancelling"].contains($0.phase)} ?? false}
     private func wake() {
         guard task==nil,let c=connection else{return}
         task=Task{[weak self] in
@@ -282,6 +282,10 @@ struct TransferReviewJob: Codable, Sendable {
             }
             try await updateHandoff(&j,c)
             if j.handoff?.state=="acknowledged"{j.phase="confirm";try await save(j,c)}
+        } else if j.phase=="confirm" {
+            // The source can change or its hold can expire while permissions
+            // are being reviewed. Keep the verified state current until commit.
+            try await updateHandoff(&j,c)
         } else if j.phase=="committing" {
             guard let h=j.handoff,let revision=j.commitRevision else{throw CampCloudError.invalidResponse}
             if h.commitNonce==nil {

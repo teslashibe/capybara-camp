@@ -25,6 +25,16 @@ the Hetzner box with us. Cloud sign-in and
 the two-Mac acceptance run follow that deployment. Hardware has not been bought
 or provisioned for this goal.
 
+The October 22 transfer review now keeps checking the source hold while the
+user reviews permissions. Computer use reproduced the stale Source verified
+label, then verified the correction with the real native handoff coordinator
+and bundled Go guard: changed project files and changed child history prevent
+the move; an unchanged main chat with two subagents completes the review.
+Server responses were synthetic, with no provider execution or cloud upload.
+The invalidated/expired/released hold regressions and packaged-helper checks
+pass. This closes those focused component walkthroughs, not the signed-in
+full-app or two-Mac transfer acceptance gates.
+
 The memory dependency is merged in
 [Cortex PR #1](https://github.com/teslashibe/cortex/pull/1): exact input selection,
 one provider call, a required permission guard inside the memory commit and a

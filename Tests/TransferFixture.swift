@@ -1,7 +1,8 @@
 import Foundation
 
 actor TransferFixture: CampAccountTransport {
-    let session: CloudSession
+    var session: CloudSession
+    var sourceWorker = false
     var transfer: CloudTransfer?
     var workspace: CloudWorkspace?
     var handoff: CloudHandoff?
@@ -13,6 +14,8 @@ actor TransferFixture: CampAccountTransport {
     var finish = false
     var chunks: [Int:Data] = [:]
     init(_ session:CloudSession){self.session=session}
+    func enableSourceWorker(){sourceWorker=true}
+    func endHold(_ state:String){handoff?.state=state}
     func configure(lose:Bool=false,reject:Bool=false,cancel:Bool=false){loseCreate=lose;rejectCreate=reject;loseCancel=cancel}
     func complete(){finish=true}
     func counts()->Int{creates}
@@ -20,9 +23,11 @@ actor TransferFixture: CampAccountTransport {
         if let key,let saved=receipts[key]{return saved}
         if method=="GET" {
             if path.contains("/handoffs/") {
-                if finish {handoff?.state="committed";handoff?.executionEpoch=(session.executionEpoch ?? 1)+1}
-                else if handoff?.state=="pending" {handoff?.state="claimed"}
-                else if handoff?.state=="claimed" {handoff?.state="acknowledged"}
+                if !sourceWorker {
+                    if finish {handoff?.state="committed";handoff?.executionEpoch=(session.executionEpoch ?? 1)+1}
+                    else if handoff?.state=="pending" {handoff?.state="claimed"}
+                    else if handoff?.state=="claimed" {handoff?.state="acknowledged"}
+                }
                 return try CampWire.encoder().encode(handoff!)
             }
             if path.contains("/workspaces/"){workspace?.state="ready";return try CampWire.encoder().encode(workspace!)}
@@ -54,13 +59,16 @@ actor TransferFixture: CampAccountTransport {
             workspace=CloudWorkspace(id:id,campId:session.campId,sessionId:session.id,projectId:session.projectId,ownerUserId:session.ownerUserId,providerAccountId:input.providerAccountId,providerInstallationId:UUID().uuidString,providerEpoch:1,gitConnectionId:input.gitConnectionId,gitEpoch:1,githubUserId:123,githubLogin:"fixture",githubInstallationId:7,repositoryId:5,repositoryName:"fixture/repo",requestedRef:input.ref,baseCommit:input.ref,branch:"camp/\(session.id)/\(id)",purpose:input.purpose,sourceRevision:session.revision,projectRevision:1,state:"queued",revision:1,createdAt:Date(),updatedAt:Date(),transferId:transfer!.id)
             result=try CampWire.encoder().encode(workspace!)
         } else if path.hasSuffix("/handoffs") {
-            handoff=CloudHandoff(id:UUID().uuidString.lowercased(),transferId:transfer!.id,campId:session.campId,sessionId:session.id,ownerUserId:session.ownerUserId,sourceDeviceId:session.ownerDeviceId,sourceLocation:"local",sourceEpoch:session.executionEpoch ?? 1,workspaceId:workspace!.id,workspaceRevision:workspace!.revision,state:"pending",claimId:UUID().uuidString,revision:1,expiresAt:Date().addingTimeInterval(300))
+            handoff=CloudHandoff(id:UUID().uuidString.lowercased(),transferId:transfer!.id,campId:session.campId,sessionId:session.id,ownerUserId:session.ownerUserId,sourceDeviceId:session.ownerDeviceId,sourceLocation:"local",sourceEpoch:session.executionEpoch ?? 1,workspaceId:workspace!.id,workspaceRevision:workspace!.revision,state:"pending",claimId:sourceWorker ? nil : UUID().uuidString,revision:1,expiresAt:Date().addingTimeInterval(300))
             result=try CampWire.encoder().encode(handoff!)
         } else if path.hasSuffix("/commit") {
-            handoff?.commitNonce=UUID().uuidString.lowercased();finish=true
+            guard handoff?.state=="acknowledged" else{throw CampCloudError.server(409,"invalid_transition")}
+            handoff?.commitNonce=UUID().uuidString.lowercased();finish = !sourceWorker
             result=try CampWire.encoder().encode(handoff!)
         } else if path.hasSuffix("/cancel") {
-            transfer?.state="cancelled";result=try CampWire.encoder().encode(transfer!)
+            transfer?.state="cancelled"
+            if sourceWorker,handoff != nil {handoff?.state="released"}
+            result=try CampWire.encoder().encode(transfer!)
         } else {throw CampCloudError.invalidResponse}
         if let key {receipts[key]=result}
         if path.hasSuffix("/transfers"),loseCreate {loseCreate=false;throw URLError(.networkConnectionLost)}
