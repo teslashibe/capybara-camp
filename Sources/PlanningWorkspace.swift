@@ -284,13 +284,24 @@ struct PlanningWorkspace: View {
             pane(plan, slot: slot).id("\(plan.id):\(plan.current.number):\(slot):\(section)")
         }
     }
-    private func detailReview<Content: View>(_ plan: LocalPlan, @ViewBuilder content: () -> Content) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                panes(plan, all: true).frame(height: 340)
-                content()
-                    .background(.white).clipShape(RoundedRectangle(cornerRadius: 10))
-            }.padding(.horizontal, 22).padding(.bottom, 16)
+    private func detailReview<Content: View>(_ plan: LocalPlan, @ViewBuilder content: @escaping () -> Content) -> some View {
+        ScrollViewReader { proxy in
+            CampTranscriptViewport(padding: 0, followBottom: { proxy.scrollTo("plan-detail-bottom", anchor: .bottom) }) {
+                VStack(alignment: .leading, spacing: 16) {
+                    panes(plan, all: true).frame(height: 340)
+                    content()
+                        .background(.white).clipShape(RoundedRectangle(cornerRadius: 10))
+                    Color.clear.frame(height: 1).id("plan-detail-bottom")
+                }.padding(.horizontal, 22).padding(.bottom, 16)
+            }
+            .task(id: "\(section):\(plan.current.number):\(plan.selectedExecutor ?? "")") {
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                proxy.scrollTo("plan-detail-bottom", anchor: .bottom)
+            }
+            .onChange(of: plan.current.steps.last?.output) { _, _ in
+                if section == "Combined plan" { proxy.scrollTo("plan-detail-bottom", anchor: .bottom) }
+            }
         }
     }
     private func pane(_ plan: LocalPlan, slot: Int) -> some View {

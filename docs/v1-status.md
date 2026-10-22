@@ -143,6 +143,15 @@ through refreshes. The local Go race suites, native conversation/approval
 checks and strict bundle signature verification pass. Parent/child navigation,
 older-session context and the five-turn comparison passed native click-through.
 
+The October 22 native review also corrected two product UI issues: local plan
+detail sections now reveal their result and next action, and selecting a
+permission profile or sandbox saves the whole choice atomically. The narrow
+window walkthrough passed separate executor/model selection, both permission
+switches, automatic In progress movement, steering, queued continuation and
+retained plan/implementation history. Four focused native suites and fixture
+protocol race tests pass. These checks use a synthetic execution context and
+permission catalogue; live CLI permission validation remains a release gate.
+
 Native import preparation now validates all saved versions, local quotes,
 planner bindings and copied implementation transcripts before creating the
 request. A scoped upload journal persists approval and the exact retry key.

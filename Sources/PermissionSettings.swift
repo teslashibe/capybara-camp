@@ -99,8 +99,12 @@ extension CampStore {
         sessionPermissions.grants[s.id]?.revision ?? planning.ticket(s.id)?.implementation.map { $0.id + ":" + $0.context.fingerprint }
     }
     func permissionCatalog(_ s: CampSession) async throws -> PermissionCatalog {
-        let data = try await Bridge.call("permissions", input: JSONEncoder().encode(["session": s]))
-        let result = try JSONDecoder().decode(PermissionCatalog.self, from: data)
+        let result: PermissionCatalog
+        if let permissionCatalogReader { result = try await permissionCatalogReader(s) }
+        else {
+            let data = try await Bridge.call("permissions", input: JSONEncoder().encode(["session": s]))
+            result = try JSONDecoder().decode(PermissionCatalog.self, from: data)
+        }
         guard result.provider == s.provider else { throw CampError.message("The provider changed while reading its settings") }
         return result
     }
@@ -126,11 +130,21 @@ struct PermissionFields: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Inherit · \(catalog.inherited)").font(.caption).foregroundStyle(campMuted).textSelection(.enabled)
             if provider == "Codex" {
-                Picker("Permission profile", selection: Binding(get: { selection.profile }, set: { selection.profile = $0; if !$0.isEmpty { selection.sandbox = "" } })) {
+                Picker("Permission profile", selection: Binding(get: { selection.profile }, set: { value in
+                    var next = selection
+                    next.profile = value
+                    if !value.isEmpty { next.sandbox = "" }
+                    selection = next
+                })) {
                     Text("Inherit").tag("")
                     ForEach(catalog.profiles, id: \.self) { Text(PermissionSettings.label($0)).tag($0) }
                 }
-                Picker("Sandbox", selection: Binding(get: { selection.sandbox }, set: { selection.sandbox = $0; if !$0.isEmpty { selection.profile = "" } })) {
+                Picker("Sandbox", selection: Binding(get: { selection.sandbox }, set: { value in
+                    var next = selection
+                    next.sandbox = value
+                    if !value.isEmpty { next.profile = "" }
+                    selection = next
+                })) {
                     Text("Inherit").tag("")
                     ForEach(catalog.sandboxes, id: \.self) { Text(PermissionSettings.label($0)).tag($0) }
                 }

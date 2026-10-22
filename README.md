@@ -111,6 +111,9 @@ profiles and model settings for the planners, attach session context with `@`,
 and keep the planning card running in the background. Start over preserves the
 previous version. Local plans continue into implementation on the same ticket
 after you select an executor and approve its permissions.
+Opening Combined plan or Implementation reveals its result and next action.
+The implementation keeps its own model settings and permission choices, and
+the ticket retains planning revisions and implementation history.
 
 [Projects](docs/projects.md) group tickets for a client or body of work across
 repositories. Assigning a project does not move a working directory or grant

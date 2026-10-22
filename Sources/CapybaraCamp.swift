@@ -361,6 +361,7 @@ final class TranscriptWatch {
     private let conversationProcess: () throws -> Process
     private let decoder = JSONDecoder()
     var executionContextReader: ((CampSession) async throws -> ExecutionContext)?
+    var permissionCatalogReader: ((CampSession) async throws -> PermissionCatalog)?
     var cloudChildReader: ((CloudSession) async throws -> CloudChildHistoryList)?
     var selected: CampSession? { sessions.first { $0.id == selectedID } }
     var visibleSessions: [CampSession] {

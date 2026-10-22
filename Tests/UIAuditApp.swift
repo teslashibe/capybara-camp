@@ -33,12 +33,24 @@ import SwiftUI
               configuration?["support"] == support else {
             fatalError("The bundled audit helper is not using the selected fixtures")
         }
-        _store = StateObject(wrappedValue: CampStore(stateDirectory: URL(fileURLWithPath: support), conversationProcess: {
+        let auditStore = CampStore(stateDirectory: URL(fileURLWithPath: support), conversationProcess: {
             let process = Process()
             process.executableURL = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/camp-test-provider")
             process.arguments = ["ui-audit"]
             return process
-        }))
+        })
+        auditStore.executionContextReader = { source in
+            ExecutionContext(fingerprint: String(repeating: "a", count: 64), cwd: source.cwd,
+                profile: source.root, provider: source.provider, permissionSummary: "Synthetic project permissions")
+        }
+        auditStore.permissionCatalogReader = { source in
+            PermissionCatalog(provider: source.provider,
+                modes: source.provider == "Claude" ? ["manual", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"] : [],
+                profiles: [":read-only", ":workspace"], sandboxes: ["read-only", "workspace-write", "danger-full-access"],
+                approvals: ["on-request", "never"], reviewers: ["user", "auto_review"],
+                inherited: "Read only · Ask when needed", note: "Synthetic permissions for interface testing")
+        }
+        _store = StateObject(wrappedValue: auditStore)
     }
     var body: some Scene {
         Window("Capybara Camp · Synthetic UI audit", id: "camp") {
