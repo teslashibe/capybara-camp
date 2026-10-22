@@ -90,6 +90,25 @@ func TestMemoryObservationHTTPAndReadiness(t *testing.T) {
 	if r := send("GET", path+"?visibility=private&project_id="+planning.ProjectID+"&limit=101", token, nil); r.Code != 400 {
 		t.Fatal("unbounded page", r.Code)
 	}
+	jobPath := "/v1/camps/" + c.ID + "/memory/jobs"
+	jobInput := camp.MemoryJobInput{ProjectID: planning.ProjectID, Visibility: "private", Target: camp.MemoryTarget{Location: "local", ProfileID: session.ProfileID}, Model: "fixture-model", ObservationIDs: []string{value.ID}}
+	jobResult := send("POST", jobPath, token, jobInput)
+	var job camp.MemoryJob
+	if jobResult.Code != 201 || json.Unmarshal(jobResult.Body.Bytes(), &job) != nil || job.State != "queued" {
+		t.Fatal("job create", jobResult.Code, jobResult.Body.String())
+	}
+	if r := send("GET", jobPath+"/"+job.ID, token, nil); r.Code != 200 {
+		t.Fatal("job read", r.Code)
+	}
+	if r := send("GET", jobPath+"?visibility=private&project_id="+planning.ProjectID, token, nil); r.Code != 200 || !strings.Contains(r.Body.String(), job.ID) {
+		t.Fatal("job list", r.Code, r.Body.String())
+	}
+	if r := send("POST", jobPath+"/"+job.ID+"/cancel", token, map[string]any{"expected_revision": 1}); r.Code != 200 || !strings.Contains(r.Body.String(), `"state":"cancelled"`) {
+		t.Fatal("job cancel", r.Code, r.Body.String())
+	}
+	if r := send("GET", "/v1/camps/"+c.ID+"/memory/memories?visibility=private&project_id="+planning.ProjectID, token, nil); r.Code != 200 || !strings.Contains(r.Body.String(), `"memories":[]`) {
+		t.Fatal("memory list", r.Code, r.Body.String())
+	}
 	if r := send("GET", "/ready", token, nil); r.Code != 200 {
 		t.Fatal("ready schema rejected", r.Code)
 	}

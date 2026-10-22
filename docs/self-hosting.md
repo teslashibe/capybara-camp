@@ -87,6 +87,11 @@ Camp metadata are restored together. The embedded library needs no separate
 listener, deployment or provider credentials. Its license is included at
 `licenses/cortex.txt` and in the container images.
 
+Schema 31 adds saved consolidation jobs and source references. It retains
+cancelled jobs and refuses a downgrade while any job exists. Restore the complete
+Camp/Cortex database together when returning to an older schema. The current
+job API saves metadata; provider dispatch is still in development.
+
 The database bootstrap SQL runs only on a new data volume. Changing a password
 in a Kubernetes Secret does not change an existing PostgreSQL role password.
 Perform a coordinated credential rotation through PostgreSQL and the affected

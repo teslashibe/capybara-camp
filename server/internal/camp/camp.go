@@ -414,6 +414,7 @@ func (s *Store) Events(ctx context.Context, a auth.Actor, id string, after int64
 	 OR EXISTS(SELECT 1 FROM event_recipients r WHERE r.camp_id=e.camp_id AND r.cursor=e.cursor AND r.user_id=$1))
 	 AND (e.plan_id IS NULL OR EXISTS(SELECT 1 FROM planning_tickets p WHERE p.id=e.plan_id AND (p.shared OR p.creator_user_id=$1 OR EXISTS(SELECT 1 FROM planning_participants x WHERE x.plan_id=p.id AND x.version=p.active_version AND x.owner_user_id=$1))))
 	 AND (e.memory_observation_id IS NULL OR EXISTS(SELECT 1 FROM memory_observations o JOIN memory_spaces p ON p.id=o.space_id JOIN sessions s ON s.id=o.source_session_id WHERE o.id=e.memory_observation_id AND (p.owner_user_id IS NULL OR p.owner_user_id=$1) AND (s.shared OR s.owner_user_id=$1) AND (p.owner_user_id IS NOT NULL OR s.shared) AND (s.permission_revision=o.permission_revision OR p.owner_user_id=$1 AND s.owner_user_id=$1) AND s.transcript_revision>=o.transcript_revision))
+	 AND (e.memory_job_id IS NULL OR EXISTS(SELECT 1 FROM memory_jobs j JOIN memory_spaces p ON p.id=j.space_id WHERE j.id=e.memory_job_id AND (p.owner_user_id IS NULL OR p.owner_user_id=$1) AND `+memoryJobSourceAccessSQL+`))
 	 ORDER BY e.cursor LIMIT 250`, a.UserID, id, after)
 	if err != nil {
 		return nil, err

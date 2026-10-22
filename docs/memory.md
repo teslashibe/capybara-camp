@@ -1,8 +1,8 @@
 # Project memory
 
-Memory remains in development. The Camp observation API and embedded Cortex
-adapter are implemented; consolidation job routing and the native memory
-interface are not. The CLI inference primitive and Cortex model adapter are
+Memory remains in development. The Camp observation API, saved job metadata,
+memory reads and embedded Cortex adapter are implemented; job dispatch and the
+native memory interface are not. The CLI inference primitive and Cortex model adapter are
 implemented, but no user-facing consolidation command queues them yet.
 [Cortex PR #1](https://github.com/teslashibe/cortex/pull/1)
 is merged and supplies the exact-selection and permission-guard API needed by
@@ -35,6 +35,46 @@ Revoking a source hides project observations from reads, lists and event replay.
 Sharing that source again does not revive observations made under the older
 grant; explicitly save a new snapshot. Owners retain their own private copies
 when they stop sharing a source.
+
+## Saved jobs and memory reads
+
+Schema 31 stores a consolidation job before provider work. The current API can
+save, inspect and cancel queued jobs. Execution is not connected yet, so creating
+a job does not start a CLI call.
+
+- `POST /v1/camps/{camp}/memory/jobs` accepts `project_id`, `visibility`,
+  `target`, `model`, `effort`, `speed`, `observation_ids` and `memories`, with an
+  `Idempotency-Key`
+- `target` is `{location: "local", profile_id: "…"}` or
+  `{location: "cloud", account_id: "…"}`; Camp derives the owning device or
+  installation and epoch from that person's saved account
+- Each selected memory is `{id: "…", digest: "…"}`, using the digest returned
+  by the memory read API; a changed snapshot requires a new review
+- `GET /v1/camps/{camp}/memory/jobs/{id}` reads one permitted job;
+  `GET /v1/camps/{camp}/memory/jobs?project_id=…&visibility=…` lists jobs
+- `POST /v1/camps/{camp}/memory/jobs/{id}/cancel` accepts
+  `{expected_revision: N}` and an `Idempotency-Key`
+- `GET /v1/camps/{camp}/memory/memories?project_id=…&visibility=…` lists current
+  consolidated memories, and the same path with `/{id}` reads one
+
+Selections contain 1–200 pending observations and up to 500 existing memories.
+Selected memory snapshots, including their provenance, must fit within 8 MiB;
+oversized reads require a smaller selection or page.
+One active job is allowed per namespace, with at most 32 active jobs per owner.
+Cancelling retains its history and leaves observations available for another
+review. The creator can cancel after a source is revoked; that response omits
+the selected input references. It does not restore access to them.
+
+Every memory read and job creation checks all contributing observations,
+including sources inherited through reinforcement. A missing, private or
+revoked source hides the complete memory. Project-job metadata has the same
+source checks; other members cannot read the creator's profile, account,
+installation or device IDs. Event replay applies those checks too.
+
+Lists accept `limit` up to 100 and an `after` cursor; responses return `next`.
+Memory pages can contain fewer items when sources are inaccessible. Follow a
+non-empty cursor even when the page is empty. Neither lists nor creation calls
+grant access to a previously private source or invoke a model.
 
 ## Storage and access
 

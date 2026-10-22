@@ -210,8 +210,21 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO memory_observations(id,camp_id,space_id,creator_user_id,source_session_id,transcript_revision,permission_revision,message_ids,title,content,content_hash) VALUES($1,$2,$3,$4,$5,1,1,ARRAY['fixture'],'Saved memory','Retained content',$6)`, observation, camp, space, id, session, strings.Repeat("a", 64)); err != nil {
 		t.Fatal(err)
 	}
+	job := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO memory_jobs(id,camp_id,space_id,creator_user_id,provider,model,effort,speed,location,profile_id,owner_device_id,observation_ids,memory_refs) VALUES($1,$2,$3,$4,'Codex','fixture','','standard','local',$5,$6,ARRAY[$7]::uuid[],'[]')`, job, camp, space, id, profile, device, observation); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = provider.Down(ctx); err == nil {
+		t.Fatal("Downgrade discarded memory jobs")
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM memory_jobs WHERE id=$1`, job); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 29); err == nil {
 		t.Fatal("Downgrade discarded memory observations")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
 	}
 	if err = Ready(ctx, pool); err != nil {
 		t.Fatal("Rejected memory downgrade changed schema readiness", err)

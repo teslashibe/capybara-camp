@@ -135,8 +135,9 @@ reads source-bound observations in private or project scopes, using an
 embedded Cortex store. The [project memory contract](docs/memory.md) covers
 those endpoints and the remaining selected-CLI consolidation work. Its native
 screen and consolidation job routing are not available yet.
-The source includes a bounded, isolated CLI inference adapter for that work;
-it is not connected to a user-facing consolidation action yet.
+The source includes saved consolidation jobs, source-checked memory reads and a
+bounded, isolated CLI inference adapter. Provider dispatch and the native
+consolidation action are not connected yet.
 
 In the development build, choose **Save to Camp** from a local planning or
 implementation card's menu, or the cloud icon in the plan window. Review the
