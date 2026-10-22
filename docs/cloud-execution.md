@@ -1,5 +1,7 @@
 # Local and cloud execution
 
+[Iteration 2](iteration-2.md) defines client projects, separate GitHub identities and per-ticket repository workspaces. A client project is a collection of tickets, not a filesystem directory or repository.
+
 Approved V1 scope, October 21, 2026. This is an implementation contract, not a
 claim that cloud runners or provider sign-in are shipped. The current Go service
 stores shared sessions and prompt requests; the native app can publish selected

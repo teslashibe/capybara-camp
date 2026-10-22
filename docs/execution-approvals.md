@@ -1,5 +1,7 @@
 # Execution approval transport
 
+[Iteration 2](iteration-2.md) adds explicit per-session permission controls and capability validation. The transport below is implemented; those controls and removal of retired policy defaults are pending.
+
 The native CLI bridge has a separate implementation mode. Ordinary chat and
 planning retain their read-only configuration. Implementation requires an
 explicit plan approval and can create a new persistent provider session or resume

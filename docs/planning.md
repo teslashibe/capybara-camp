@@ -1,5 +1,7 @@
 # Planning workflow
 
+The next iteration adds a single-model Plan path alongside Plan with comparison. See [Iteration 2](iteration-2.md); the implementation described below currently uses the two-provider workflow.
+
 The V1 development server has a durable five-step planning queue. The Mac app
 also has a private local planning coordinator and paired-chat workspace. Local
 plans persist on the owning Mac and use isolated official CLI turns. The native
