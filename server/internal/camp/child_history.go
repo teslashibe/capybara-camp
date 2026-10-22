@@ -181,6 +181,16 @@ func (s *Store) WriteChildHistory(ctx context.Context, a auth.Actor, campID, par
 }
 
 func (s *Store) ChildHistories(ctx context.Context, a auth.Actor, campID, parentID string, revision int64) (ChildHistoryList, error) {
+	return s.childHistories(ctx, a, campID, parentID, revision, false)
+}
+
+// ChildPublication includes tombstones so the source device can reconcile a
+// removed child after losing its local journal. Readers use ChildHistories.
+func (s *Store) ChildPublication(ctx context.Context, a auth.Actor, campID, parentID string) (ChildHistoryList, error) {
+	return s.childHistories(ctx, a, campID, parentID, 0, true)
+}
+
+func (s *Store) childHistories(ctx context.Context, a auth.Actor, campID, parentID string, revision int64, publication bool) (ChildHistoryList, error) {
 	return retryRead(ctx, func() (ChildHistoryList, error) {
 		var out ChildHistoryList
 		if revision < 0 {
@@ -198,6 +208,9 @@ func (s *Store) ChildHistories(ctx context.Context, a auth.Actor, campID, parent
 		if err != nil {
 			return out, err
 		}
+		if publication && (parent.OwnerUserID != a.UserID || parent.OwnerDeviceID != a.DeviceID) {
+			return out, ErrDenied
+		}
 		at := revision
 		if at == 0 {
 			at = parent.TranscriptRevision
@@ -208,7 +221,7 @@ func (s *Store) ChildHistories(ctx context.Context, a auth.Actor, campID, parent
 		out = ChildHistoryList{ParentRevision: at, PermissionRevision: parent.PermissionRevision, Children: []ChildHistory{}}
 		rows, err := tx.Query(ctx, `SELECT `+childHistoryColumns+` FROM session_children c
  CROSS JOIN LATERAL(SELECT * FROM session_child_revisions WHERE parent_session_id=c.parent_session_id AND child_session_id=c.session_id AND revision<=$2 ORDER BY revision DESC LIMIT 1) v
- WHERE c.parent_session_id=$1 AND NOT v.removed ORDER BY c.session_id`, parentID, at)
+ WHERE c.parent_session_id=$1 AND ($3 OR NOT v.removed) ORDER BY c.session_id`, parentID, at, publication)
 		if err != nil {
 			return out, err
 		}

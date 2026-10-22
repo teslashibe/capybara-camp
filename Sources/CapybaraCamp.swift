@@ -322,6 +322,7 @@ final class TranscriptWatch {
     @Published var subagentsParent: CampSession?
     @Published var children: [ChildSession] = []
     @Published var childrenLoading = false
+    private var childrenRequestID = UUID()
     private var observing = false
     private let codexWatch = CodexActivityWatch()
     private var polledActivity = ActivityResult(activity: [], sessions: [], models: [:], errors: [:])
@@ -357,6 +358,7 @@ final class TranscriptWatch {
     private let conversationProcess: () throws -> Process
     private let decoder = JSONDecoder()
     var executionContextReader: ((CampSession) async throws -> ExecutionContext)?
+    var cloudChildReader: ((CloudSession) async throws -> CloudChildHistoryList)?
     var selected: CampSession? { sessions.first { $0.id == selectedID } }
     var visibleSessions: [CampSession] {
         if cachedVisibleRevision == filterRevision { return cachedVisible }
@@ -431,6 +433,7 @@ final class TranscriptWatch {
         projects = LocalProjects(cache: cloud.cache)
         sharing = CampSharing(cache: cloud.cache)
         sharedPlanning = CampPlanning(cache: cloud.cache)
+        sharing.localChildren = { [weak self] session in self?.activityFor(session)?.children ?? [] }
         projects.changed = { [weak self] in self?.projectsChanged() }
         sharedPlanning.changed = { [weak self] in self?.syncSharedPlans() }
         sharedPlanning.created = { [weak self] draft, id in
@@ -531,6 +534,10 @@ final class TranscriptWatch {
             guard let self, self.selectedID == "camp:" + id else { return }
             self.loadHistory(silent: true)
         }
+        cloud.childrenChanged = { [weak self] id in
+            guard let self,let session=self.selected,session.id=="camp:"+id else{return}
+            self.loadChildren(session)
+        }
         cloud.execution.changed = { [weak self] id in Task {
             guard let self else{return}
             await self.cloud.refreshSession(id)
@@ -620,6 +627,7 @@ final class TranscriptWatch {
         }
         if let selectedID, selectedID.hasPrefix("camp:"), cloudSessions[selectedID] == nil {
             self.selectedID = nil; messages = []; cloudHistory = [:]; readGeneration = UUID()
+            children=[];selectedChildID=nil;subagentsParent=nil;childrenRequestID=UUID();childrenLoading=false
         }
     }
     func isBusy(_ s: CampSession) -> Bool {
@@ -805,24 +813,39 @@ final class TranscriptWatch {
             }
             else { indexes[item.id] = sessions.count; sessions.append(item) }
         }
-        if let selected = selected, let live = activityFor(sharing.native(for: selected.id) ?? selected) { children = live.children }
+        if let selected = selected,!selected.isCloud, let live = activityFor(sharing.native(for: selected.id) ?? selected) { children = live.children }
         if previousActivity != next { sharing.localChanged() }
         if Set(previousActivity.keys) != Set(next.keys) { cloud.worker.scan() }
         planning.drain()
     }
     func loadChildren(_ s: CampSession) {
-        guard !s.isCloud else { banner = "Subagent transcripts have not been shared for this session"; return }
-        subagentsParent = s; children = activity[s.id]?.children ?? []; childrenLoading = true
+        let requestID=UUID();childrenRequestID=requestID
+        if subagentsParent?.id != s.id {children = activity[s.id]?.children ?? []}
+        subagentsParent = s; childrenLoading = true
+        if s.isCloud {
+            Task {
+                defer {if childrenRequestID==requestID{childrenLoading=false}}
+                do {
+                    guard let remote=cloudSessions[s.id] else{throw CampCloudError.invalidResponse}
+                    let result:CloudChildHistoryList
+                    if let cloudChildReader {result=try await cloudChildReader(remote)} else {result=try await cloud.childHistories(session:remote)}
+                    guard childrenRequestID==requestID,subagentsParent?.id==s.id else{return}
+                    guard result.valid(parent:remote.id) else{throw CampCloudError.invalidResponse}
+                    children=result.children.filter{!$0.removed}.map(\.childSession)
+                } catch {if childrenRequestID==requestID{banner=error.localizedDescription}}
+            }
+            return
+        }
         if s.provider == "Codex", let live = activityFor(s) {
             children = live.children; childrenLoading = false; return
         }
         Task {
-            defer { childrenLoading = false }
+            defer {if childrenRequestID==requestID{childrenLoading = false}}
             do {
                 let input = try JSONSerialization.data(withJSONObject: ["session": object(s), "live": activity[s.id]?.state == "running"])
                 let result = try decoder.decode(ChildrenResult.self, from: await Bridge.call("children", input: input))
-                if subagentsParent?.id == s.id { children = result.children }
-            } catch { banner = error.localizedDescription }
+                if subagentsParent?.id == s.id,childrenRequestID==requestID { children = result.children }
+            } catch {if childrenRequestID==requestID{banner = error.localizedDescription}}
         }
     }
     func move(_ id: String, _ stage: Stage) {
@@ -910,6 +933,7 @@ final class TranscriptWatch {
         reviewingPlan = nil
         planNavigation = nil
         selectedChildID = nil
+        childrenRequestID=UUID();childrenLoading=false;subagentsParent=nil
         notificationPlanVersion = nil; notificationMessageID = nil
         if selectedID != session.id {
             if let previous = selectedID { drafts[previous] = draft }
@@ -1588,7 +1612,7 @@ struct ChatView: View {
                             ForEach(store.children) { child in
                                 Button { pickedChild = child } label: {
                                     HStack(alignment: .top, spacing: 8) {
-                                        if child.status == "running" { ProgressView().controlSize(.mini).frame(width: 13, height: 13) }
+                                        if child.status == "running" || child.status == "syncing" { ProgressView().controlSize(.mini).frame(width: 13, height: 13) }
                                         else { ProviderMark(provider: session.provider, size: 13) }
                                         VStack(alignment: .leading, spacing: 4) {
                                             Text(child.name).font(.system(size: 11, weight: .medium)).lineLimit(1)
@@ -1598,10 +1622,10 @@ struct ChatView: View {
                                         Text(child.status.capitalized).font(.system(size: 9)).foregroundStyle(campMuted).lineLimit(1)
                                     }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 5).padding(.vertical, 8)
                                         .background(pickedChild?.id == child.id ? Color(hex: 0xDFE5D8) : .clear).clipShape(RoundedRectangle(cornerRadius: 7))
-                                }.buttonStyle(.plain)
+                                }.buttonStyle(.plain).disabled(child.status=="syncing")
                             }
                             if store.children.isEmpty && !store.childrenLoading {
-                                Text(session.isCloud ? "Subagents have not been shared" : "No saved subagents").font(.system(size: 10)).foregroundStyle(campMuted).padding(10)
+                                Text("No saved subagents").font(.system(size: 10)).foregroundStyle(campMuted).padding(10)
                             }
                         }.padding(.leading, 7)
                     }.overlay(alignment: .leading) { Rectangle().fill(Color(hex: 0xCCD4C5)).frame(width: 1) }
@@ -1694,7 +1718,8 @@ struct ChatView: View {
         .task(id: store.selectedID) {
             pickedChild = nil
             contextPicking = false
-            if let session = store.selected, let local = store.executionSource(session) { store.loadChildren(local) }
+            if let session=store.selected,session.isCloud {store.loadChildren(session)}
+            else if let session = store.selected, let local = store.executionSource(session) { store.loadChildren(local) }
             else { store.children = [] }
         }
         .onChange(of: store.draft) { _, text in

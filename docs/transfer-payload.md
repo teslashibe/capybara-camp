@@ -245,10 +245,10 @@ a changed source fingerprint. File fingerprints detect ordinary local changes;
 they are not attestations against an adversary who can alter local provider
 files and their metadata.
 
-This is the local read layer for child migration. The cloud storage contract
-below accepts those pages. Native publication, runner reads and native cloud
-child navigation are still required before the move can claim to preserve
-child history.
+The native publisher sends these pages through the cloud storage contract
+below. Child navigation uses the same sidebar and transcript component as local
+children. Runner context-tool reads and durable offline child caching are still
+required for the complete workflow.
 
 ### Cloud child histories
 
@@ -286,6 +286,15 @@ Children do not appear as standalone board tickets and cannot receive prompts,
 change execution location or bypass the parent access check through ordinary
 session URLs. Their update events use the parent session's visibility. No
 provider credential is needed to read a shared child transcript.
+
+The source device uses `GET /v1/camps/{camp}/sessions/{parent}/children/publication`
+to reconcile current metadata, including removal records. This endpoint is
+restricted to the parent's owner device. Ordinary readers never use it.
+The native publisher saves child commands in the same scoped recovery journal
+as main-session publication, with separate per-child message hashes. A dropped
+reply reuses the saved command. Source disappearance marks a child removed;
+reappearance keeps the same identity. The publisher rechecks the local child
+catalog before reporting synchronization complete.
 
 Before enabling child publication, upgrade every API process to the schema-24
 build and apply the migration through the normal backup and release procedure.

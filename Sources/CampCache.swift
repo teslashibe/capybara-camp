@@ -349,12 +349,12 @@ actor CampCache {
     func shares(_ scope: CloudScope) throws -> [LocalShare] {
         try rows("SELECT body FROM share_bindings WHERE scope=? ORDER BY id", [.text(scope.key)]) { try JSONDecoder().decode(LocalShare.self, from: blob($0, 0)) }
     }
-    func saveShare(_ value: LocalShare, scope: CloudScope, published: [PublishedDigest] = [], expectedEpoch: Int64? = nil) throws {
+    func saveShare(_ value: LocalShare, scope: CloudScope, published: [PublishedDigest] = [], publishedSessionID: String? = nil, expectedEpoch: Int64? = nil) throws {
         try transaction {
             try checkEpoch(scope, expectedEpoch)
             try execute("INSERT INTO share_bindings(scope,id,body) VALUES(?,?,?) ON CONFLICT(scope,id) DO UPDATE SET body=excluded.body", [.text(scope.key), .text(value.id), .blob(try JSONEncoder().encode(value))])
             for hash in published {
-                try execute("INSERT INTO published_message_hashes(scope,session_id,id,digest) VALUES(?,?,?,?) ON CONFLICT(scope,session_id,id) DO UPDATE SET digest=excluded.digest", [.text(scope.key), .text(value.id), .text(hash.id), .text(hash.digest)])
+                try execute("INSERT INTO published_message_hashes(scope,session_id,id,digest) VALUES(?,?,?,?) ON CONFLICT(scope,session_id,id) DO UPDATE SET digest=excluded.digest", [.text(scope.key), .text(publishedSessionID ?? value.id), .text(hash.id), .text(hash.digest)])
             }
         }
     }

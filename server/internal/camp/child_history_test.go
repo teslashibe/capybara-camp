@@ -122,6 +122,13 @@ func TestChildHistoryRevisionPrivacyAndReadOnlyBoundary(t *testing.T) {
 	if err != nil || len(children.Children) != 0 {
 		t.Fatal(children, err)
 	}
+	publication, err := s.ChildPublication(ctx, owner, c.ID, parent.ID)
+	if err != nil || len(publication.Children) != 1 || !publication.Children[0].Removed {
+		t.Fatal("Source lost its tombstone", publication, err)
+	}
+	if _, err = s.ChildPublication(ctx, member, c.ID, parent.ID); !errors.Is(err, ErrDenied) {
+		t.Fatal("Reader accessed the source journal", err)
+	}
 }
 
 func TestChildHistoryConcurrentWritesAndIdentityConflicts(t *testing.T) {

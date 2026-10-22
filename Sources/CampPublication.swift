@@ -19,6 +19,7 @@ struct CampPublication: Codable, Sendable {
     var kind: String; var method: String; var path: String; var body: Data
     var hashes: [PublishedDigest] = []
     var sent: Bool?
+    var publishedSessionID: String?
 }
 struct LocalShare: Codable, Identifiable, Sendable {
     var id: String
@@ -34,6 +35,7 @@ struct LocalShare: Codable, Identifiable, Sendable {
     var needsWithdrawalFence: Bool?
     var projectChangeRequested: Bool?
     var syncToCloud: Bool?
+    var childHistories: [CloudChildHistory]?
     var state: String = "Waiting to sync"
 }
 protocol CampPublishingTransport: Sendable {

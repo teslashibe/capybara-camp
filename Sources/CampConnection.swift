@@ -22,6 +22,7 @@ import SwiftUI
 
     var sessionsChanged: (([CloudSession], [CloudProject], CloudScope?) -> Void)?
     var transcriptChanged: ((String) -> Void)?
+    var childrenChanged: ((String) -> Void)?
     var requestChanged: ((CloudRequest) -> Void)?
     var notificationsChanged: (([CloudNotification], CloudScope, Bool) -> Void)?
     var planningChanged: ((String) -> Void)?
@@ -267,6 +268,7 @@ import SwiftUI
             requestIndex = requestIndex.filter { $0.value.sessionId != id }
         }
         if event.kind == "transcript.updated", let id = event.payload.sessionId { transcriptChanged?(id) }
+        if event.kind == "children.updated", let id=event.payload.sessionId {childrenChanged?(id)}
         if let id = event.payload.sessionId { live.invalidate(id) }
         if event.kind.hasPrefix("request.") { refreshControls() }
         if event.kind == "transfer.handoff" { worker.scan() }
@@ -668,6 +670,7 @@ import SwiftUI
         guard self.scope == scope, self.credential?.token == credential.token else { throw CancellationError() }
         try await cache.saveTranscript(value, scope: scope, sessionId: session.id, before: before, expectedPermissionRevision: session.permissionRevision, expectedEpoch: epoch); return value
     }
+    func childReadAllowed(_ session:CloudSession)->Bool {sessionIndex[session.id]?.permissionRevision==session.permissionRevision}
     func refreshSession(_ id:String) async {
         guard let scope,let client,let credential else{return}
         let epoch=cacheEpoch

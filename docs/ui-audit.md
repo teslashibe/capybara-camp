@@ -18,6 +18,30 @@ and the bundled helper. The computer-use walkthrough is still pending: the
 latest attempt could not start because macOS was locked. This harness does not
 replace the full app's signed-in transfer or two-Mac acceptance.
 
+## Cloud child history
+
+The implementation reuses the existing subagent tree and `ChildTranscriptView`.
+It keeps children above Recent sessions, uses the parent's provider icon, shows
+an incomplete upload as Syncing, and provides the main chat's Load earlier
+messages control. Automated native tests cover stable child selection on a
+refresh, late responses after changing parents or opening a plan, and removal
+after a parent is revoked.
+
+The rendered audit remains open while the Mac is locked. Verify the following
+with two independent users once the full app can be opened:
+
+- Publish a parent with multiple children, including a transcript longer than
+  one page, and open each child from the shared sidebar
+- Confirm that the child header, recorded model and transcript stay separate
+  from the main chat at wide and minimum window sizes
+- Receive a child update while it is selected and confirm that selection and
+  bottom-following are preserved
+- Load older messages, return to Main chat, then switch to another parent
+- Revoke the parent while the other Mac is reading a child and confirm that
+  its content and sidebar entries disappear
+
+These checks are still required on the final signed release candidate.
+
 ## Review method
 
 Use a separately identified native development app and synthetic provider

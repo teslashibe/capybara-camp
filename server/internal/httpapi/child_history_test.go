@@ -87,6 +87,8 @@ func TestChildHistoryHTTPAuthorizationReplayAndRevocation(t *testing.T) {
 	}
 	call("GET", path, tokens[1], "", nil, 200)
 	call("GET", "/v1/camps/"+c.ID+"/sessions/"+parent.ID+"/children", tokens[1], "", nil, 200)
+	call("GET", "/v1/camps/"+c.ID+"/sessions/"+parent.ID+"/children/publication", tokens[1], "", nil, 404)
+	call("GET", "/v1/camps/"+c.ID+"/sessions/"+parent.ID+"/children/publication", tokens[0], "", nil, 200)
 	call("GET", "/v1/camps/"+c.ID+"/sessions/"+id, tokens[0], "", nil, 404)
 	call("POST", path, tokens[0], uuid.NewString(), []byte(`{"unknown":true}`), 400)
 	call("GET", path+"?before=-1", tokens[0], "", nil, 400)

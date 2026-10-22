@@ -68,6 +68,22 @@ A focused PostgreSQL rerun also verifies a 230-message child uploaded in two
 batches and read back over two pages without mixing it into the main transcript.
 No cloud has been deployed and no native child-publication flow has been accepted.
 
+The native child publisher now uses that API, including multi-page copies,
+separate child message hashes, lost-response recovery and removal/reappearance.
+The existing chat sidebar and transcript component can list and read cloud child
+histories with older-page loading. Child refreshes preserve the current
+selection; a late result is discarded after changing parents or revoking access.
+Local source activity supplies observed child status without relabeling stored
+messages. The remaining child work includes runner context-tool access,
+durable offline child caching and native/live two-Mac acceptance. The Mac is
+still locked, so the new cloud UI has not had its computer-use walkthrough.
+The focused native suites pass for sharing, cloud child navigation state, cloud
+state and the packaged helper. They verify a 230-message child upload, replay of
+a lost response without duplicate writes, removal/reappearance with the same
+identity, separate parent/child message hashes and an untruncated model ID.
+Parent refresh, navigation into a plan and revocation reject stale child reads.
+The source-only publication endpoint also passes the Go database and HTTP tests.
+
 The transfer work includes a read-only Go capture layer for selected Git
 changes and owner-bound, encrypted, resumable upload storage. Completion checks
 payload and review hashes against the pinned source revisions. The staging
