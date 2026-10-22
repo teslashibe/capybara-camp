@@ -48,6 +48,17 @@ The full Go race suite and vet also pass with disposable PostgreSQL 17 at schema
 21. This evidence covers the local Go implementation and synthetic integrations;
 it does not complete the provider, native UI or two-Mac acceptance gates.
 
+The server handoff protocol now adds an exclusive five-minute source hold,
+blocks new prompts and assignment changes, and accepts source-bound acknowledgements
+of the reviewed payload. Existing queued or uncertain work prevents a hold.
+Expiry, cancellation and source drift release the guard without changing the
+execution epoch. Native/cloud source shutdown and file-verification wiring,
+history migration and the final assignment commit remain open; a server
+acknowledgement alone does not prove a CLI has stopped.
+The handoff HTTP and PostgreSQL tests, full Go race suite and vet pass at schema
+22. They cover source identity, exclusive holds, expiry, queue preservation and
+release without an assignment change.
+
 The native account form and synthetic provider walkthrough now pass locally.
 The Go controller provisions per-installation workers, renews managed grants,
 and removes old Pods before deleting their storage and Secrets. It fences stale

@@ -277,7 +277,9 @@ func TestWorkspaceHTTPRequiresOwnerAndReplaysReceipt(t *testing.T) {
 	transferPath := transferBase + "/" + upload.ID
 	chunkBody, _ := json.Marshal(camp.TransferChunk{Data: payload, SHA256: digest(payload)})
 	call("PUT", transferPath+"/chunks/0", tokens[0], "", chunkBody, 200)
-	call("POST", transferPath+"/complete", tokens[0], "", []byte(`{}`), 200)
+	if err = json.Unmarshal(call("POST", transferPath+"/complete", tokens[0], "", []byte(`{}`), 200), &upload); err != nil {
+		t.Fatal(err)
+	}
 	call("POST", transferPath+"/workspaces", tokens[1], uuid.NewString(), body, 404)
 	var destination camp.Workspace
 	if err = json.Unmarshal(call("POST", transferPath+"/workspaces", tokens[0], uuid.NewString(), body, 201), &destination); err != nil {
@@ -312,6 +314,32 @@ func TestWorkspaceHTTPRequiresOwnerAndReplaysReceipt(t *testing.T) {
 	}
 	assignment, _ = json.Marshal(camp.ExecutionInput{Location: "cloud", WorkspaceID: destination.ID, ExpectedEpoch: current.ExecutionEpoch, ExpectedSessionRevision: current.Revision, ExpectedTranscriptRevision: current.TranscriptRevision, ExpectedWorkspaceRevision: destination.Revision})
 	call("PUT", executionPath, tokens[0], uuid.NewString(), assignment, 409)
+	handoffInput, _ := json.Marshal(camp.HandoffInput{WorkspaceID: destination.ID, ExpectedWorkspaceRevision: destination.Revision, ExpectedTransferRevision: upload.Revision})
+	call("POST", transferPath+"/handoffs", tokens[1], uuid.NewString(), handoffInput, 404)
+	var handoff camp.Handoff
+	if err = json.Unmarshal(call("POST", transferPath+"/handoffs", tokens[0], uuid.NewString(), handoffInput, 201), &handoff); err != nil {
+		t.Fatal(err)
+	}
+	call("GET", "/v1/camps/"+c.ID+"/handoffs/next", tokens[0], "", nil, 200)
+	call("GET", "/v1/camps/"+c.ID+"/handoffs/next", tokens[1], "", nil, 204)
+	call("GET", "/v1/runner/handoffs/next", grant.Token, "", nil, 204)
+	handoffClaim := uuid.NewString()
+	handoffBody, _ := json.Marshal(map[string]string{"claim_id": handoffClaim})
+	handoffPath := "/v1/handoffs/" + handoff.ID
+	call("POST", handoffPath+"/claim", "", "", handoffBody, 401)
+	call("POST", handoffPath+"/claim", tokens[1], "", handoffBody, 404)
+	call("POST", handoffPath+"/claim", tokens[0], "", handoffBody, 200)
+	call("POST", handoffPath+"/source", tokens[0], "", handoffBody, 200)
+	call("POST", handoffPath+"/chunks/0", tokens[0], "", handoffBody, 200)
+	call("POST", "/v1/runner/handoffs/"+handoff.ID+"/source", grant.Token, "", handoffBody, 404)
+	call("POST", "/v1/camps/"+c.ID+"/sessions/"+session.ID+"/requests", tokens[0], uuid.NewString(), []byte(`{"prompt":"Wait during handoff"}`), 409)
+	ackBody, _ := json.Marshal(camp.HandoffAck{ClaimID: handoffClaim, Stopped: true, PayloadSHA256: digest(payload), ReviewSHA256: review})
+	call("POST", handoffPath+"/ack", tokens[0], "", ackBody, 200)
+	call("POST", handoffPath+"/ack", tokens[0], "", ackBody, 200)
+	ownerHandoffPath := "/v1/camps/" + c.ID + "/sessions/" + session.ID + "/handoffs/" + handoff.ID
+	call("GET", ownerHandoffPath, tokens[1], "", nil, 404)
+	call("POST", ownerHandoffPath+"/release", tokens[0], "", []byte(`{}`), 200)
+	call("POST", ownerHandoffPath+"/release", tokens[0], "", []byte(`{}`), 200)
 	call("POST", transferPath+"/cancel", tokens[0], "", []byte(`{}`), 200)
 	call("POST", destinationPath+"/transfer/chunks/0", grant.Token, "", claimBody, 409)
 }

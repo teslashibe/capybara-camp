@@ -32,6 +32,9 @@ func (g *GitStore) lockExecution(ctx context.Context, tx pgx.Tx, token, workspac
 	if session.ExecutionLocation != "cloud" || session.ExecutionWorkspaceID != workspaceID || session.ExternalOwner {
 		return l, session, ErrDenied
 	}
+	if err = requireUnheldSession(ctx, tx, session.ID); err != nil {
+		return l, session, err
+	}
 	return l, session, nil
 }
 

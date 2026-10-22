@@ -203,6 +203,9 @@ func (s *Store) AssignExecution(ctx context.Context, a auth.Actor, campID, id, k
 	if session.ExecutionEpoch != in.ExpectedEpoch || session.Revision != in.ExpectedSessionRevision || session.TranscriptRevision != in.ExpectedTranscriptRevision {
 		return out, ErrRevision
 	}
+	if err = requireUnheldSession(ctx, tx, id); err != nil {
+		return out, err
+	}
 	if session.ExternalOwner || !(oneOf(session.State, "idle", "done") || session.ExecutionLocation == "cloud" && session.State == "waiting") {
 		return out, ErrTransition
 	}

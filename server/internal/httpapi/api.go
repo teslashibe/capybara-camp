@@ -86,6 +86,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/camps/{camp}/events", a.authorize(a.events))
 	a.sessionRoutes(mux)
 	a.transferRoutes(mux)
+	a.handoffRoutes(mux)
 	a.requestRoutes(mux)
 	a.planningRoutes(mux)
 	a.notificationRoutes(mux)
@@ -149,6 +150,8 @@ func fail(w http.ResponseWriter, err error) bool {
 		problem(w, 502, "git_response_invalid")
 	case errors.Is(err, camp.ErrCloudUnavailable):
 		problem(w, 503, "cloud_accounts_unavailable")
+	case errors.Is(err, camp.ErrTransferHeld):
+		problem(w, 409, "transfer_in_progress")
 	case errors.Is(err, auth.ErrUnauthorized):
 		problem(w, 401, "sign_in_required")
 	case errors.Is(err, auth.ErrRateLimited):

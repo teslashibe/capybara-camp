@@ -142,7 +142,8 @@ result. The future handoff must recheck source and destination eligibility even
 when this earlier validation succeeded.
 
 Schema 20 adds `session_transfers` and `transfer_chunks`; schema 21 adds reviewed
-base metadata and the destination workspace binding. Existing sessions,
+base metadata and the destination workspace binding. Schema 22 adds handoff
+holds. Existing sessions,
 assignments and queued work are retained. An uploaded payload from schema 20
 keeps its encrypted chunks. Call completion again to validate it and populate
 the new metadata before preparing a destination. Upgrades use the normal
@@ -234,12 +235,69 @@ history and ownership guarantees below. Local staged files are retained after
 a rejected or cancelled job for review; normal retired-checkout cleanup does
 not delete them. Account erasure remains a separate explicit lifecycle action.
 
+## Source handoff hold
+
+The owner can reserve a ready destination with
+`POST /v1/camps/{camp}/sessions/{session}/transfers/{transfer}/handoffs`.
+The request supplies `workspace_id`, `expected_workspace_revision` and
+`expected_transfer_revision`, plus an `Idempotency-Key`. The server rechecks
+the source snapshot, destination receipt state, project, Git connection and
+provider account before creating one five-minute hold for that source session.
+Existing pending, running or uncertain prompts prevent the hold from starting.
+
+An effective hold blocks new Camp prompts, approvals, starts and execution
+assignment changes with `409 transfer_in_progress`. It does not discard queued
+work or move the session. The hold remains effective after source acknowledgement
+until release, expiry, source/destination invalidation or a future transfer commit.
+The effective guard checks expiry on every request; it does not depend on a
+cleanup timer running.
+
+The original source device finds pending local work through
+`GET /v1/camps/{camp}/handoffs/next`. A cloud source uses
+`GET /v1/runner/handoffs/next`. Both return a handoff ID or 204 when none is
+available. These source-only operation prefixes are:
+
+- Local device: `/v1/handoffs/{handoff}`
+- Cloud installation: `/v1/runner/handoffs/{handoff}`
+
+Post `{"claim_id":"CLAIM_UUID"}` to `/claim`, `/source`,
+`/chunks/{ordinal}` or `/reject`. The source response includes its session,
+reviewed transfer metadata, and the source workspace for Cloud. Only the
+original source device or its current source installation can claim or read
+this data. A different owner device or provider account cannot acknowledge it.
+The claim is retained for response-loss recovery.
+
+The source client must stop its provider process and verify the selected files
+against the manifest before posting to `/ack`:
+
+```json
+{
+  "claim_id": "CLAIM_UUID",
+  "stopped": true,
+  "payload_sha256": "SHA256_OF_EXACT_MANIFEST_JSON",
+  "review_sha256": "MANIFEST_DIGEST"
+}
+```
+
+The server validates the source identity, claim, hashes and current snapshots.
+Repeating the same acknowledgement returns its existing result. The `stopped`
+field is a declaration from the authenticated source client; the API does not
+itself stop a CLI. Wiring that stop/verification sequence into the native client
+and cloud worker remains required before this becomes a complete handoff.
+
+The owner reads status at
+`GET /v1/camps/{camp}/sessions/{session}/handoffs/{handoff}` and releases it by
+posting `{}` to the same path with `/release`. A rejected, cancelled, expired
+or stale hold permits source work again. Transfer cancellation invalidates its
+holds. Events are owner-only. These endpoints contain no final assignment or
+history migration operation yet.
+
 ## Remaining integration
 
 The agreed transfer flow still requires:
 
-1. A source session lock and acknowledged terminal state, with unresolved
-   provider outcomes and queued prompts held for explicit review
+1. Wire source clients to the handoff hold, stop and verify their real provider
+   instances, and acknowledge their terminal state without losing queued work
 2. Transfer transcript, child-session and attachment provenance, including
    provider continuation and commits not available from the remote repository
 3. Native conflict review and the complete base-repository credential policy,
@@ -277,3 +335,6 @@ replacement, journal binding and disabled repository commands.
 The runner integration test uses the Go HTTP API, disposable PostgreSQL and a
 real Git HTTP fixture. It drops chunk and completion responses, verifies one
 destination checkout and receipt replay, and confirms the source stays intact.
+Handoff tests cover original-device/source-installation access, exclusive holds,
+idempotent acknowledgement, queue preservation, expiry, release and source drift.
+They validate the server protocol, not physical CLI shutdown.

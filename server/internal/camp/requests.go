@@ -114,6 +114,9 @@ func (s *Store) requestAccess(ctx context.Context, tx pgx.Tx, r Request) (Sessio
 	if err != nil {
 		return session, err
 	}
+	if err = requireUnheldSession(ctx, tx, r.SessionID); err != nil {
+		return session, err
+	}
 	var role string
 	if err = tx.QueryRow(ctx, `SELECT role FROM memberships WHERE camp_id=$1 AND user_id=$2`, r.CampID, r.RequesterUserID).Scan(&role); err != nil {
 		return session, accessError(err)
@@ -201,6 +204,9 @@ func (s *Store) CreateRequest(ctx context.Context, a auth.Actor, campID, session
 // enqueueRequest shares authorization and persistence between ordinary chat and
 // the bounded planning coordinator. Callers hold the Camp transaction lock.
 func (s *Store) enqueueRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campID string, session Session, input RequestInput, planning *planningStepLink) (Request, error) {
+	if err := requireUnheldSession(ctx, tx, session.ID); err != nil {
+		return Request{}, err
+	}
 	r := Request{Kind: "chat", PlanStep: -1, ID: uuid.NewString(), CampID: campID, SessionID: session.ID, RequesterUserID: a.UserID, OwnerUserID: session.OwnerUserID, OwnerDeviceID: session.OwnerDeviceID, PermissionRevision: session.PermissionRevision, Revision: 1, Prompt: input.Prompt, Model: input.Model, Effort: input.Effort, Speed: input.Speed, State: "pending_approval", Sources: []SourceRef{}}
 	target, err := s.executionTarget(ctx, tx, session)
 	if err != nil {

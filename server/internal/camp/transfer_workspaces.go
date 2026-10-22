@@ -21,6 +21,9 @@ const validWorkspaceTransferSQL = `(w.transfer_id IS NULL OR EXISTS(
  AND t.source_transcript_revision=s.transcript_revision AND t.source_permission_revision=s.permission_revision))`
 
 func (s *Store) cancelTransferWorkspaces(ctx context.Context, tx pgx.Tx, a auth.Actor, t Transfer) error {
+	if _, err := tx.Exec(ctx, `UPDATE transfer_handoffs SET state='invalidated',revision=revision+1 WHERE transfer_id=$1 AND state IN ('pending','claimed','acknowledged')`, t.ID); err != nil {
+		return err
+	}
 	rows, err := tx.Query(ctx, `SELECT id FROM ticket_workspaces WHERE transfer_id=$1 AND camp_id=$2 AND owner_user_id=$3 AND state IN ('queued','preparing','ready')`, t.ID, t.CampID, a.UserID)
 	if err != nil {
 		return err
