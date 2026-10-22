@@ -258,3 +258,18 @@ Development signature. It does not register the production source-link scheme
 or replace the user's existing app. The diff passed the local secret scan.
 This review does not complete the remaining cloud, memory, skills or full
 release audit.
+
+## Streaming regression check — October 21
+
+The isolated `Capybara Camp Stream Review.app` used the current shared native
+module and synthetic provider transport. Computer use verified the main chat,
+separate subagent transcript, return to Main chat, and a running response with
+its final marker visible above the composer. The sidebar retained the subagent
+tree above ten recent sessions. Reported High/Fast settings appeared for the
+running fixture without relabeling old messages. Stop returned Active now to
+zero and displayed Stopped. The capture is `build/ui-audit/stream-review.png`.
+
+This check validates the local rendering used by the new cloud projection; it
+is not a live cloud or two-Mac acceptance run. The cloud projection and shared
+approval format also have native regression checks. Full parity, minimum-width
+cloud controls and long-running memory/CPU measurements remain open.

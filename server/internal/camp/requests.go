@@ -58,6 +58,8 @@ type Request struct {
 	Permissions          localcli.PermissionSettings `json:"permissions"`
 	Mode                 string                      `json:"mode"`
 	RunnerGrantID        string                      `json:"-"`
+	ContextRevision      int64                       `json:"context_revision"`
+	StreamSeq            int64                       `json:"stream_seq"`
 }
 type RequestAction struct {
 	Output     string         `json:"output,omitempty"`
@@ -69,12 +71,12 @@ type RequestAction struct {
 }
 
 const requestColumns = `r.id,r.camp_id,r.session_id,r.requester_user_id,r.owner_user_id,r.owner_device_id,r.permission_revision,r.revision,r.prompt,r.model,r.effort,r.speed,r.state,
- COALESCE(r.lease_token::text,''),r.lease_until,r.created_at,r.outcome_evidence,r.reason,r.kind,COALESCE(r.plan_id::text,''),COALESCE(r.plan_version,0),COALESCE(r.plan_step,-1),r.execution_location,r.execution_epoch,COALESCE(r.execution_workspace_id::text,''),r.execution_permissions,r.execution_mode,COALESCE(r.runner_grant_id::text,'')`
+ COALESCE(r.lease_token::text,''),r.lease_until,r.created_at,r.outcome_evidence,r.reason,r.kind,COALESCE(r.plan_id::text,''),COALESCE(r.plan_version,0),COALESCE(r.plan_step,-1),r.execution_location,r.execution_epoch,COALESCE(r.execution_workspace_id::text,''),r.execution_permissions,r.execution_mode,COALESCE(r.runner_grant_id::text,''),r.context_revision,r.stream_seq`
 
 func scanRequest(row rowScanner) (Request, error) {
 	r := Request{Sources: []SourceRef{}}
 	var permissions []byte
-	err := row.Scan(&r.ID, &r.CampID, &r.SessionID, &r.RequesterUserID, &r.OwnerUserID, &r.OwnerDeviceID, &r.PermissionRevision, &r.Revision, &r.Prompt, &r.Model, &r.Effort, &r.Speed, &r.State, &r.LeaseToken, &r.LeaseUntil, &r.CreatedAt, &r.Evidence, &r.Reason, &r.Kind, &r.PlanID, &r.PlanVersion, &r.PlanStep, &r.ExecutionLocation, &r.ExecutionEpoch, &r.ExecutionWorkspaceID, &permissions, &r.Mode, &r.RunnerGrantID)
+	err := row.Scan(&r.ID, &r.CampID, &r.SessionID, &r.RequesterUserID, &r.OwnerUserID, &r.OwnerDeviceID, &r.PermissionRevision, &r.Revision, &r.Prompt, &r.Model, &r.Effort, &r.Speed, &r.State, &r.LeaseToken, &r.LeaseUntil, &r.CreatedAt, &r.Evidence, &r.Reason, &r.Kind, &r.PlanID, &r.PlanVersion, &r.PlanStep, &r.ExecutionLocation, &r.ExecutionEpoch, &r.ExecutionWorkspaceID, &permissions, &r.Mode, &r.RunnerGrantID, &r.ContextRevision, &r.StreamSeq)
 	if err == nil {
 		err = json.Unmarshal(permissions, &r.Permissions)
 	}
@@ -205,6 +207,7 @@ func (s *Store) enqueueRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, cam
 		return Request{}, err
 	}
 	r.ExecutionLocation, r.ExecutionEpoch, r.ExecutionWorkspaceID, r.Permissions, r.Mode = target.Location, target.Epoch, target.WorkspaceID, target.Permissions, target.Mode
+	r.ContextRevision = session.TranscriptRevision
 	if planning != nil {
 		r.Kind = "planning"
 		r.PlanID = planning.PlanID
@@ -246,8 +249,8 @@ func (s *Store) enqueueRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, cam
 		return Request{}, err
 	}
 	permissions, _ := json.Marshal(r.Permissions)
-	err = tx.QueryRow(ctx, `INSERT INTO prompt_requests(id,camp_id,session_id,requester_user_id,owner_user_id,owner_device_id,permission_revision,prompt,model,effort,speed,state,kind,plan_id,plan_version,plan_step,execution_location,execution_epoch,execution_workspace_id,execution_permissions,execution_mode)
-	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULLIF($14,'')::uuid,NULLIF($15,0),NULLIF($16,-1),$17,$18,NULLIF($19,'')::uuid,$20,$21) RETURNING created_at`, r.ID, campID, session.ID, a.UserID, r.OwnerUserID, r.OwnerDeviceID, r.PermissionRevision, r.Prompt, r.Model, r.Effort, r.Speed, r.State, r.Kind, r.PlanID, r.PlanVersion, r.PlanStep, r.ExecutionLocation, r.ExecutionEpoch, r.ExecutionWorkspaceID, permissions, r.Mode).Scan(&r.CreatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO prompt_requests(id,camp_id,session_id,requester_user_id,owner_user_id,owner_device_id,permission_revision,prompt,model,effort,speed,state,kind,plan_id,plan_version,plan_step,execution_location,execution_epoch,execution_workspace_id,execution_permissions,execution_mode,context_revision)
+	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULLIF($14,'')::uuid,NULLIF($15,0),NULLIF($16,-1),$17,$18,NULLIF($19,'')::uuid,$20,$21,$22) RETURNING created_at`, r.ID, campID, session.ID, a.UserID, r.OwnerUserID, r.OwnerDeviceID, r.PermissionRevision, r.Prompt, r.Model, r.Effort, r.Speed, r.State, r.Kind, r.PlanID, r.PlanVersion, r.PlanStep, r.ExecutionLocation, r.ExecutionEpoch, r.ExecutionWorkspaceID, permissions, r.Mode, r.ContextRevision).Scan(&r.CreatedAt)
 	if err != nil {
 		return Request{}, err
 	}
@@ -641,6 +644,14 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 	}
 	if r.ExecutionLocation == "cloud" && input.Action != "heartbeat" {
 		if err = s.cloudActivity(ctx, tx, r); err != nil {
+			return r, err
+		}
+	}
+	if r.ExecutionLocation == "cloud" && terminal {
+		if err = s.publishRunnerTranscript(ctx, tx, r); err != nil {
+			return r, err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE request_controls SET encrypted_input=NULL,state='resolved' WHERE request_id=$1`, r.ID); err != nil {
 			return r, err
 		}
 	}

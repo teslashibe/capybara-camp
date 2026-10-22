@@ -87,6 +87,16 @@ func (a *API) accountRoutes(mux *http.ServeMux) {
 			write(w, 200, out)
 		}
 	}))
+	mux.HandleFunc("POST /v1/runner/credentials", a.runnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
+		var in camp.RunnerCredentialUpdate
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := a.Camps.UpdateRunnerCredentials(r.Context(), token(r), in)
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
 	mux.HandleFunc("POST /v1/runner/logins/{attempt}/claim", a.runnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
 		var in struct {
 			ClaimID string `json:"claim_id"`

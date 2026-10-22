@@ -13,7 +13,7 @@ and acceptance are separate milestones.
 | Shared Camps | Go/PostgreSQL auth, membership, sessions, events, requests, native cache/outbox and owner-Mac worker | Real independent users on two Macs, remaining permission/recovery cases, production deployment |
 | Onboarding | Automatic profile discovery before full import, optional Camp sign-in, owner-only cloud account setup, GitHub connections, projects, notifications, skip/resume | Default execution target; final onboarding validation after remaining services land |
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
-| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, and explicit Local/Cloud assignments with one shared request queue and runner claim fencing | Provider-turn consumption and streaming, native location controls/defaults, reviewed transfers, usage states, live sandbox/network/login validation and disconnected-Mac execution |
+| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments, a shared request queue, provider subprocess consumption, event streaming, owner approval transport and credential revision fencing | Native location controls/defaults and cloud steering, executor/control-file isolation, reviewed transfers, usage states, live sandbox/network/login validation and disconnected-Mac execution |
 | Git | Project repository links, local CLI project execution, owner-bound GitHub App authorization, native repository browsing, encrypted tokens, signed revocation, exact-commit and scoped read-token adapters, workspace records, exclusive claims and isolated runner checkouts with restart/cancellation recovery | Execution grants, Git actor attribution in execution, branch/push/PR recovery and live two-user GitHub validation |
 | Memory and skills | Approved Cortex/shared Markdown design | Actual native and Go integrations, provider/model consolidation, memory inspection, skill editing/version rollout and permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image and local development builds | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, Developer ID/notarization, universal V1 release and recorded website demo |
@@ -32,11 +32,12 @@ epochs and preserves the private journal when restarting a terminal worker.
 Separate workspace storage survives routine worker-grant rotation and is removed
 when its account epoch is disconnected. The checkout worker now uses that
 storage, with real Git and disposable-PostgreSQL tests for dropped replies,
-partial-fetch restart and cancellation. No cloud model turn has run yet.
+partial-fetch restart and cancellation. Synthetic provider turns now run through the actual Go adapters and stream into
+the native chat projection. No live cloud model turn has run yet.
 Local tests cover concurrency, limited database permissions, cleanup ordering
 and restart behavior. The runner image, database bootstrap and rendered
 manifests pass local checks. Live sandbox, storage, network and OAuth behavior
-still need validation on the target cluster. See [runner provisioning](runner-provisioning.md).
+still need validation on the target cluster. See [runner provisioning](runner-provisioning.md) and [provider turns](runner-turns.md).
 
 Automatic discovery finds local profile stores without asking for paths. It
 does not prove that every historical account is still signed in, or that six
@@ -56,7 +57,7 @@ recorded implementation and acceptance evidence, not just an updated spec.
    mock with synthetic sessions in the native app, fix current layout gaps and
    test the affected interactions. Repeat the complete audit at step 5.
 2. **In progress — cloud workspaces and execution**: durable Git workspace jobs
-   and the claim/token protocol, checkout worker and execution assignments are implemented; provider turns and streaming, approvals, steering, queues,
+   and the claim/token protocol, checkout worker, assignments, provider turns, streaming and approval transport are implemented; executor isolation, native controls, steering, queues,
    recovery, Local/Cloud defaults and reviewed session transfers.
 3. **Pending — shared project capabilities**: Cortex consolidation and memory
    inspection, shared Markdown skills, Git publication and actor attribution,

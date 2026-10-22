@@ -53,13 +53,17 @@ func (f *checkoutGit) ScopeRead(_ context.Context, _ string, _ time.Time, user i
 }
 
 func workerWorkspaceFixture(t *testing.T, remote, sha string, wrap func(http.Handler) http.Handler) (fixture, *camp.GitStore, *checkoutGit, camp.Workspace) {
+	return workerWorkspaceIdentity(t, remote, sha, wrap, "Codex", "fixture-owner", json.RawMessage(`{"fixture":"private-proof"}`))
+}
+
+func workerWorkspaceIdentity(t *testing.T, remote, sha string, wrap func(http.Handler) http.Handler, provider, subject string, credentials json.RawMessage, purpose ...string) (fixture, *camp.GitStore, *checkoutGit, camp.Workspace) {
 	t.Helper()
-	f := workerFixture(t, "Codex", wrap)
+	f := workerFixture(t, provider, wrap)
 	claim := uuid.NewString()
 	if _, err := f.store.ClaimRunnerLogin(t.Context(), f.grant.Token, f.login.ID, claim); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.ReportRunnerLogin(t.Context(), f.grant.Token, f.login.ID, claim, camp.RunnerLoginReport{State: "connected", VerifiedSubject: "fixture-owner", Credentials: json.RawMessage(`{"fixture":"private-proof"}`)}); err != nil {
+	if _, err := f.store.ReportRunnerLogin(t.Context(), f.grant.Token, f.login.ID, claim, camp.RunnerLoginReport{State: "connected", VerifiedSubject: subject, Credentials: credentials}); err != nil {
 		t.Fatal(err)
 	}
 	f.owner.DeviceID = uuid.NewString()
@@ -74,7 +78,7 @@ func workerWorkspaceFixture(t *testing.T, remote, sha string, wrap func(http.Han
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile, err := f.store.RegisterProfile(t.Context(), f.owner, uuid.NewString(), camp.ProfileInput{LocalID: strings.Repeat("a", 64), Provider: "Codex", Label: "Fixture"})
+	profile, err := f.store.RegisterProfile(t.Context(), f.owner, uuid.NewString(), camp.ProfileInput{LocalID: strings.Repeat("a", 64), Provider: provider, Label: "Fixture"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,8 +86,8 @@ func workerWorkspaceFixture(t *testing.T, remote, sha string, wrap func(http.Han
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider := &checkoutGit{sha: sha}
-	g, err := camp.NewGitStore(f.store, provider, bytes.Repeat([]byte{17}, 32))
+	gitProvider := &checkoutGit{sha: sha}
+	g, err := camp.NewGitStore(f.store, gitProvider, bytes.Repeat([]byte{17}, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +104,11 @@ func workerWorkspaceFixture(t *testing.T, remote, sha string, wrap func(http.Han
 		t.Fatal(err)
 	}
 	f.api.Git = g
-	workspace, err := g.CreateWorkspace(t.Context(), f.owner, c.ID, session.ID, uuid.NewString(), camp.WorkspaceInput{ProviderAccountID: f.account.ID, GitConnectionID: login.ConnectionID, GitHubInstallationID: 7, RepositoryID: 5, InstallationPage: 1, RepositoryPage: 1, Purpose: "planning", ExpectedSessionRevision: session.Revision, ExpectedProjectRevision: p.Revision})
+	use := "planning"
+	if len(purpose) > 0 {
+		use = purpose[0]
+	}
+	workspace, err := g.CreateWorkspace(t.Context(), f.owner, c.ID, session.ID, uuid.NewString(), camp.WorkspaceInput{ProviderAccountID: f.account.ID, GitConnectionID: login.ConnectionID, GitHubInstallationID: 7, RepositoryID: 5, InstallationPage: 1, RepositoryPage: 1, Purpose: use, ExpectedSessionRevision: session.Revision, ExpectedProjectRevision: p.Revision})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +119,7 @@ func workerWorkspaceFixture(t *testing.T, remote, sha string, wrap func(http.Han
 	co.remote = func(camp.Workspace) string { return remote }
 	co.gitConfig = []string{"-c", "protocol.http.allow=always"}
 	f.worker.checkout = co
-	return f, g, provider, workspace
+	return f, g, gitProvider, workspace
 }
 
 func TestWorkerCheckoutLostAcknowledgmentsAndCancellation(t *testing.T) {

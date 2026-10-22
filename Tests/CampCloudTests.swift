@@ -15,7 +15,29 @@ import SQLite3
     static func request(_ scope: CloudScope, session: CloudSession) -> CloudRequest {
         CloudRequest(id: UUID().uuidString, campId: scope.campId, sessionId: session.id, requesterUserId: scope.userId, ownerUserId: scope.userId, ownerDeviceId: session.ownerDeviceId, permissionRevision: 1, revision: 1, prompt: "Synthetic prompt", model: "fixture", effort: "high", speed: "standard", state: "started", leaseToken: "synthetic-lease", leaseUntil: Date().addingTimeInterval(60), createdAt: Date(), sources: [])
     }
+    @MainActor static func streamProjectionChecks() throws {
+        func page(_ seq: Int64, _ events: [[String: Any]]) throws -> CloudStreamPage {
+            let data = try JSONSerialization.data(withJSONObject: ["events": events.enumerated().map { ["seq": seq + Int64($0.offset), "event": $0.element] }, "next": seq + Int64(events.count) - 1])
+            return try CampWire.decoder().decode(CloudStreamPage.self, from: data)
+        }
+        let live = CloudLiveConversation()
+        try live.apply(page(1, [["type": "delta", "text": "First "], ["type": "delta", "text": "answer"]]))
+        check(live.messages.map(\.text) == ["First answer"], "cloud deltas appear before completion")
+        try live.apply(page(3, [["type": "boundary"], ["type": "delta", "text": "Second answer"]]))
+        check(live.messages.map(\.text) == ["First answer", "Second answer"], "steered response keeps earlier output")
+        rejects("stream gap accepted") { try live.apply(page(8, [["type": "done"]])) }
+        let approval = ProviderApproval(id: UUID().uuidString, kind: "command", title: "Run command", detail: "echo fixture", questions: [], canApprove: true, acceptLabel: "Allow")
+        var event = try JSONSerialization.jsonObject(with: JSONEncoder().encode(approval)) as! [String: Any]
+        event["type"] = "approval"
+        try live.apply(page(5, [event]))
+        check(live.approvals == [approval], "cloud reuses provider approval shape")
+        try live.apply(page(6, [["type": "approvalResolved", "requestID": approval.id]]))
+        check(live.approvals.isEmpty, "resolved cloud approval removed")
+        live.stop()
+        check(live.messages.isEmpty && live.approvals.isEmpty && live.notice.isEmpty, "changing Camp clears streamed content")
+    }
     @MainActor static func main() async throws {
+        try streamProjectionChecks()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("camp-cloud-tests-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let endpoint = try CampEndpoint(" https://Camp.Example/ ")

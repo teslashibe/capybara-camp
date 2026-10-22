@@ -83,8 +83,15 @@ func startWorker(t *testing.T, w *Worker) (context.CancelFunc, <-chan error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	done := make(chan error, 1)
-	go func() { done <- w.Run(ctx) }()
-	t.Cleanup(cancel)
+	go func() { done <- w.Run(ctx); close(done) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("worker did not stop during cleanup")
+		}
+	})
 	return cancel, done
 }
 

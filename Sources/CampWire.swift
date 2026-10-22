@@ -89,6 +89,8 @@ struct CloudRequest: Codable, Identifiable, Equatable, Sendable {
     var planId: String? = nil
     var planVersion: Int? = nil
     var planStep: Int? = nil
+    var executionLocation: String? = nil
+    var streamSeq: Int64? = nil
     var isPlanning: Bool { kind == "planning" }
     var supportedWork: Bool {
         if isPlanning { return planId.flatMap(UUID.init(uuidString:)) != nil && (planVersion ?? 0) > 0 && (0..<5).contains(planStep ?? -1) }

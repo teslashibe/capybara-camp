@@ -139,7 +139,7 @@ func (w *Worker) workspaceTick(ctx context.Context, account camp.RunnerAccountSt
 				}
 				w.readyWorkspace = next.ID
 			}
-			return nil
+			return w.turnTick(ctx, account, *next)
 		}
 		if next.State != "queued" && next.State != "preparing" {
 			return ErrState

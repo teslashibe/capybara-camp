@@ -71,6 +71,34 @@ func (a *API) gitRoutes(mux *http.ServeMux) {
 			write(w, 200, out)
 		}
 	}))
+	mux.HandleFunc("GET /v1/runner/workspaces/{workspace}/requests/{request}", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
+		out, err := a.Git.RunnerTurn(r.Context(), token(r), r.PathValue("workspace"), r.PathValue("request"))
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
+	mux.HandleFunc("GET /v1/runner/workspaces/{workspace}/requests/{request}/controls", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
+		out, err := a.Git.RunnerControls(r.Context(), token(r), r.PathValue("workspace"), r.PathValue("request"))
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
+	mux.HandleFunc("GET /v1/runner/workspaces/{workspace}/requests/{request}/status", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
+		out, err := a.Git.RunnerRequestStatus(r.Context(), token(r), r.PathValue("workspace"), r.PathValue("request"))
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
+	mux.HandleFunc("POST /v1/runner/workspaces/{workspace}/requests/{request}/events", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
+		var in camp.StreamEvent
+		if !decode(w, r, &in) {
+			return
+		}
+		seq, err := a.Git.AppendRunnerEvent(r.Context(), token(r), r.PathValue("workspace"), r.PathValue("request"), in)
+		if !fail(w, err) {
+			write(w, 200, map[string]int64{"seq": seq})
+		}
+	}))
 	mux.HandleFunc("POST /v1/runner/workspaces/{workspace}/requests/{request}/actions", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
 		var in camp.RequestAction
 		if !decode(w, r, &in) {

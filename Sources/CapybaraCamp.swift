@@ -270,7 +270,10 @@ final class TranscriptWatch {
     @Published var draft = ""
     @Published var preparingPrompts: Set<String> = []
     @Published var conversations: [String: LocalConversation] = [:] { didSet { filterRevision += 1 } }
-    var liveText: String { selected.flatMap { conversation($0)?.text } ?? "" }
+    var liveText: String {
+        if selected?.isCloud == true { return cloud.live.messages.last?.text ?? "" }
+        return selected.flatMap { conversation($0)?.text } ?? ""
+    }
     var runningID: String? { selected.flatMap { conversation($0) == nil ? nil : $0.id } }
     @Published var queuedPrompts: [QueuedPrompt] = []
     @Published private var enabledQueues: Set<String> = []
@@ -505,6 +508,10 @@ final class TranscriptWatch {
         cloud.transcriptChanged = { [weak self] id in
             guard let self, self.selectedID == "camp:" + id else { return }
             self.loadHistory(silent: true)
+        }
+        cloud.live.changed = { [weak self] in
+            guard let self, self.selectedID == self.cloud.live.sessionID.map({ "camp:" + $0 }) else { return }
+            self.objectWillChange.send()
         }
         planning.available = { [weak self] planner in
             guard let self else { return false }
@@ -863,6 +870,7 @@ final class TranscriptWatch {
         }
     }
     func open(_ session: CampSession) {
+        if cloud.live.sessionID.map({ "camp:" + $0 }) != session.id { cloud.live.stop() }
         sharedPlanResult = nil
         reviewingPlan = nil
         planNavigation = nil
@@ -938,6 +946,9 @@ final class TranscriptWatch {
     }
     private func loadCloudHistory(_ session: CloudSession, more: Bool, silent: Bool) {
         let id = "camp:" + session.id
+        if let scope = cloud.scope, let client = cloud.client, let credential = cloud.credential {
+            cloud.live.watch(session: session, scope: scope, client: client, credential: credential)
+        }
         if silent && historyRequestID != nil { return }
         let generation = UUID(); readGeneration = generation; historyRequestID = id
         if !silent { loading = true }
@@ -955,6 +966,7 @@ final class TranscriptWatch {
                 let ordered = unique.values.filter { !$0.removed }.sorted { $0.ordinal < $1.ordinal }
                 cloudHistory[id] = ordered; cloudHistoryBefore[id] = page.before; cloudHistoryRevision[id] = page.revision
                 remoteHasMore = page.hasMore; messages = ordered.map(\.transcriptMessage)
+                cloud.live.acknowledge(ordered)
                 historyTotal = messages.count + (page.hasMore ? 1 : 0)
             } catch { if readGeneration == generation && !silent { banner = error.localizedDescription } }
         }
@@ -1569,6 +1581,7 @@ struct ChatView: View {
                                 if store.loading { ProgressView().controlSize(.small) }
                                 ForEach(store.messages) { m in MessageView(message: m, provider: s.provider).id(m.id) }
                                 if let run = store.conversation(s) { MessageView(message: run.streamedMessage, provider: s.provider) }
+                                if s.isCloud { CloudStreamMessages(live: store.cloud.live, provider: s.provider) }
                                 Color.clear.frame(height: 1).id("bottom")
                             }
                         }
@@ -1580,7 +1593,8 @@ struct ChatView: View {
                         .onChange(of: store.liveText) { _, _ in
                             DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo("bottom", anchor: .bottom) } }
                         }
-                        .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+                        .onAppear { proxy.scrollTo("bottom", anchor: .bottom); if s.isCloud { store.loadHistory(silent: true) } }
+                        .onDisappear { if s.isCloud { store.cloud.live.stop() } }
                       }
                     VStack(alignment: .leading, spacing: 9) {
                         if let conversation = store.conversation(s) { ConversationApprovalsView(conversation: conversation) }

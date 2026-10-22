@@ -19,9 +19,14 @@ type App struct {
 	Config        config.Local
 	commandPath   func(string, []string) (string, error)
 	systemCapture func(context.Context, string, []string, time.Duration, int) (int, []byte, error)
+	isolated      bool
 }
 
 func New(c config.Local) *App { return &App{Config: c} }
+
+// NewIsolated requires the caller to hold the complete provider-home lock.
+// There are no external desktop owners to discover in this dedicated runtime.
+func NewIsolated(c config.Local) *App { return &App{Config: c, isolated: true} }
 
 type Source struct {
 	ID       string `json:"id"`

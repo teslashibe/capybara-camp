@@ -30,6 +30,14 @@ func (c *client) call(ctx context.Context, method, path string, input, output an
 }
 
 func (c *client) callTimeout(ctx context.Context, method, path string, input, output any, timeout time.Duration) error {
+	return c.callRequest(ctx, method, path, "", input, output, timeout)
+}
+
+func (c *client) callKey(ctx context.Context, method, path, key string, input, output any) error {
+	return c.callRequest(ctx, method, path, key, input, output, 5*time.Second)
+}
+
+func (c *client) callRequest(ctx context.Context, method, path, key string, input, output any, timeout time.Duration) error {
 	var body []byte
 	var err error
 	if input != nil {
@@ -45,6 +53,9 @@ func (c *client) callTimeout(ctx context.Context, method, path string, input, ou
 		return ErrState
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	if key != "" {
+		req.Header.Set("Idempotency-Key", key)
+	}
 	if input != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -65,8 +76,8 @@ func (c *client) callTimeout(ctx context.Context, method, path string, input, ou
 	if output == nil || res.StatusCode == 204 {
 		return nil
 	}
-	data, err := io.ReadAll(io.LimitReader(res.Body, (384<<10)+1))
-	if err != nil || len(data) > 384<<10 || json.Unmarshal(data, output) != nil {
+	data, err := io.ReadAll(io.LimitReader(res.Body, (2<<20)+1))
+	if err != nil || len(data) > 2<<20 || json.Unmarshal(data, output) != nil {
 		return ErrUnavailable
 	}
 	return nil

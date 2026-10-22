@@ -25,6 +25,11 @@ func claudeTurn(connection turnConnection, request conversationRequest, controls
 		return connection.Write(map[string]any{"type": "user", "uuid": id, "session_id": session.SessionID, "parent_tool_use_id": nil, "message": map[string]any{"role": "user", "content": text}})
 	}
 	implementation := request.Mode == "implementation"
+	if request.NewSession && !implementation {
+		if err := emit(map[string]any{"type": "session", "sessionID": session.SessionID}); err != nil {
+			return err
+		}
+	}
 	var relay *approvalRelay
 	initialization := ""
 	var initializeDeadline time.Time

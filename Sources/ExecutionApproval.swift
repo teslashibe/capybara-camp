@@ -43,15 +43,16 @@ struct ConversationApprovalsView: View {
                 if conversation.approvals.count > 1 {
                     Text("\(conversation.approvals.count) requests awaiting review").font(.caption).foregroundStyle(campMuted)
                 }
-                ProviderApprovalView(conversation: conversation, approval: approval).id(approval.id)
+                ProviderApprovalView(approval: approval, sending: conversation.answering.contains(approval.id), answer: { allow, decision, answers in conversation.answer(approval.id, allow: allow, answers: answers, decision: decision) }).id(approval.id)
             }
         }
     }
 }
 
 struct ProviderApprovalView: View {
-    @ObservedObject var conversation: LocalConversation
     let approval: ProviderApproval
+    var sending: Bool
+    var answer: (Bool, String?, [String: [String]]) -> Void
     @State private var selections: [String: Set<String>] = [:]
     @State private var text: [String: String] = [:]
     var answers: [String: [String]] {
@@ -60,7 +61,6 @@ struct ProviderApprovalView: View {
             return (question.id, typed.isEmpty ? question.options.filter { selections[question.id, default: []].contains($0) } : [typed])
         })
     }
-    var sending: Bool { conversation.answering.contains(approval.id) }
     var ready: Bool { approval.questions.allSatisfy { answers[$0.id]?.isEmpty == false } }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -96,20 +96,20 @@ struct ProviderApprovalView: View {
                 Spacer()
                 if let decisions = approval.decisions, !decisions.isEmpty {
                     ForEach(decisions.filter { !$0.allows }) { decision in
-                        Button(decision.label) { conversation.answer(approval.id, allow: false, decision: decision.id) }
+                        Button(decision.label) { answer(false, decision.id, [:]) }
                     }
                     let allowed = decisions.filter(\.allows)
                     if allowed.count == 1, let decision = allowed.first {
-                        Button(sending ? "Sending…" : decision.label) { conversation.answer(approval.id, allow: true, decision: decision.id) }
+                        Button(sending ? "Sending…" : decision.label) { answer(true, decision.id, [:]) }
                             .buttonStyle(.borderedProminent).tint(campGreen).disabled(!approval.canApprove)
                     } else if !allowed.isEmpty {
                         Menu(sending ? "Sending…" : "Allow…") {
-                            ForEach(allowed) { decision in Button(decision.label) { conversation.answer(approval.id, allow: true, decision: decision.id) } }
+                            ForEach(allowed) { decision in Button(decision.label) { answer(true, decision.id, [:]) } }
                         }.disabled(!approval.canApprove)
                     }
                 } else {
-                    Button(approval.kind == "question" ? "Cancel" : "Decline") { conversation.answer(approval.id, allow: false) }
-                    Button(sending ? "Sending…" : approval.acceptLabel) { conversation.answer(approval.id, allow: true, answers: answers) }
+                    Button(approval.kind == "question" ? "Cancel" : "Decline") { answer(false, nil, [:]) }
+                    Button(sending ? "Sending…" : approval.acceptLabel) { answer(true, nil, answers) }
                         .buttonStyle(.borderedProminent).tint(campGreen).disabled(!approval.canApprove || !ready)
                 }
             }.disabled(sending).fixedSize(horizontal: false, vertical: true)

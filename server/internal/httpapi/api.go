@@ -109,6 +109,9 @@ func (a *API) Handler() http.Handler {
 			if strings.HasPrefix(r.URL.Path, "/v1/runner/logins/") && strings.HasSuffix(r.URL.Path, "/report") {
 				maximum = 384 << 10
 			}
+			if r.URL.Path == "/v1/runner/credentials" || strings.HasSuffix(r.URL.Path, "/events") || strings.HasSuffix(r.URL.Path, "/controls") {
+				maximum = 384 << 10
+			}
 			r.Body = http.MaxBytesReader(w, r.Body, maximum)
 			if r.ContentLength != 0 && strings.Split(r.Header.Get("Content-Type"), ";")[0] != "application/json" {
 				problem(w, 415, "json_required")

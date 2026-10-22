@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/teslashibe/capybara-camp/server/internal/config"
+	"github.com/teslashibe/capybara-camp/server/internal/localcli"
 	"github.com/teslashibe/capybara-camp/server/internal/runner"
 )
 
@@ -21,6 +22,9 @@ func main() {
 
 func run() error {
 	if len(os.Args) > 1 {
+		if len(os.Args) == 3 && os.Args[1] == "context-tool" {
+			return localcli.New(config.Local{}).ServeContext(context.Background(), os.Args[2], os.Stdin, os.Stdout)
+		}
 		if len(os.Args) != 3 || os.Args[1] != "git-credential" {
 			return errors.New("Unsupported runner operation")
 		}

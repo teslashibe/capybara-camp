@@ -163,13 +163,14 @@ struct CloudRequestQueueView: View {
     var pending: [CloudOutboxItem] { cloud.pending.filter { $0.path.contains("/sessions/\(session.id)/") } }
     var body: some View {
         CampWorkerStatusView(worker: cloud.worker, sessionID: session.id, showStatus: false)
+        CloudStreamApprovals(live: cloud.live, canApprove: session.ownerUserId == cloud.credential?.actor.userId)
         if !items.isEmpty || !pending.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(items) { request in
                     HStack(alignment: .top) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(request.prompt).lineLimit(2)
-                            Text(stateName(request.state)).foregroundStyle(campMuted)
+                            Text(stateName(request.state, cloud: request.executionLocation == "cloud")).foregroundStyle(campMuted)
                         }
                         Spacer()
                         if request.state == "pending_approval" && request.ownerUserId == cloud.credential?.actor.userId {
@@ -188,13 +189,14 @@ struct CloudRequestQueueView: View {
             }.font(.system(size: 11)).padding(12).background(campInk.opacity(0.035)).clipShape(RoundedRectangle(cornerRadius: 9))
         }
     }
-    private func stateName(_ state: String) -> String {
+    private func stateName(_ state: String, cloud: Bool) -> String {
+        let location = cloud ? "in the cloud" : "on the owner's Mac"
         switch state {
         case "pending_approval": return "Waiting for the session owner's approval"
-        case "queued": return "Queued for the owner's Mac"
-        case "claimed": return "Starting on the owner's Mac"
-        case "started": return "Running on the owner's Mac"
-        case "cancel_requested": return "Stopping on the owner's Mac"
+        case "queued": return "Queued \(location)"
+        case "claimed": return "Starting \(location)"
+        case "started": return "Running \(location)"
+        case "cancel_requested": return "Stopping \(location)"
         case "outcome_unknown": return "Delivery unconfirmed · The owner must review the transcript"
         default: return state.replacingOccurrences(of: "_", with: " ").capitalized
         }

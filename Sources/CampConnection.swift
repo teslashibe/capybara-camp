@@ -23,6 +23,7 @@ import SwiftUI
     var requestChanged: ((CloudRequest) -> Void)?
     var notificationsChanged: (([CloudNotification], CloudScope, Bool) -> Void)?
     var planningChanged: ((String) -> Void)?
+    let live = CloudLiveConversation()
     private(set) var credential: CloudCredential?
     private(set) var scope: CloudScope?
     private(set) var cache: CampCache?
@@ -114,6 +115,7 @@ import SwiftUI
     }
     func selectCamp(_ id: String) async {
         guard let credential, let client, UUID(uuidString: id) != nil else { return }
+        live.stop()
         streamTask?.cancel(); flushTask?.cancel(); publishTask?.cancel(); notificationTask?.cancel(); notificationTask = nil; notificationsDirty = false
         flushTask = nil; publishTask = nil
         let token = UUID(); generation = token; selectedCampId = id
@@ -214,6 +216,12 @@ import SwiftUI
     private func receive(_ event: CloudEvent, scope: CloudScope, generation token: UUID) async throws {
         guard generation == token, let client, let credential, let cache else { throw CancellationError() }
         let epoch = cacheEpoch
+        if event.kind == "request.stream", let id = event.payload.sessionId {
+            guard UUID(uuidString: id) != nil else { throw CampCloudError.invalidResponse }
+            try await cache.ingest(scope: scope, cursor: event.cursor, expectedEpoch: epoch)
+            live.invalidate(id)
+            return
+        }
         var changedSession: CloudSession?, changedRequest: CloudRequest?, removed: (String, Int64)?
         if let id = event.payload.sessionId {
             guard UUID(uuidString: id) != nil else { throw CampCloudError.invalidResponse }
@@ -232,10 +240,12 @@ import SwiftUI
         if let value = changedSession, accepts(value) { sessionIndex[value.id] = value }
         if let value = changedRequest, value.revision >= (requestIndex[value.id]?.revision ?? 0) { requestIndex[value.id] = value; requestChanged?(value) }
         if let (id, revision) = removed, (sessionIndex[id]?.revision ?? 0) <= revision {
+            if live.sessionID == id { live.stop() }
             sessionIndex[id] = nil
             requestIndex = requestIndex.filter { $0.value.sessionId != id }
         }
         if event.kind == "transcript.updated", let id = event.payload.sessionId { transcriptChanged?(id) }
+        if let id = event.payload.sessionId { live.invalidate(id) }
         if event.kind == "planning.changed", let id = event.payload.planId { planningChanged?(id) }
         if event.kind == "notification.changed" || event.kind.hasPrefix("session.") || event.kind.hasPrefix("planning.") || event.kind.hasPrefix("member.") { scheduleNotifications(generation: token) }
         if event.payload.sessionId == nil && event.kind != "notification.changed" {
@@ -282,6 +292,7 @@ import SwiftUI
         }
     }
     private func clearVisible() {
+        live.stop()
         sessions = []; projects = []; members = []; requests = []; pending = []
         sessionIndex = [:]; requestIndex = [:]; sessionsChanged?([], [], nil)
     }

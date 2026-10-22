@@ -25,7 +25,9 @@ func (a *App) runtimeEnvironment(s Session) []string {
 	for _, key := range []string{"OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDECODE", "CODEX_THREAD_ID", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "CLAUDE_CODE_EFFORT_LEVEL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL", "CODEX_HOME", "CLAUDE_CONFIG_DIR"} {
 		delete(env, key)
 	}
-	env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + env["PATH"]
+	if !a.isolated {
+		env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + env["PATH"]
+	}
 	if s.Provider == "Codex" {
 		env["CODEX_HOME"] = s.Root
 	} else if s.Provider == "Claude" {

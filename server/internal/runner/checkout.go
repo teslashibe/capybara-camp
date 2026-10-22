@@ -82,6 +82,11 @@ func (c *checkout) remove(w camp.Workspace) error {
 	if !validWorkspace(w) {
 		return ErrState
 	}
+	if _, err := c.root.Lstat("used-workspace-" + w.ID + ".json"); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return ErrState
+	}
 	return c.root.RemoveAll("workspace-" + w.ID)
 }
 
@@ -126,6 +131,11 @@ func (c *checkout) keepWorkspace(id string) error {
 		}
 		if _, err = uuid.Parse(name); err != nil {
 			continue
+		}
+		if _, err = c.root.Lstat("used-workspace-" + name + ".json"); err == nil {
+			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return ErrState
 		}
 		if err = c.root.RemoveAll(entry.Name()); err != nil {
 			return ErrState
@@ -198,13 +208,27 @@ func (c *checkout) verify(ctx context.Context, w camp.Workspace) error {
 	if err != nil || !st.IsDir() || !ownedPrivate(st) {
 		return ErrState
 	}
+	used := false
+	if _, err = c.root.Lstat("used-workspace-" + w.ID + ".json"); err == nil {
+		var saved camp.Workspace
+		if c.readJSON("used-workspace-"+w.ID+".json", &saved) != nil || !sameWorkspace(saved, w) {
+			return ErrState
+		}
+		used = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return ErrState
+	}
 	head, err := c.git(ctx, w, "", "rev-parse", "--verify", "HEAD")
-	if err != nil || strings.TrimSpace(string(head)) != w.BaseCommit {
+	if err != nil || !objectID.MatchString(strings.TrimSpace(string(head))) || !used && strings.TrimSpace(string(head)) != w.BaseCommit {
 		return ErrState
 	}
 	branch, err := c.git(ctx, w, "", "symbolic-ref", "--short", "HEAD")
 	if err != nil || strings.TrimSpace(string(branch)) != w.Branch {
 		return ErrState
+	}
+	if used {
+		_, err = c.git(ctx, w, "", "merge-base", "--is-ancestor", w.BaseCommit, "HEAD")
+		return err
 	}
 	status, err := c.git(ctx, w, "", "status", "--porcelain=v1", "--untracked-files=all")
 	if err != nil || len(status) != 0 {

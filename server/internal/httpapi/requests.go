@@ -2,12 +2,44 @@ package httpapi
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
 	"github.com/teslashibe/capybara-camp/server/internal/camp"
 )
 
 func (a *API) requestRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/camps/{camp}/sessions/{session}/stream", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		out, err := a.Camps.SessionStream(r.Context(), u, r.PathValue("camp"), r.PathValue("session"))
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
+	mux.HandleFunc("POST /v1/camps/{camp}/requests/{request}/controls", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		var in camp.ControlInput
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := a.Camps.SendControl(r.Context(), u, r.PathValue("camp"), r.PathValue("request"), in)
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
+	mux.HandleFunc("GET /v1/camps/{camp}/requests/{request}/events", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		after := int64(0)
+		var err error
+		if value := r.URL.Query().Get("after"); value != "" {
+			after, err = strconv.ParseInt(value, 10, 64)
+		}
+		if err != nil {
+			problem(w, 400, "invalid_input")
+			return
+		}
+		out, err := a.Camps.RequestStream(r.Context(), u, r.PathValue("camp"), r.PathValue("request"), after)
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
 	mux.HandleFunc("POST /v1/camps/{camp}/sessions/{session}/requests", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		var input camp.RequestInput
 		if !decode(w, r, &input) {

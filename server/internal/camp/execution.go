@@ -92,10 +92,16 @@ func (s *Store) cloudActivity(ctx context.Context, tx pgx.Tx, r Request) error {
 	if err != nil {
 		return err
 	}
+	var providerApproval bool
+	if running {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM request_stream_events e JOIN prompt_requests p ON p.id=e.request_id WHERE p.session_id=$1 AND p.state IN ('started','cancel_requested') AND e.payload->>'type'='approval' AND NOT EXISTS(SELECT 1 FROM request_stream_events resolved WHERE resolved.request_id=e.request_id AND resolved.seq>e.seq AND resolved.payload->>'type'='approvalResolved' AND resolved.payload->>'requestID'=e.payload->>'id'))`, r.SessionID).Scan(&providerApproval); err != nil {
+			return err
+		}
+	}
 	switch {
-	case running:
+	case running && !providerApproval:
 		state, stage = "running", "In progress"
-	case unknown || approval:
+	case providerApproval || unknown || approval:
 		state, stage = "waiting", "Needs you"
 	case queued:
 		state, stage = "idle", "Ready"

@@ -72,7 +72,7 @@ func codexTurn(connection turnConnection, request conversationRequest, controls 
 		params["model"] = request.Model
 	}
 	method := "thread/resume"
-	if implementation && request.NewSession || request.Mode == "planning" {
+	if request.NewSession || request.Mode == "planning" {
 		method = "thread/start"
 		delete(params, "threadId")
 	}
@@ -89,7 +89,7 @@ func codexTurn(connection turnConnection, request conversationRequest, controls 
 		if !validSessionID(session.SessionID) {
 			return errors.New("Codex did not return a valid new session identity")
 		}
-		if implementation {
+		if request.NewSession {
 			if err := emit(map[string]any{"type": "session", "sessionID": session.SessionID}); err != nil {
 				return err
 			}

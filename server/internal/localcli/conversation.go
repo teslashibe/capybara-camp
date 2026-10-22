@@ -35,6 +35,17 @@ type conversationRequest struct {
 	grant             *contextGrant
 }
 
+// ConversationRequest is shared by the desktop stream and installation runner.
+type ConversationRequest = conversationRequest
+
+func (a *App) RunConversation(ctx context.Context, request ConversationRequest, controls <-chan map[string]any, emit func(map[string]any) error) error {
+	return a.runConversation(ctx, request, controls, emit)
+}
+
+func (a *App) ExecutionContext(ctx context.Context, session Session, settings PermissionSettings) (ExecutionContext, error) {
+	return a.executionContext(ctx, session, settings)
+}
+
 type turnConnection interface {
 	approvalConnection
 	RPC(string, map[string]any, time.Duration) (map[string]any, error)
@@ -145,9 +156,6 @@ func (a *App) runConversation(ctx context.Context, request conversationRequest, 
 	if !implementation && len(request.Permissions) != 0 {
 		return errors.New("Project permissions require explicit execution approval")
 	}
-	if !implementation && request.NewSession {
-		return errors.New("New sessions require implementation approval")
-	}
 	session := request.Session
 	if session.Provider != "Codex" && session.Provider != "Claude" || strings.TrimSpace(request.Prompt) == "" || len(request.Prompt) > 65536 || !validSessionID(session.SessionID) {
 		return errors.New("Choose a session and write a prompt under 64 KB")
@@ -225,7 +233,7 @@ func (a *App) runConversation(ctx context.Context, request conversationRequest, 
 	if err := acquire(key); err != nil {
 		return err
 	}
-	if !planning && !(implementation && request.NewSession) {
+	if !planning && !request.NewSession && !a.isolated {
 		if err := a.assertAvailable(ctx, session); err != nil {
 			return err
 		}
@@ -271,7 +279,7 @@ func (a *App) runConversation(ctx context.Context, request conversationRequest, 
 	publish := func(event map[string]any) error {
 		if str(event["type"]) == "session" {
 			id := str(event["sessionID"])
-			if !implementation || !validSessionID(id) {
+			if !request.NewSession || !validSessionID(id) {
 				return errors.New("The provider returned an invalid session identity")
 			}
 			if err := acquire(session.Provider + ":" + session.Root + ":" + id); err != nil {
@@ -301,13 +309,16 @@ func (a *App) conversationCommand(ctx context.Context, session Session, request 
 		return codexChatCommand(ctx, session, request.grant)
 	}
 	command := append(validated, "--input-format", "stream-json", "--replay-user-messages")
-	if request.Mode == "planning" {
+	if request.Mode == "planning" || request.NewSession {
 		var err error
 		command, err = removeCommandFlag(command, "--resume", true)
 		if err != nil {
 			return nil, err
 		}
-		command = append(command, "--session-id", session.SessionID, "--no-session-persistence")
+		command = append(command, "--session-id", session.SessionID)
+		if request.Mode == "planning" {
+			command = append(command, "--no-session-persistence")
+		}
 	}
 	if request.grant != nil {
 		var err error

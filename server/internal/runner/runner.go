@@ -25,6 +25,7 @@ type Worker struct {
 	readyWorkspace string
 	login          loginFunc
 	interval       time.Duration
+	environment    []string
 }
 
 func New(cfg config.Runner, transport *http.Client) (*Worker, error) {
@@ -70,7 +71,7 @@ func New(cfg config.Runner, transport *http.Client) (*Worker, error) {
 	copyClient.Timeout = 40 * time.Second
 	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	adapter := localcli.New(config.Local{Environment: cfg.Environment})
-	w := &Worker{stateDir: cfg.StateDir, client: &client{origin: cfg.Origin, token: token, http: &copyClient}, journal: j, login: adapter.LoginProvider, interval: 2 * time.Second}
+	w := &Worker{stateDir: cfg.StateDir, client: &client{origin: cfg.Origin, token: token, http: &copyClient}, journal: j, login: adapter.LoginProvider, interval: 2 * time.Second, environment: append([]string{}, cfg.Environment...)}
 	if cfg.WorkspaceDir != "" {
 		w.checkout, err = openCheckout(cfg.WorkspaceDir)
 		if err != nil {
@@ -124,6 +125,9 @@ func (w *Worker) Run(ctx context.Context) error {
 		if state.Action == "erase" {
 			if w.checkout != nil {
 				if err = w.checkout.cleanAll(); err != nil {
+					return err
+				}
+				if err = w.checkout.eraseRuntime(); err != nil {
 					return err
 				}
 			}
