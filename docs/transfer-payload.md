@@ -722,6 +722,45 @@ private-history denial for another user and changed permissions. Git and provide
 accounts are synthetic; no model turn runs. Fixture credentials and caches are
 removed on exit.
 
+## Local checkout preparation
+
+The bundled Go `transfer-checkout` action prepares a private checkout for one
+owner/Camp scope and transfer UUID. Input selects a GitHub repository, exact base
+commit and destination branch, with a matching short-lived read credential.
+The native account service still needs to issue that credential to the selected
+Mac and connect this helper to transfer review; no token-entry UI is planned.
+
+`internal/gitcheckout` contains the transport, credential helper and tree checks
+shared with the cloud runner. Git ignores ambient user/system configuration,
+hooks and credential helpers, refuses redirects, and bounds output and process
+lifetime. The credential helper answers only for the exact authorized GitHub
+HTTPS repository. Credentials are stored in a private temporary file for fetch,
+removed afterwards, and cleared on restart if a helper was killed. They never
+enter checkout configuration, intent records or receipts.
+
+Preparation uses an unpublished scratch directory under the transfer's private
+state. It fetches the exact commit, validates tree sizes, submodules, path
+collisions and symlink chains, then checks out the selected branch. File and
+directory synchronization precedes an atomic rename that cannot replace an
+existing destination. A ready marker binds the same scope, transfer, repository,
+commit, branch and destination. A lost response reuses the verified clean
+checkout without another fetch. Changed Git configuration, newer edits and
+unexpected destinations fail without resetting them. Interrupted unpublished
+scratch work can be rebuilt; a published checkout is never removed by retries.
+
+The checkout and installer share the same state lock. The installer then applies
+reviewed changes and preserves the pinned parent/child archive. Once files are
+staged, retry installation from its receipt instead of preparing the checkout
+again. Preparation intentionally refuses that dirty checkout. Neither operation
+changes execution ownership or starts a provider.
+
+Local smart-HTTP Git tests cover both preparation and the history installer,
+interrupted fetch/publication, independent transfers, unsafe trees, changed
+configuration, cancellation and concurrent destination creation. These fixtures
+use synthetic credentials and no external GitHub account. Commits absent from
+the remote still require the separate commit-graph transfer work; a failed fetch
+does not silently replace the selected base or discard source work.
+
 ## Local destination installation
 
 The bundled Go `transfer-install` action composes the existing file stager with

@@ -89,40 +89,51 @@ func validateStageInput(in TransferStageInput) (transfer.Manifest, error) {
 	return manifest, nil
 }
 
-func (a *App) openTransferStager(ctx context.Context, in TransferStageInput) (*transfer.Stager, string, error) {
+func (a *App) transferStateDirectory(ctx context.Context, scope, id string) (string, error) {
+	if !installDigest(scope) || !installUUID(id) {
+		return "", transfer.ErrInput
+	}
 	if err := ctx.Err(); err != nil {
-		return nil, "", err
+		return "", err
 	}
 	if !filepath.IsAbs(a.Config.Support) {
-		return nil, "", transfer.ErrDestination
+		return "", transfer.ErrDestination
 	}
 	if err := os.MkdirAll(a.Config.Support, 0700); err != nil {
-		return nil, "", err
+		return "", err
 	}
 	info, err := os.Lstat(a.Config.Support)
 	if err != nil || !info.IsDir() || !ownedByUser(info) || info.Mode().Perm()&0077 != 0 {
-		return nil, "", transfer.ErrDestination
+		return "", transfer.ErrDestination
 	}
 	root, err := os.OpenRoot(a.Config.Support)
 	if err != nil {
-		return nil, "", err
+		return "", err
 	}
 	defer root.Close()
-	name := "restore-" + in.Scope + "-" + in.TransferID
+	name := "restore-" + scope + "-" + id
 	if err = root.Mkdir(name, 0700); err != nil && !errors.Is(err, os.ErrExist) {
-		return nil, "", err
+		return "", err
 	}
 	directory, err := root.Open(".")
 	if err != nil {
-		return nil, "", err
+		return "", err
 	}
 	err = errors.Join(directory.Sync(), directory.Close())
 	if err != nil {
-		return nil, "", err
+		return "", err
 	}
-	stager, err := transfer.OpenStager(in.Destination, filepath.Join(a.Config.Support, name))
+	return filepath.Join(a.Config.Support, name), nil
+}
+
+func (a *App) openTransferStager(ctx context.Context, in TransferStageInput) (*transfer.Stager, string, error) {
+	state, err := a.transferStateDirectory(ctx, in.Scope, in.TransferID)
 	if err != nil {
 		return nil, "", err
 	}
-	return stager, filepath.Join(a.Config.Support, name), nil
+	stager, err := transfer.OpenStager(in.Destination, state)
+	if err != nil {
+		return nil, "", err
+	}
+	return stager, state, nil
 }

@@ -11,10 +11,17 @@ import (
 	"syscall"
 
 	"github.com/teslashibe/capybara-camp/server/internal/config"
+	"github.com/teslashibe/capybara-camp/server/internal/gitcheckout"
 	"github.com/teslashibe/capybara-camp/server/internal/localcli"
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "git-credential" {
+		if err := gitcheckout.ServeCredential(os.Args[2], config.GitCredentialFile(), os.Stdin, os.Stdout); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	cfg, err := config.LoadLocal()

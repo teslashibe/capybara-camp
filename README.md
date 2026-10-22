@@ -304,8 +304,10 @@ resumable local cache, with integrity and permission checks before it returns an
 archive. Real local API tests cover both providers. The bundled installer now
 preserves that archive privately alongside reviewed files in an existing isolated
 checkout, with restart recovery and a receipt bound to the selected profile.
-Checkout creation, attachments and connecting the native handoff to actual local
-continuation remain part of the unfinished transfer flow.
+The Go checkout preparer can create that private workspace at an exact remote
+commit, sharing the cloud runner's Git safeguards. Native Git grant issuance and
+review integration, missing remote commits, attachments and connecting the
+handoff to actual local continuation remain part of the unfinished transfer flow.
 The native publisher includes saved subagent histories with a shared or private
 Camp copy. Child transcripts stay under the parent's permissions and have their
 own message IDs and paged history. The sidebar refreshes after child updates,

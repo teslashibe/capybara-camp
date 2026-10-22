@@ -21,6 +21,9 @@ type App struct {
 	systemCapture func(context.Context, string, []string, time.Duration, int) (int, []byte, error)
 	isolated      bool
 	confined      bool
+	// Smart-HTTP fixture transport, never populated from application input.
+	checkoutRemote    func(string) string
+	checkoutGitConfig []string
 }
 
 func New(c config.Local) *App { return &App{Config: c} }
@@ -95,6 +98,9 @@ func (a *App) Run(ctx context.Context, action string, input io.Reader) (any, err
 	}
 	if action == "transfer-install" {
 		return a.installTransfer(ctx, input)
+	}
+	if action == "transfer-checkout" {
+		return a.prepareTransferCheckout(ctx, input)
 	}
 	if action == "transfer-review" {
 		return reviewTransferPayload(ctx, input)

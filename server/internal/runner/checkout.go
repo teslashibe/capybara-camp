@@ -1,37 +1,26 @@
 package runner
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
-	"os/exec"
-	"path"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
-	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/teslashibe/capybara-camp/server/internal/camp"
-	"github.com/teslashibe/capybara-camp/server/internal/processguard"
+	"github.com/teslashibe/capybara-camp/server/internal/gitcheckout"
 )
 
-var errCheckoutUnsafe = errors.New("Checkout contains unsupported or unsafe paths")
-var errCheckoutSize = errors.New("Checkout exceeds its size limit")
-var errCheckoutGit = errors.New("Git checkout did not complete")
-var repoName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}$`)
-var objectID = regexp.MustCompile(`^[a-f0-9]{40}$`)
+var errCheckoutUnsafe = gitcheckout.ErrUnsafe
+var errCheckoutSize = gitcheckout.ErrSize
+var errCheckoutGit = gitcheckout.ErrGit
 
-func validRepository(value string) bool {
-	parts := strings.Split(value, "/")
-	return repoName.MatchString(value) && len(parts) == 2 && parts[1] != "." && parts[1] != ".."
-}
+func validRepository(value string) bool { return gitcheckout.ValidRepository(value) }
 func validWorkspace(w camp.Workspace) bool {
 	_, err := uuid.Parse(w.ID)
 	_, sessionErr := uuid.Parse(w.SessionID)
@@ -39,7 +28,7 @@ func validWorkspace(w camp.Workspace) bool {
 	if w.TransferID != "" {
 		_, transferErr = uuid.Parse(w.TransferID)
 	}
-	return err == nil && sessionErr == nil && transferErr == nil && validRepository(w.RepositoryName) && objectID.MatchString(w.BaseCommit) && w.Branch == "camp/"+w.SessionID+"/"+w.ID
+	return err == nil && sessionErr == nil && transferErr == nil && validRepository(w.RepositoryName) && gitcheckout.ValidCommit(w.BaseCommit) && w.Branch == "camp/"+w.SessionID+"/"+w.ID
 }
 
 type checkout struct {
@@ -244,7 +233,7 @@ func (c *checkout) verify(ctx context.Context, w camp.Workspace) error {
 	if err != nil && ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if err != nil || !objectID.MatchString(strings.TrimSpace(string(head))) || !used && strings.TrimSpace(string(head)) != w.BaseCommit {
+	if err != nil || !gitcheckout.ValidCommit(strings.TrimSpace(string(head))) || !used && strings.TrimSpace(string(head)) != w.BaseCommit {
 		return ErrState
 	}
 	branch, err := c.git(ctx, w, "", "symbolic-ref", "--short", "HEAD")
@@ -281,188 +270,8 @@ func (c *checkout) verify(ctx context.Context, w camp.Workspace) error {
 }
 
 func (c *checkout) validateTree(ctx context.Context, w camp.Workspace, data []byte) error {
-	var total int64
-	count := 0
-	seen := map[string]bool{}
-	links := map[string]string{}
-	for _, record := range bytes.Split(data, []byte{0}) {
-		if len(record) == 0 {
-			continue
-		}
-		count++
-		if count > 20000 {
-			return errCheckoutSize
-		}
-		meta, name, ok := strings.Cut(string(record), "\t")
-		fields := strings.Fields(meta)
-		if !ok || len(fields) != 4 || !safeTreePath(name) || seen[strings.ToLower(name)] {
-			return errCheckoutUnsafe
-		}
-		seen[strings.ToLower(name)] = true
-		size, err := strconv.ParseInt(fields[3], 10, 64)
-		if err != nil || size < 0 {
-			return errCheckoutUnsafe
-		}
-		if size > 32<<20 {
-			return errCheckoutSize
-		}
-		total += size
-		if total > 512<<20 {
-			return errCheckoutSize
-		}
-		if fields[1] != "blob" || !objectID.MatchString(fields[2]) {
-			return errCheckoutUnsafe
-		}
-		switch fields[0] {
-		case "100644", "100755":
-		case "120000":
-			if size > 4096 {
-				return errCheckoutUnsafe
-			}
-			target, err := c.git(ctx, w, "", "cat-file", "blob", fields[2])
-			if err != nil {
-				return err
-			}
-			value := string(target)
-			if value == "" || path.IsAbs(value) || strings.Contains(value, "\\") || strings.ContainsFunc(value, unicode.IsControl) {
-				return errCheckoutUnsafe
-			}
-			links[name] = value
-		default:
-			return errCheckoutUnsafe
-		}
-	}
-	for name := range links {
-		if !safeSymlink(name, links) {
-			return errCheckoutUnsafe
-		}
-	}
-	return nil
+	return gitcheckout.ValidateTree(ctx, data, func(ctx context.Context, id string) ([]byte, error) { return c.git(ctx, w, "", "cat-file", "blob", id) })
 }
-
-// Resolve the complete link graph before checkout. Cleaning each target
-// lexically is insufficient: d/link -> ../x changes the meaning of later ..
-// segments in another link that traverses d/link.
-func safeSymlink(name string, links map[string]string) bool {
-	pending := strings.Split(path.Dir(name)+"/"+links[name], "/")
-	var resolved []string
-	follows := 0
-	for steps := 0; len(pending) > 0; steps++ {
-		if steps >= 8192 {
-			return false
-		}
-		part := pending[0]
-		pending = pending[1:]
-		switch part {
-		case "", ".":
-			continue
-		case "..":
-			if len(resolved) == 0 {
-				return false
-			}
-			resolved = resolved[:len(resolved)-1]
-			continue
-		}
-		candidate := strings.Join(append(append([]string{}, resolved...), part), "/")
-		if target, ok := links[candidate]; ok {
-			follows++
-			if follows > 40 {
-				return false
-			}
-			pending = append(strings.Split(target, "/"), pending...)
-		} else {
-			resolved = append(resolved, part)
-		}
-	}
-	return safeTreePath(strings.Join(resolved, "/"))
-}
-
-func safeTreePath(value string) bool {
-	if value == "" || len(value) > 4096 || path.IsAbs(value) || path.Clean(value) != value || strings.Contains(value, "\\") || strings.ContainsFunc(value, unicode.IsControl) {
-		return false
-	}
-	for _, part := range strings.Split(value, "/") {
-		if part == "." || part == ".." || strings.EqualFold(part, ".git") || strings.Contains(part, ":") {
-			return false
-		}
-	}
-	return true
-}
-
-// Keep the buffer named: an embedded Buffer promotes ReadFrom and lets
-// io.Copy bypass Write's output limit.
-type gitOutput struct {
-	buffer   bytes.Buffer
-	limit    int
-	overflow bool
-}
-
-func (b *gitOutput) Bytes() []byte { return b.buffer.Bytes() }
-func (b *gitOutput) Len() int      { return b.buffer.Len() }
-
-func (b *gitOutput) Write(p []byte) (int, error) {
-	if b.Len()+len(p) > b.limit {
-		b.overflow = true
-		return 0, errCheckoutSize
-	}
-	return b.buffer.Write(p)
-}
-func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
-
 func (c *checkout) git(ctx context.Context, w camp.Workspace, credentialFile string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-	options := []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.attributesFile=/dev/null", "-c", "core.excludesFile=/dev/null", "-c", "submodule.recurse=false", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "http.followRedirects=false", "-c", "credential.helper=", "-c", "credential.useHttpPath=true"}
-	options = append(options, c.gitConfig...)
-	// HOME also fences libcurl's ambient .netrc lookup. Configuration flags
-	// alone do not prevent that fallback to the operating-system user's home.
-	env := []string{"PATH=/usr/bin:/bin", "HOME=/dev/null", "XDG_CONFIG_HOME=/dev/null", "LANG=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0"}
-	if credentialFile != "" {
-		options = append(options, "-c", "credential.helper=!"+shellQuote(c.helper)+" git-credential")
-		env = append(env, "CAMP_GIT_CREDENTIAL_FILE="+credentialFile)
-	}
-	path, commandArgs := "/usr/bin/git", append(options, args...)
-	if c.guarded {
-		home, err := os.MkdirTemp(c.dir, "git-home-")
-		if err != nil {
-			return nil, ErrState
-		}
-		defer os.RemoveAll(home)
-		policy := processguard.Policy{Home: home, Workspace: c.workdir(w), WriteWorkspace: true}
-		if credentialFile != "" {
-			policy.ReadFiles = []string{credentialFile}
-		}
-		path, commandArgs, err = processguard.Wrap(path, append([]string{"git"}, commandArgs...), policy)
-		if err != nil {
-			return nil, err
-		}
-	}
-	command := exec.CommandContext(ctx, path, commandArgs...)
-	command.Dir = c.workdir(w)
-	command.Env = env
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	command.Cancel = func() error {
-		if command.Process != nil {
-			return syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-		}
-		return nil
-	}
-	command.WaitDelay = time.Second
-	stdout, stderr := &gitOutput{limit: 8 << 20}, &gitOutput{limit: 64 << 10}
-	command.Stdout = stdout
-	command.Stderr = stderr
-	err := command.Run()
-	if command.Process != nil {
-		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-	}
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	if stdout.overflow || stderr.overflow || errors.Is(err, errCheckoutSize) {
-		return nil, errCheckoutSize
-	}
-	if err != nil {
-		return nil, errCheckoutGit
-	}
-	return stdout.Bytes(), nil
+	return gitcheckout.Run(ctx, gitcheckout.Command{Directory: c.workdir(w), StateDir: c.dir, Helper: c.helper, CredentialFile: credentialFile, Guarded: c.guarded, ExtraConfig: c.gitConfig}, args...)
 }
