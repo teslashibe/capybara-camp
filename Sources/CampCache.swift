@@ -163,6 +163,65 @@ actor CampCache {
         guard UUID(uuidString:id) != nil else {throw CampCloudError.invalidResponse}
         try transaction {try checkEpoch(scope,expectedEpoch);try setMetadata("transfer-cancel:"+scope.key,Data(id.utf8))}
     }
+    func saveWorkspaceExport(_ value: WorkspaceExportJournal?, scope: CloudScope, expectedEpoch: Int64, initial: Bool = false, discardingKey: String? = nil) throws {
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            let key = "workspace-export:" + scope.key
+            guard var value else {
+                if let raw = try metadata(key) {
+                    let previous = try CampWire.decoder().decode(WorkspaceExportJournal.self, from:raw)
+                    guard previous.key == discardingKey else { throw CancellationError() }
+                }
+                try execute("DELETE FROM metadata WHERE key=?", [.text(key)])
+                try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("workspace-export-chunk:" + scope.key + ":%")])
+                return
+            }
+            if let raw = try metadata(key) {
+                let previous = try CampWire.decoder().decode(WorkspaceExportJournal.self, from:raw)
+                guard previous.key == value.key else { throw CampCloudError.invalidResponse }
+                value.cancelling = value.cancelling || previous.cancelling
+            } else if !initial { throw CancellationError() }
+            let raw = try CampWire.encoder().encode(value)
+            guard raw.count <= 512 << 10 else { throw CampCloudError.responseTooLarge }
+            try setMetadata(key, raw)
+            if value.cancelling || ["cancelled","expired","failed"].contains(value.export?.state ?? "") {
+                try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("workspace-export-chunk:" + scope.key + ":%")])
+            }
+        }
+    }
+    func workspaceExportChunk(scope: CloudScope, id: String, index: Int) throws -> Data? {
+        guard UUID(uuidString:id) != nil, (0..<184).contains(index) else { throw CampCloudError.invalidResponse }
+        return try metadata("workspace-export-chunk:" + scope.key + ":" + id + ":" + String(index))
+    }
+    func workspaceExportChunkInventory(scope: CloudScope, id: String) throws -> [Int:Int] {
+        guard UUID(uuidString:id) != nil else { throw CampCloudError.invalidResponse }
+        let prefix = "workspace-export-chunk:" + scope.key + ":" + id + ":"
+        let items = try rows("SELECT key,length(value) FROM metadata WHERE key LIKE ? LIMIT 185", [.text(prefix + "%")]) {
+            (text($0,0), Int(sqlite3_column_int64($0,1)))
+        }
+        guard items.count <= 184 else { throw CampCloudError.invalidResponse }
+        var result: [Int:Int] = [:]
+        for (key,size) in items {
+            guard let index = Int(key.dropFirst(prefix.count)), (0..<184).contains(index), result[index] == nil,
+                  (1...(256 << 10)).contains(size) else { throw CampCloudError.invalidResponse }
+            result[index] = size
+        }
+        return result
+    }
+    func saveWorkspaceExportChunk(_ data: Data, scope: CloudScope, id: String, index: Int, expectedEpoch: Int64) throws {
+        guard UUID(uuidString:id) != nil, (0..<184).contains(index), (1...(256 << 10)).contains(data.count) else { throw CampCloudError.invalidResponse }
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            guard let raw = try metadata("workspace-export:" + scope.key) else { throw CancellationError() }
+            let journal = try CampWire.decoder().decode(WorkspaceExportJournal.self, from:raw)
+            guard !journal.cancelling, let value = journal.export, value.id == id, value.state == "ready",
+                  value.expiresAt > Date(), index < (value.resultBytes + (256 << 10) - 1) / (256 << 10),
+                  data.count == min(256 << 10,value.resultBytes-index*(256 << 10)) else { throw CancellationError() }
+            let key = "workspace-export-chunk:" + scope.key + ":" + id + ":" + String(index)
+            if let previous = try metadata(key), previous != data { throw CampCloudError.invalidResponse }
+            try setMetadata(key,data)
+        }
+    }
     func localProjectState() throws -> LocalProjectState {
         var projects = try rows("SELECT id,name,revision,archived FROM local_projects ORDER BY archived,name,id") { CampProject(id: text($0,0), name: text($0,1), revision: sqlite3_column_int64($0,2), archived: sqlite3_column_int($0,3) != 0, repositories: []) }
         let links = try rows("SELECT project_id,url FROM local_project_repositories ORDER BY url") { (text($0,0),text($0,1)) }
@@ -539,6 +598,8 @@ actor CampCache {
             try execute("DELETE FROM metadata WHERE key=?", [.text("source-handoff:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("transfer-review:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("transfer-cancel:" + scope.key)])
+            try execute("DELETE FROM metadata WHERE key=?", [.text("workspace-export:" + scope.key)])
+            try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("workspace-export-chunk:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-payload:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("child-epoch:" + scope.key + ":%")])
             for var attempt in try attempts(scope) {

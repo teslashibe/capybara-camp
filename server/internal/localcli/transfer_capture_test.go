@@ -40,3 +40,47 @@ func TestTransferReviewUsesRepositoryRelativeSelectedBytes(t *testing.T) {
 		t.Fatal("History-only transfer failed", err)
 	}
 }
+
+func TestDownloadedTransferReviewUsesCaptureValidation(t *testing.T) {
+	a, in := holdFixture(t)
+	body, _ := json.Marshal(map[string]any{"session": in.Session, "paths": []string{"file.txt"}})
+	value, err := a.Run(t.Context(), "transfer-capture", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture := value.(TransferCapture)
+	value, err = a.Run(t.Context(), "transfer-review", bytes.NewReader(capture.Payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	review := value.(TransferCapture)
+	if review.Payload != nil || review.PayloadSHA256 != capture.PayloadSHA256 || review.ReviewSHA256 != capture.ReviewSHA256 || review.BaseCommit != capture.BaseCommit || len(review.Files) != 1 || review.Files[0] != capture.Files[0] {
+		t.Fatal("Downloaded review differed from original capture")
+	}
+	for _, name := range []string{"path", "bytes", "secret", "extra", "trailing"} {
+		t.Run(name, func(t *testing.T) {
+			manifest, err := transfer.Decode(capture.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch name {
+			case "path":
+				manifest.Files[0].Path = "../outside"
+			case "bytes":
+				manifest.Files[0].Data = []byte("changed")
+			case "secret":
+				manifest.Files[0].Path = ".env"
+			}
+			payload, _ := json.Marshal(manifest)
+			if name == "extra" {
+				payload = append([]byte(`{"unknown":true,`), payload[1:]...)
+			}
+			if name == "trailing" {
+				payload = append(payload, []byte("{}")...)
+			}
+			if _, err = a.Run(t.Context(), "transfer-review", bytes.NewReader(payload)); err == nil {
+				t.Fatal("Accepted invalid review")
+			}
+		})
+	}
+}

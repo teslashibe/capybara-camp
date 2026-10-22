@@ -38,6 +38,8 @@ import Foundation
         precondition(changes.files.count==1 && changes.files[0].path=="file.txt")
         let capture=try JSONDecoder().decode(TransferCapture.self,from:await Bridge.call("transfer-capture",input:request))
         precondition(capture.valid && capture.files.count==1 && capture.payload.map(PublishMessage.hash)==capture.payloadSha256,"The bundled capture helper was not used")
+        let downloadedReview=try CampWire.decoder().decode(TransferCapture.self,from:await Bridge.call("transfer-review",input:capture.payload!))
+        precondition(downloadedReview.valid && downloadedReview.payload == nil && downloadedReview.reviewSha256 == capture.reviewSha256 && downloadedReview.payloadSha256 == capture.payloadSha256 && downloadedReview.files.count == 1,"The bundled helper did not validate downloaded bytes")
         let destination=root.appendingPathComponent("restored-checkout")
         try git(["-c","core.hooksPath=/dev/null","clone","--no-local","--no-hardlinks","--",repository.path,destination.path])
         try FileManager.default.setAttributes([.posixPermissions:0o700],ofItemAtPath:destination.path)

@@ -661,10 +661,24 @@ Installation routes under `/v1/runner/exports` provide `GET /next`,
 All writes after discovery carry the saved claim ID. Discovery exposes only
 an opaque ID, and a second claim cannot adopt an interrupted upload.
 
-This supplies source capture for Cloud-to-Local transfers. The native selection
-and download flow, destination checkout preparation, history/attachments and
-ownership handoff still need integration and acceptance. Commits absent from
-the remote repository also remain a separate migration requirement.
+The native `CampWorkspaceExport` coordinator persists a create intent before
+posting it, then downloads one verified chunk per advance. Its journal and chunks
+are scoped to server, owner and Camp; clearing that scope invalidates in-flight
+work. Cancellation is durable, removes local chunks, and reconciles an uncertain
+create before discarding the journal. Returning cached bytes requires a fresh
+authorized chunk read as well as the complete payload hash. A status response
+alone does not authorize access to file contents.
+
+Downloaded captures are reviewed through the bundled Go `transfer-review`
+command. It accepts the bounded manifest on stdin, checks the same secret/path/
+integrity rules used by capture and staging, and returns the existing file-review
+summary without duplicating file contents. It does not read provider profiles,
+write files or change execution ownership.
+
+The native selection/review surface still needs to connect to this coordinator.
+Destination checkout preparation, history/attachments and ownership handoff also
+need integration and acceptance. Commits absent from the remote repository remain
+a separate migration requirement.
 
 ## Validation
 

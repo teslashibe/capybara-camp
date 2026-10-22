@@ -79,12 +79,42 @@ func (a *App) reviewTransfer(ctx context.Context, action string, input io.Reader
 	if len(payload) > transfer.MaxWireBytes {
 		return nil, transfer.ErrLimit
 	}
-	digest, err := manifest.Digest()
+	out, err := summarizeTransfer(payload, manifest)
 	if err != nil {
 		return nil, err
 	}
+	out.Payload = payload
+	return out, nil
+}
+
+// Review downloaded bytes with the same path, secret and file-integrity rules
+// used during capture and staging. This action never reads a provider profile
+// or writes a checkout. The native caller already retains the bounded payload.
+func reviewTransferPayload(ctx context.Context, input io.Reader) (any, error) {
+	payload, err := io.ReadAll(io.LimitReader(input, transfer.MaxWireBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > transfer.MaxWireBytes {
+		return nil, transfer.ErrLimit
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	manifest, err := transfer.Decode(payload)
+	if err != nil {
+		return nil, err
+	}
+	return summarizeTransfer(payload, manifest)
+}
+
+func summarizeTransfer(payload []byte, manifest transfer.Manifest) (TransferCapture, error) {
+	digest, err := manifest.Digest()
+	if err != nil {
+		return TransferCapture{}, err
+	}
 	sum := sha256.Sum256(payload)
-	out := TransferCapture{Payload: payload, PayloadSHA256: hex.EncodeToString(sum[:]), ReviewSHA256: digest, BaseCommit: manifest.BaseCommit, Branch: manifest.Branch, Files: []CaptureFile{}, Excluded: manifest.Excluded}
+	out := TransferCapture{PayloadSHA256: hex.EncodeToString(sum[:]), ReviewSHA256: digest, BaseCommit: manifest.BaseCommit, Branch: manifest.Branch, Files: []CaptureFile{}, Excluded: manifest.Excluded}
 	out.History = manifest.History
 	for _, file := range manifest.Files {
 		out.Files = append(out.Files, CaptureFile{file.Path, len(file.Data), file.Deleted, file.BeforeSHA256, file.SHA256})

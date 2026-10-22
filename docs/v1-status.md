@@ -63,6 +63,26 @@ migration tests pass after the final cleanup/body-limit changes
 checkout preparation, history/attachments and final handoff acceptance remain
 open. This is a backend component, not a completed Cloud-to-Local flow.
 
+The native export coordinator now saves owner-scoped create/cancel intents and
+downloads verified chunks across restarts. Cached bytes require a fresh source,
+project, Git and provider authorization check before use. Cancellation removes
+local file bytes, and clearing a Camp fences in-flight writes. The bundled Go
+`transfer-review` command validates downloaded manifests and returns the same
+file-review summary used for local capture. The selection/review UI, destination
+checkout, full history/attachments and local ownership commit remain open; this
+component does not move a session or launch a provider.
+
+Native tests pass for lost creates, resumed multi-chunk downloads, reauthentication,
+fractional API dates, authority changes, corrupt network/cache bytes, durable
+cancellation, stale-view writes and cache erasure during an in-flight request.
+Existing transfer tests and the packaged Go bridge also pass
+(`build/workspace-export-native-tests.log`). The new coordinator uses a synthetic
+HTTP transport; it still needs a native journey through the real API. Go review
+and staging race tests pass (`build/workspace-export-review-go.log`), as do vet
+and the Linux helper build. Chunk progress reads metadata instead of repeatedly
+loading downloaded contents. These checks do not replace the full transfer,
+performance-soak or final review gates.
+
 The destination-side Go `transfer-stage` helper now stages reviewed files into
 an isolated local checkout using the existing cloud stager. It verifies the
 payload/review hashes, scopes its restart journal by transfer and account context,
