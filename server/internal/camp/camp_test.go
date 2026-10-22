@@ -63,7 +63,7 @@ func TestCommandRetriesAreAtomicAndPayloadBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	retry, err := s.Invite(ctx, a, first.ID, inviteKey, "member@example.com", "viewer")
-	if err != nil || retry != inv {
+	if err != nil || retry.ID != inv.ID || retry.Token != inv.Token || !retry.ExpiresAt.Equal(inv.ExpiresAt) {
 		t.Fatal("invitation retry changed token", err)
 	}
 	var receipt []byte

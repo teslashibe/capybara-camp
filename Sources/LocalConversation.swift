@@ -87,6 +87,7 @@ struct ConversationResult: Sendable {
         if let permissions { object["permissions"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(permissions)) }
         var payload = try JSONSerialization.data(withJSONObject: object)
         payload.append(10)
+        let initial = payload
         p.standardOutput = out; p.standardError = err; p.standardInput = stdin
         let writer = ConversationInput(stdin.fileHandleForWriting)
         try p.run()
@@ -101,7 +102,6 @@ struct ConversationResult: Sendable {
                 }
                 try? err.fileHandleForReading.close(); return tail
             }
-            let initial = payload
             let writeTask = Task.detached { () -> Bool in
                 do { try writer.write(initial); return true } catch { return false }
             }

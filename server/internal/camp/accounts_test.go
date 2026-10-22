@@ -208,7 +208,7 @@ func TestCloudGrantReplacementExpiryAndDisconnectFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	retry, err := s.CreateRunnerGrant(ctx, owner, account.ID, key)
-	if err != nil || retry != replacement {
+	if err != nil || retry.InstallationID != replacement.InstallationID || retry.Token != replacement.Token || retry.Epoch != replacement.Epoch || !retry.ExpiresAt.Equal(replacement.ExpiresAt) {
 		t.Fatal("grant replay", err)
 	}
 	if _, err = s.RunnerAccount(ctx, grant.Token); !errors.Is(err, auth.ErrUnauthorized) {
