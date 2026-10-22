@@ -81,6 +81,9 @@ func (a *App) Run(ctx context.Context, action string, input io.Reader) (any, err
 	if action == "transfer-resolve" {
 		return a.resolveTransferFence(ctx, input)
 	}
+	if action == "transfer-fences" {
+		return a.transferFences(ctx)
+	}
 	if action == "discover" {
 		if err := ctx.Err(); err != nil {
 			return nil, err

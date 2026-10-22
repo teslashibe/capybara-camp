@@ -232,8 +232,11 @@ These internal operations do not yet provide the native transfer review flow,
 child-session and attachment migration, or cloud-to-local transfer acceptance.
 The bundled helper now blocks the original local session across a hold timeout
 or app restart. Confirmed cancellation restores local execution; a completed
-move keeps the old source blocked. Recovery after sign-out or cache erasure
-and the native transfer review remain unfinished.
+move keeps the old source blocked. After sign-out or cache erasure, signing in
+to the same Camp recovers saved blockers from the local helper and checks them
+against the owner's server records. Confirmed cloud assignments return to the
+app; confirmed cancellations release the original local session. The native
+transfer review and complete migration acceptance remain unfinished.
 See the [transfer contract](docs/transfer-payload.md) for ownership, limits,
 recovery and the remaining handoff work.
 

@@ -370,11 +370,37 @@ connectivity or access preserves the marker and recovery journal.
 
 The local `transfer-resolve` helper clears a matching marker under the session
 lock; the native coordinator owns the server authorization check. This controls
-Camp's bundled CLI, not a provider CLI launched independently. Recovery after
-sign-out or cache erasure still needs an orphaned-marker recovery flow because
-those actions remove the scoped journal. The marker remains safe but can no
-longer be reconciled automatically from that journal. The native transfer review
-UI stays disabled until that recovery and the remaining integration are ready.
+Camp's bundled CLI, not a provider CLI launched independently. The native transfer
+review UI remains unfinished.
+
+### Recovery without the local cache
+
+Sign-out and cache erasure remove the scoped recovery journal. The separate
+marker still blocks local execution. When the user signs back in, the Go
+`transfer-fences` helper discovers orphaned markers and returns only their
+handoff UUIDs and opaque lock keys. It skips active helpers, empty lock files,
+malformed markers and symlinks without deleting them. Inspection is bounded
+to 10,000 directory entries and 512 markers per inventory.
+
+The native worker checks at most 32 handoffs at a time through
+`POST /v1/camps/{camp}/handoffs/recover`, with a `handoff_ids` array. Unknown
+IDs, another owner's handoffs and other Camps are omitted. The response pairs
+each owner's local-source handoff with the current session assignment. It
+normalizes expired holds under the same Camp lock used for other changes.
+Reading recovery state grants no source claim or execution permission.
+
+Committed transfers restore the current cloud assignment and retain the old
+local blocker. Released, expired or invalidated transfers release a matching
+opaque lock key only when the source epoch is still assigned to Local. This
+works even if the old profile directory has moved. A different device can
+read the result as the owner, but cannot confirm the original source's work.
+An unresolved move stays blocked. A missing record, lost permission or another
+Camp never releases it.
+
+The worker scans once on connection, then at most every 30 seconds, retaining
+completed results for that connection and processing one bounded batch per
+poll. Changing the account or Camp resets that in-memory selection. No provider
+prompt is started or replayed during recovery.
 
 ## Remaining integration
 

@@ -39,6 +39,11 @@ func (l *sessionLocks) acquire(key string) error {
 }
 
 func (l *sessionLocks) acquireForHandoff(key, handoff string) error {
+	digest := sha256.Sum256([]byte(key))
+	return l.acquireFile(key, hex.EncodeToString(digest[:]), handoff)
+}
+
+func (l *sessionLocks) acquireFile(key, digest, handoff string) error {
 	if file := l.files[key]; file != nil {
 		fence, err := readTransferFence(file)
 		if err != nil || (fence != "" && fence != handoff) {
@@ -46,8 +51,7 @@ func (l *sessionLocks) acquireForHandoff(key, handoff string) error {
 		}
 		return nil
 	}
-	digest := sha256.Sum256([]byte(key))
-	path := filepath.Join(l.directory, "run-"+hex.EncodeToString(digest[:])+".lock")
+	path := filepath.Join(l.directory, "run-"+digest+".lock")
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
 	if err != nil {
 		return errors.New("Could not acquire the local session lock")
@@ -126,6 +130,10 @@ func (l *sessionLocks) releaseFence(key, handoff string) error {
 	if err := l.acquireForHandoff(key, handoff); err != nil {
 		return err
 	}
+	return l.releaseHeldFence(key, handoff)
+}
+
+func (l *sessionLocks) releaseHeldFence(key, handoff string) error {
 	file := l.files[key]
 	existing, err := readTransferFence(file)
 	if err != nil || (existing != "" && existing != handoff) {

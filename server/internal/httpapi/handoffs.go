@@ -9,6 +9,18 @@ import (
 )
 
 func (a *API) handoffRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /v1/camps/{camp}/handoffs/recover", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		var in struct {
+			HandoffIDs []string `json:"handoff_ids"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := a.Camps.RecoverHandoffs(r.Context(), u, r.PathValue("camp"), in.HandoffIDs)
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
 	mux.HandleFunc("POST /v1/camps/{camp}/sessions/{session}/handoffs/{handoff}/commit", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		var in camp.HandoffCommitInput
 		if !decode(w, r, &in) {

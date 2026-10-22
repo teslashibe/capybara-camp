@@ -329,6 +329,15 @@ func TestWorkspaceHTTPRequiresOwnerAndReplaysReceipt(t *testing.T) {
 	call("POST", handoffPath+"/claim", "", "", handoffBody, 401)
 	call("POST", handoffPath+"/claim", tokens[1], "", handoffBody, 404)
 	call("POST", handoffPath+"/claim", tokens[0], "", handoffBody, 200)
+	recoveryBody, _ := json.Marshal(map[string]any{"handoff_ids": []string{handoff.ID}})
+	call("POST", "/v1/camps/"+c.ID+"/handoffs/recover", "", "", recoveryBody, 401)
+	if raw := call("POST", "/v1/camps/"+c.ID+"/handoffs/recover", tokens[1], "", recoveryBody, 200); string(bytes.TrimSpace(raw)) != "[]" {
+		t.Fatal("Teammate recovered owner's source")
+	}
+	var recoveries []camp.HandoffRecovery
+	if err = json.Unmarshal(call("POST", "/v1/camps/"+c.ID+"/handoffs/recover", tokens[0], "", recoveryBody, 200), &recoveries); err != nil || len(recoveries) != 1 {
+		t.Fatal("Owner recovery failed", err)
+	}
 	call("POST", handoffPath+"/source", tokens[0], "", handoffBody, 200)
 	call("POST", handoffPath+"/chunks/0", tokens[0], "", handoffBody, 200)
 	call("POST", "/v1/runner/handoffs/"+handoff.ID+"/source", grant.Token, "", handoffBody, 404)

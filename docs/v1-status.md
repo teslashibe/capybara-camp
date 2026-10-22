@@ -18,8 +18,7 @@ and acceptance are separate milestones.
 | Memory and skills | Approved Cortex/shared Markdown design | Actual native and Go integrations, provider/model consolidation, memory inspection, skill editing/version rollout and permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: finish transfer-marker recovery after sign-out, native transfer review
-and local-plan promotion, then memory/skills
+Next: finish native transfer review and local-plan promotion, then memory/skills
 and shared execution. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
@@ -105,8 +104,7 @@ source hold, the Mac waits for saved and published routing before releasing
 the lock. The bundled helper now persists a handoff marker before confirmation
 so an expired hold or app restart cannot start the old source locally. It
 restores Local only after an authenticated cancellation and unchanged assignment.
-Orphaned-marker recovery after sign-out or cache erasure, native review UI,
-child histories, attachments, unpushed commits, cloud-to-local transfer and
+Native review UI, child histories, attachments, unpushed commits, cloud-to-local transfer and
 live two-user acceptance remain open.
 The full Go race suite and vet pass at schema 23 with disposable PostgreSQL 17.
 Both provider fixtures continue in the destination after a lost completion
@@ -120,8 +118,22 @@ the complete Go race suite and vet. Tests refuse local execution after helper
 exit or expiry, allow the same handoff to recheck, reject other handoffs and
 malformed markers, and restore a cancelled source across coordinator restart.
 The actual bundled Go helper persists the marker before final confirmation.
-Linux command builds and the staged secret scan also pass. Sign-out/cache-erasure
-recovery and the native transfer walkthrough remain unaccepted.
+Linux command builds and the staged secret scan also pass. The native transfer
+walkthrough remains unaccepted.
+
+Recovery now discovers local blockers independently of the Camp cache and
+matches them through an owner-scoped batch endpoint. Signing in again can
+restore a committed assignment or release a confirmed cancelled source without
+the original local journal or profile path. Unresolved, foreign and revoked
+records stay blocked; recovery grants no execution ownership or prompt replay.
+The full native suite passed, followed by a focused handoff rerun after bounding
+the in-memory recovery cache. The full Go race suite and vet pass with the
+owner/viewer authorization cases, expired holds and reauthenticated devices.
+The local-helper tests cover opaque recovery after moving the original profile;
+native tests cover cache erasure, foreign records, changed assignments and
+32-item batches. Linux commands compile and the staged secret scan is clean.
+This is local and synthetic evidence; native transfer review and live two-Mac
+acceptance are still required.
 
 The native account form and synthetic provider walkthrough now pass locally.
 The Go controller provisions per-installation workers, renews managed grants,

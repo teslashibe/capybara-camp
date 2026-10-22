@@ -33,6 +33,8 @@ actor HandoffFixture: CampPublishingTransport {
     var acknowledgements = 0
     var completions = 0
     var skipFinish = false
+    var recoveryReplies: [CloudHandoffRecovery]?
+    var recoverySizes: [Int] = []
     init(handoff: CloudHandoff, source: CloudTransferSource) { self.handoff = handoff; self.source = source }
     func configure(claim: Bool = false, ack: Bool = false, corrupt: Bool = false) { loseClaim = claim; loseAck = ack; self.corrupt = corrupt }
     func finish() { handoff.state = "released" }
@@ -43,8 +45,27 @@ actor HandoffFixture: CampPublishingTransport {
         self.skipFinish = skipFinish
     }
     func completionCount() -> Int { completions }
+    func configureRecovery(_ state: String, advanced: Bool = false, foreign: Bool = false) {
+        handoff.state = state; handoff.claimId = UUID().uuidString; handoff.commitNonce = UUID().uuidString
+        if state == "committed" {
+            handoff.executionEpoch = handoff.sourceEpoch+1
+            source.session.executionLocation = "cloud"; source.session.executionWorkspaceId = handoff.workspaceId
+            source.session.executionEpoch = handoff.executionEpoch
+        }
+        if advanced { source.session.executionEpoch = handoff.sourceEpoch+1 }
+        var value = CloudHandoffRecovery(handoff:handoff,session:source.session)
+        if foreign { value.handoff.ownerUserId = UUID().uuidString }
+        recoveryReplies = [value]
+    }
+    func batchSizes() -> [Int] { recoverySizes }
     func stats() -> ([String],Int,String) { (claims,acknowledgements,handoff.state) }
     func perform(_ operation: CampPublication) async throws -> Data {
+        if operation.path.hasSuffix("/recover") {
+            let object = try JSONSerialization.jsonObject(with:operation.body) as! [String:Any]
+            let ids = object["handoff_ids"] as! [String]
+            recoverySizes.append(ids.count)
+            return try CampWire.encoder().encode((recoveryReplies ?? []).filter { ids.contains($0.handoff.id) })
+        }
         if operation.path.hasSuffix("/next") { return ["pending","claimed"].contains(handoff.state) ? try CampWire.body(["id":handoff.id]) : Data() }
         if operation.method == "GET" && operation.path.contains("/handoffs/") { return try CampWire.encoder().encode(handoff) }
         if operation.method == "GET" && operation.path.hasSuffix("/sessions/"+source.session.id) {
@@ -103,7 +124,7 @@ actor HandoffFixture: CampPublishingTransport {
         await api.configure(claim:true,ack:true)
         var guards: [SourceGuardFixture] = []
         func setup() -> CampLocalHandoff {
-            let worker = CampLocalHandoff(cache:cache)
+            let worker = CampLocalHandoff(readFences:{[]},cache:cache)
             worker.nativeSession = { _ in local }; worker.available = { _ in true }
             worker.makeGuard = { _,_,_,_ in let g = SourceGuardFixture(receipt); guards.append(g); return g }
             worker.attach(scope:scope,actor:actor,transport:api)
@@ -131,7 +152,7 @@ actor HandoffFixture: CampPublishingTransport {
 
         let badAPI = HandoffFixture(handoff:h,source:source)
         await badAPI.configure(corrupt:true)
-        let bad = CampLocalHandoff(cache:try CampCache(directory:root.appendingPathComponent("bad")))
+        let bad = CampLocalHandoff(readFences:{[]},cache:try CampCache(directory:root.appendingPathComponent("bad")))
         bad.nativeSession = { _ in local }; bad.available = { _ in true }
         bad.makeGuard = { _,_,_,_ in preconditionFailure("Corrupt payload reached local files") }
         bad.attach(scope:scope,actor:actor,transport:badAPI)
@@ -140,7 +161,7 @@ actor HandoffFixture: CampPublishingTransport {
         bad.attach(scope:nil,actor:nil,transport:nil)
 
         let changedAPI = HandoffFixture(handoff:h,source:source)
-        let changed = CampLocalHandoff(cache:try CampCache(directory:root.appendingPathComponent("changed")))
+        let changed = CampLocalHandoff(readFences:{[]},cache:try CampCache(directory:root.appendingPathComponent("changed")))
         changed.nativeSession = { _ in local }; changed.available = { _ in true }
         changed.makeGuard = { _,_,_,_ in let g = SourceGuardFixture(receipt); g.failure = true; return g }
         changed.attach(scope:scope,actor:actor,transport:changedAPI)
@@ -150,7 +171,7 @@ actor HandoffFixture: CampPublishingTransport {
         changed.attach(scope:nil,actor:nil,transport:nil)
         let revokedCache = try CampCache(directory:root.appendingPathComponent("revoked"))
         let revokedAPI = HandoffFixture(handoff:h,source:source)
-        let revoked = CampLocalHandoff(cache:revokedCache), revokedGuard = SourceGuardFixture(receipt)
+        let revoked = CampLocalHandoff(readFences:{[]},cache:revokedCache), revokedGuard = SourceGuardFixture(receipt)
         revoked.nativeSession = { _ in local }; revoked.available = { _ in true }
         revoked.makeGuard = { _,_,_,_ in revokedGuard }
         revoked.attach(scope:scope,actor:actor,transport:revokedAPI)
@@ -162,7 +183,7 @@ actor HandoffFixture: CampPublishingTransport {
         revoked.attach(scope:nil,actor:nil,transport:nil)
         let interruptedCache = try CampCache(directory:root.appendingPathComponent("interrupted"))
         let interruptedAPI = HandoffFixture(handoff:h,source:source)
-        let interrupted = CampLocalHandoff(cache:interruptedCache), interruptedGuard = SourceGuardFixture(receipt)
+        let interrupted = CampLocalHandoff(readFences:{[]},cache:interruptedCache), interruptedGuard = SourceGuardFixture(receipt)
         interruptedGuard.duringVerify = { try await interruptedCache.clear(scope) }
         interrupted.nativeSession = { _ in local }; interrupted.available = { _ in true }
         interrupted.makeGuard = { _,_,_,_ in interruptedGuard }
@@ -172,7 +193,7 @@ actor HandoffFixture: CampPublishingTransport {
         check(!interruptedGuard.active && interruptedStats.1 == 0,"Revoked source sent an acknowledgement")
         interrupted.attach(scope:nil,actor:nil,transport:nil)
         let commitCache = try CampCache(directory:root.appendingPathComponent("commit"))
-        let commitAPI = HandoffFixture(handoff:h,source:source), commit = CampLocalHandoff(cache:commitCache)
+        let commitAPI = HandoffFixture(handoff:h,source:source), commit = CampLocalHandoff(readFences:{[]},cache:commitCache)
         let commitGuard = SourceGuardFixture(receipt)
         commit.resolveFence = { _,_ in }; commit.nativeSession = { _ in local }; commit.available = { _ in true }; commit.makeGuard = { _,_,_,_ in commitGuard }
         var publications = 0, publicationFails = true
@@ -198,7 +219,7 @@ actor HandoffFixture: CampPublishingTransport {
         check(try await commit.poll() == false)
         commit.attach(scope:nil,actor:nil,transport:nil)
 
-        let staleAPI = HandoffFixture(handoff:h,source:source), stale = CampLocalHandoff(cache:try CampCache(directory:root.appendingPathComponent("stale")))
+        let staleAPI = HandoffFixture(handoff:h,source:source), stale = CampLocalHandoff(readFences:{[]},cache:try CampCache(directory:root.appendingPathComponent("stale")))
         let staleGuard = SourceGuardFixture(receipt)
         stale.resolveFence = { _,_ in }; stale.nativeSession = { _ in local }; stale.available = { _ in true }; stale.makeGuard = { _,_,_,_ in staleGuard }
         stale.attach(scope:scope,actor:actor,transport:staleAPI)
@@ -209,7 +230,7 @@ actor HandoffFixture: CampPublishingTransport {
         stale.attach(scope:nil,actor:nil,transport:nil)
 
         let cancelledCache = try CampCache(directory:root.appendingPathComponent("cancelled-commit"))
-        let cancelledAPI = HandoffFixture(handoff:h,source:source), cancelled = CampLocalHandoff(cache:cancelledCache)
+        let cancelledAPI = HandoffFixture(handoff:h,source:source), cancelled = CampLocalHandoff(readFences:{[]},cache:cancelledCache)
         let cancelledGuard = SourceGuardFixture(receipt)
         cancelled.nativeSession = { _ in local }; cancelled.available = { _ in true }
         cancelled.makeGuard = { _,_,_,_ in cancelledGuard }
@@ -220,7 +241,7 @@ actor HandoffFixture: CampPublishingTransport {
         check(cancelledGuard.fenced,"Commit sent before persisting fence")
         cancelled.attach(scope:nil,actor:nil,transport:nil)
         await cancelledAPI.finish()
-        let cancelledRestart = CampLocalHandoff(cache:cancelledCache)
+        let cancelledRestart = CampLocalHandoff(readFences:{[]},cache:cancelledCache)
         var resolutions = 0
         cancelledRestart.resolveFence = { resolved, id in
             check(resolved.id == local.id && id == h.id)
@@ -234,7 +255,46 @@ actor HandoffFixture: CampPublishingTransport {
         try await cache.clear(scope)
         check(try await cache.metadata("source-handoff:"+scope.key) == nil,"Sign out retained source claim")
         try await realSourceGuard(root:root)
+        try await orphanRecovery(root:root,scope:scope,actor:actor,source:source)
         print("PASS: native source handoff recovery, retained locks, hash verification, rejection and scope erasure")
+    }
+
+    @MainActor static func orphanRecovery(root: URL, scope: CloudScope, actor: CloudActor, source: CloudTransferSource) async throws {
+        let fence = LocalTransferFence(key:String(repeating:"a",count:64),handoffID:source.handoff.id)
+        let signedIn = CloudActor(userId:actor.userId,deviceId:UUID().uuidString,email:actor.email,name:actor.name)
+        for state in ["committed","released","expired","acknowledged","advanced","foreign"] {
+            let cache = try CampCache(directory:root.appendingPathComponent("orphan-"+state))
+            try await cache.clear(scope)
+            let api = HandoffFixture(handoff:source.handoff,source:source)
+            await api.configureRecovery(["advanced","foreign"].contains(state) ? "released" : state,advanced:state == "advanced",foreign:state == "foreign")
+            var reads = 0, resolutions = 0, publications = 0
+            let worker = CampLocalHandoff(readFences:{ reads += 1; return [fence] },cache:cache)
+            worker.resolveRecoveredFence = { value in check(value == fence); resolutions += 1 }
+            worker.acceptSession = { session, actual, epoch in
+                check(session.executionLocation == "cloud" && session.executionEpoch == 2 && actual == scope)
+                try await cache.ingest(scope:actual,session:session,expectedEpoch:epoch); publications += 1
+            }
+            worker.makeGuard = { _,_,_,_ in preconditionFailure("Read-only recovery started a source helper") }
+            worker.attach(scope:scope,actor:signedIn,transport:api)
+            if state == "foreign" {
+                do { _ = try await worker.poll(); preconditionFailure("Foreign recovery was accepted") } catch {}
+            } else { _ = try await worker.poll(); _ = try await worker.poll() }
+            check(resolutions == (["released","expired"].contains(state) ? 1 : 0),"Recovery cleared an unconfirmed source")
+            check(publications == (state == "committed" ? 1 : 0),"Recovery published the wrong assignment")
+            let stats = await api.stats()
+            let completionCount = await api.completionCount()
+            check(stats.0.isEmpty && stats.1 == 0 && completionCount == 0,"Recovery took execution ownership")
+            check(reads == 1,"Recovery rescanned without a new event")
+            worker.attach(scope:nil,actor:nil,transport:nil)
+        }
+        let cache = try CampCache(directory:root.appendingPathComponent("orphan-batches"))
+        let api = HandoffFixture(handoff:source.handoff,source:source); await api.finish()
+        let fences = (0..<65).map { LocalTransferFence(key:String(format:"%064x",$0),handoffID:UUID().uuidString) }
+        let worker = CampLocalHandoff(readFences:{fences},cache:cache)
+        worker.attach(scope:scope,actor:signedIn,transport:api)
+        for _ in 0..<4 { _ = try await worker.poll() }
+        check(await api.batchSizes() == [32,32,1],"Recovery was not bounded or retried foreign markers")
+        worker.attach(scope:nil,actor:nil,transport:nil)
     }
 
     @MainActor static func realSourceGuard(root: URL) async throws {

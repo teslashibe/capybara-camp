@@ -37,9 +37,9 @@ import SwiftUI
     private var eligibilitySignal: UInt64 = 0
     private var checkedSessions: Set<String> = []
 
-    init(cache: CampCache?, automatic: Bool = true, heartbeatInterval: TimeInterval = 10) {
+    init(readFences: (() async throws -> [LocalTransferFence])? = nil, cache: CampCache?, automatic: Bool = true, heartbeatInterval: TimeInterval = 10) {
         self.cache = cache; self.automatic = automatic; self.heartbeatInterval = heartbeatInterval
-        self.handoff = CampLocalHandoff(cache: cache)
+        self.handoff = CampLocalHandoff(readFences:readFences,cache:cache)
     }
     deinit { task?.cancel(); leaseTask?.cancel() }
     var activePlanningCount: Int { reservedPlanningSession != nil || activeAttempt?.request.isPlanning == true ? 1 : 0 }

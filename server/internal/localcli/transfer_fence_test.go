@@ -128,3 +128,44 @@ func TestTransferFenceRejectsMalformedOrLinkedState(t *testing.T) {
 		t.Fatal("Symlink accepted for source lock")
 	}
 }
+
+func TestTransferFenceInventoryAndOpaqueResolutionAfterProfileMove(t *testing.T) {
+	a, in := holdFixture(t)
+	in.HandoffID = uuid.NewString()
+	input, events, done := startSourceHold(t, a, in)
+	nextSourceEvent(t, events)
+	if err := json.NewEncoder(input).Encode(map[string]string{"type": "prepareCommit"}); err != nil {
+		t.Fatal(err)
+	}
+	nextSourceEvent(t, events)
+	active, err := a.transferFences(t.Context())
+	if err != nil || len(active) != 0 {
+		t.Fatal("Active source exposed as orphan", err)
+	}
+	_ = input.Close()
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+	fences, err := a.transferFences(t.Context())
+	if err != nil || len(fences) != 1 || fences[0].HandoffID != in.HandoffID {
+		t.Fatal("Lost transfer not discovered", err)
+	}
+	raw, _ := json.Marshal(fences)
+	if strings.Contains(string(raw), in.Session.Root) || strings.Contains(string(raw), in.Session.SessionID) {
+		t.Fatal("Inventory exposed source paths or sessions")
+	}
+	if err = os.Rename(in.Session.Root, in.Session.Root+"-moved"); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]string{"key": fences[0].Key, "handoffID": in.HandoffID})
+	if _, err = a.Run(t.Context(), "transfer-resolve", bytes.NewReader(body)); err != nil {
+		t.Fatal("Opaque resolution needed the missing source profile", err)
+	}
+	if _, err = a.Run(t.Context(), "transfer-resolve", bytes.NewReader(body)); err != nil {
+		t.Fatal("Opaque resolution did not replay", err)
+	}
+	fences, err = a.transferFences(t.Context())
+	if err != nil || len(fences) != 0 {
+		t.Fatal("Resolved marker remained in inventory", err)
+	}
+}

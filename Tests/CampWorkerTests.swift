@@ -85,7 +85,7 @@ actor WorkerFixture: CampPublishingTransport {
         let cache = try CampCache(directory: root.appendingPathComponent("first"))
         let api = WorkerFixture(request: request(), session: remote)
         await api.configure(claim: true, finish: true)
-        let worker = CampLocalWorker(cache: cache, automatic: false, heartbeatInterval: 0)
+        let worker = CampLocalWorker(readFences:{[]},cache: cache, automatic: false, heartbeatInterval: 0)
         worker.nativeSession = { _ in local }; worker.available = { _ in true }; worker.readHistory = { _ in [] }
         var starts = 0
         var finish: ((ConversationResult) -> Void)?
@@ -111,7 +111,7 @@ actor WorkerFixture: CampPublishingTransport {
         var planRequest = request(); planRequest.kind = "planning"; planRequest.planId = UUID().uuidString; planRequest.planVersion = 1; planRequest.planStep = 0
         let planAPI = WorkerFixture(request: planRequest, session: remote)
         await planAPI.configure(finish: true)
-        let planWorker = CampLocalWorker(cache: planCache, automatic: false)
+        let planWorker = CampLocalWorker(readFences:{[]},cache: planCache, automatic: false)
         planWorker.nativeSession = { _ in local }; planWorker.available = { _ in true }
         planWorker.readHistory = { _ in preconditionFailure("Planning must not read or resume the anchor conversation") }
         var planStarts = 0
@@ -138,7 +138,7 @@ actor WorkerFixture: CampPublishingTransport {
         let resumeCache = try CampCache(directory: root.appendingPathComponent("planning-resume"))
         let resumeAPI = WorkerFixture(request: planRequest, session: remote)
         await resumeAPI.pausePlanning(true)
-        let resumeWorker = CampLocalWorker(cache: resumeCache, automatic: false)
+        let resumeWorker = CampLocalWorker(readFences:{[]},cache: resumeCache, automatic: false)
         resumeWorker.nativeSession = { _ in local }; resumeWorker.available = { _ in true }
         var resumedStarts = 0
         resumeWorker.execute = { native, _, prompt, _, _, _ in
@@ -163,7 +163,7 @@ actor WorkerFixture: CampPublishingTransport {
         let cancelledCache = try CampCache(directory: root.appendingPathComponent("cancel-during-start"))
         let cancelledAPI = WorkerFixture(request: planRequest, session: remote)
         await cancelledAPI.configure(startReply: true)
-        let cancelledWorker = CampLocalWorker(cache: cancelledCache, automatic: false)
+        let cancelledWorker = CampLocalWorker(readFences:{[]},cache: cancelledCache, automatic: false)
         cancelledWorker.nativeSession = { _ in local }; cancelledWorker.available = { _ in true }
         cancelledWorker.execute = { _, _, _, _, _, _ in preconditionFailure("A processed cancellation was ignored before provider submission") }
         cancelledWorker.attach(scope: scope, actor: actor, transport: cancelledAPI, sessions: [remote])
@@ -180,7 +180,7 @@ actor WorkerFixture: CampPublishingTransport {
         var lastRemote = remote; lastRemote.id = "ffffffff-ffff-4fff-8fff-ffffffffffff"
         var lastRequest = request(); lastRequest.sessionId = lastRemote.id
         let batchAPI = WorkerFixture(request: lastRequest, session: lastRemote)
-        let batchWorker = CampLocalWorker(cache: batchCache, automatic: false)
+        let batchWorker = CampLocalWorker(readFences:{[]},cache: batchCache, automatic: false)
         batchWorker.nativeSession = { _ in local }; batchWorker.available = { _ in true }; batchWorker.readHistory = { _ in [] }
         var batchStarts = 0
         batchWorker.execute = { native, _, prompt, history, _, _ in
@@ -202,7 +202,7 @@ actor WorkerFixture: CampPublishingTransport {
         let lostCache = try CampCache(directory: root.appendingPathComponent("lost-start"))
         let lostAPI = WorkerFixture(request: request(), session: remote)
         await lostAPI.configure(start: true)
-        let lostWorker = CampLocalWorker(cache: lostCache, automatic: false)
+        let lostWorker = CampLocalWorker(readFences:{[]},cache: lostCache, automatic: false)
         lostWorker.nativeSession = { _ in local }; lostWorker.available = { _ in true }; lostWorker.readHistory = { _ in [] }
         lostWorker.execute = { _, _, _, _, _, _ in preconditionFailure("Unknown Start acknowledgement executed the provider") }
         lostWorker.attach(scope: scope, actor: actor, transport: lostAPI, sessions: [remote])
@@ -218,7 +218,7 @@ actor WorkerFixture: CampPublishingTransport {
         let clearedCache = try CampCache(directory: root.appendingPathComponent("cleared"))
         let clearedAPI = WorkerFixture(request: request(), session: remote)
         await clearedAPI.configure(hold: true)
-        let clearedWorker = CampLocalWorker(cache: clearedCache, automatic: false)
+        let clearedWorker = CampLocalWorker(readFences:{[]},cache: clearedCache, automatic: false)
         clearedWorker.nativeSession = { _ in local }; clearedWorker.available = { _ in true }
         clearedWorker.execute = { _, _, _, _, _, _ in preconditionFailure("Revoked claim executed") }
         clearedWorker.attach(scope: scope, actor: actor, transport: clearedAPI, sessions: [remote])
@@ -231,7 +231,7 @@ actor WorkerFixture: CampPublishingTransport {
 
         let invalidCache = try CampCache(directory: root.appendingPathComponent("preflight"))
         let invalidAPI = WorkerFixture(request: request(), session: remote)
-        let invalidWorker = CampLocalWorker(cache: invalidCache, automatic: false)
+        let invalidWorker = CampLocalWorker(readFences:{[]},cache: invalidCache, automatic: false)
         invalidWorker.nativeSession = { _ in local }; invalidWorker.available = { _ in true }
         invalidWorker.readHistory = { _ in throw CampError.message("Fixture transcript is unavailable") }
         invalidWorker.execute = { _, _, _, _, _, _ in preconditionFailure("Failed preflight started a provider") }
@@ -242,7 +242,7 @@ actor WorkerFixture: CampPublishingTransport {
 
         let leaseCache = try CampCache(directory: root.appendingPathComponent("lease"))
         let leaseAPI = WorkerFixture(request: request(), session: remote)
-        let leaseWorker = CampLocalWorker(cache: leaseCache, automatic: false, heartbeatInterval: 0)
+        let leaseWorker = CampLocalWorker(readFences:{[]},cache: leaseCache, automatic: false, heartbeatInterval: 0)
         leaseWorker.nativeSession = { _ in local }; leaseWorker.available = { _ in true }; leaseWorker.readHistory = { _ in [] }
         leaseWorker.execute = { native, _, prompt, history, _, completed in
             let run = LocalConversation(session: native, history: history, prompt: prompt)

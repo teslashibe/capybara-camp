@@ -225,6 +225,16 @@ func (s *Store) Handoff(ctx context.Context, a auth.Actor, campID, sessionID, id
 	if h.CampID != campID || h.SessionID != sessionID {
 		return h, ErrDenied
 	}
+	h, err = s.refreshHandoff(ctx, tx, a, h)
+	if err != nil {
+		return h, err
+	}
+	return h, tx.Commit(ctx)
+}
+
+func (s *Store) refreshHandoff(ctx context.Context, tx pgx.Tx, a auth.Actor, h Handoff) (Handoff, error) {
+	id := h.ID
+	var err error
 	if oneOf(h.State, "pending", "claimed", "acknowledged") {
 		var alive bool
 		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM transfer_handoffs h JOIN session_transfers t ON t.id=h.transfer_id JOIN sessions s ON s.id=h.session_id JOIN ticket_workspaces w ON w.id=h.workspace_id WHERE h.id=$1 AND `+liveHandoffSQL+`)`, id).Scan(&alive); err != nil {
@@ -247,7 +257,7 @@ func (s *Store) Handoff(ctx context.Context, a auth.Actor, campID, sessionID, id
 			}
 		}
 	}
-	return h, tx.Commit(ctx)
+	return h, nil
 }
 
 func (s *Store) ReleaseHandoff(ctx context.Context, a auth.Actor, campID, sessionID, id string) (Handoff, error) {

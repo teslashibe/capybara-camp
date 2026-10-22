@@ -16,6 +16,12 @@ struct CloudTransferSource: Codable, Sendable {
     }
     var handoff: CloudHandoff; var transfer: Transfer; var session: CloudSession
 }
+struct LocalTransferFence: Codable, Sendable, Hashable {
+    var key: String; var handoffID: String
+}
+struct CloudHandoffRecovery: Codable, Sendable {
+    var handoff: CloudHandoff; var session: CloudSession
+}
 
 // Only the original source Mac consumes these jobs. Its durable claim excludes
 // credentials and payloads; reviewed files stay in memory for the live guard.
@@ -35,6 +41,15 @@ struct CloudTransferSource: Codable, Sendable {
     private var source: CloudTransferSource?
     private var epoch: Int64?
     private var nextDiscovery = Date.distantPast
+    private var nextRecovery = Date.distantPast
+    private var recoveryPending: [LocalTransferFence] = []
+    private var recoveryChecked: Set<LocalTransferFence> = []
+    var readFences: () async throws -> [LocalTransferFence]
+    var resolveRecoveredFence: (LocalTransferFence) async throws -> Void = { fence in
+        let body = try CampWire.body(["key":fence.key,"handoffID":fence.handoffID])
+        struct Result: Decodable { var ok: Bool }
+        guard try JSONDecoder().decode(Result.self,from:await Bridge.call("transfer-resolve",input:body)).ok else { throw CampCloudError.invalidResponse }
+    }
     var nativeSession: ((CloudSession) -> CampSession?)?
     var available: ((CampSession) -> Bool)?
     var acceptSession: ((CloudSession, CloudScope, Int64) async throws -> Void)?
@@ -47,11 +62,17 @@ struct CloudTransferSource: Codable, Sendable {
     }
     private(set) var status = ""
 
-    init(cache: CampCache?) { self.cache = cache }
+    static func readLocalFences() async throws -> [LocalTransferFence] {
+        try JSONDecoder().decode([LocalTransferFence].self,from:await Bridge.call("transfer-fences",input:Data()))
+    }
+    init(readFences: (() async throws -> [LocalTransferFence])? = nil, cache: CampCache?) {
+        self.cache = cache; self.readFences = readFences ?? Self.readLocalFences
+    }
     func attach(scope: CloudScope?, actor: CloudActor?, transport: (any CampPublishingTransport)?) {
         if let c = context, c.scope == scope, c.actor.deviceId == actor?.deviceId, let transport { context?.transport = transport; return }
         guardProcess?.stop(); guardProcess = nil; source = nil; journal = nil; loaded = false; epoch = nil; status = ""; context = nil
         nextDiscovery = .distantPast
+        nextRecovery = .distantPast; recoveryPending = []; recoveryChecked = []
         if let scope, let actor, let transport { context = Context(scope: scope, actor: actor, transport: transport) }
     }
     func wake() { nextDiscovery = .distantPast }
@@ -80,6 +101,58 @@ struct CloudTransferSource: Codable, Sendable {
     private func clear(_ c: Context) async throws {
         guardProcess?.stop(); guardProcess = nil; source = nil
         try await save(nil, c); status = ""
+    }
+    private func recoverFences(_ c: Context) async throws -> Bool {
+        if recoveryPending.isEmpty {
+            guard Date() >= nextRecovery else { return false }
+            let fences = try await readFences(); try await checkAuthority(c)
+            guard fences.count <= 512, Set(fences.map(\.key)).count == fences.count,
+                  fences.allSatisfy({ UUID(uuidString:$0.handoffID) != nil && $0.key.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil }) else { throw CampCloudError.invalidResponse }
+            recoveryChecked.formIntersection(Set(fences))
+            recoveryPending = fences.filter { !recoveryChecked.contains($0) }
+            nextRecovery = Date().addingTimeInterval(30)
+        }
+        recoveryPending.removeAll { recoveryChecked.contains($0) }
+        let batch = Array(recoveryPending.prefix(32))
+        guard !batch.isEmpty else { return false }
+        let ids = Array(Set(batch.map(\.handoffID))).sorted()
+        let values = try await call([CloudHandoffRecovery].self,"POST","/v1/camps/\(c.scope.campId)/handoffs/recover",c,body:CampWire.body(["handoff_ids":ids]))
+        guard values.count <= ids.count, Set(values.map { $0.handoff.id }).count == values.count else { throw CampCloudError.invalidResponse }
+        var returned = Set<String>(), changed = false
+        for value in values {
+            let h = value.handoff, s = value.session
+            guard ids.contains(h.id), h.campId == c.scope.campId, h.ownerUserId == c.actor.userId,
+                  h.sourceLocation == "local", h.sourceWorkspaceId == nil, h.sourceEpoch > 0,
+                  UUID(uuidString:h.sessionId) != nil, UUID(uuidString:h.sourceDeviceId) != nil,
+                  UUID(uuidString:h.workspaceId) != nil, UUID(uuidString:h.transferId) != nil,
+                  s.id == h.sessionId, s.campId == c.scope.campId, s.ownerUserId == c.actor.userId,
+                  ["pending","claimed","acknowledged","committed","released","expired","invalidated"].contains(h.state) else { throw CampCloudError.invalidResponse }
+            returned.insert(h.id)
+            let matches = batch.filter { $0.handoffID == h.id }
+            if h.state == "committed" {
+                guard let completed = h.executionEpoch, completed == h.sourceEpoch+1,
+                      let current = s.executionEpoch, current >= completed,
+                      current != completed || (s.executionLocation == "cloud" && s.executionWorkspaceId == h.workspaceId),
+                      let epoch, let acceptSession else { throw CampCloudError.invalidResponse }
+                try await acceptSession(s,c.scope,epoch); try await checkAuthority(c)
+                recoveryChecked.formUnion(matches); changed = true
+            } else if ["released","expired","invalidated"].contains(h.state) {
+                if s.executionEpoch == h.sourceEpoch, s.executionLocation == "local", s.executionWorkspaceId == nil {
+                    for fence in matches { try await resolveRecoveredFence(fence); try await checkAuthority(c); recoveryChecked.insert(fence) }
+                    changed = true
+                }
+            } else if h.state == "acknowledged", h.sourceDeviceId == c.actor.deviceId,
+                      let claim = h.claimId, UUID(uuidString:claim) != nil,
+                      UUID(uuidString:h.commitNonce ?? "") != nil,
+                      s.executionEpoch == h.sourceEpoch, s.executionLocation == "local", let local = nativeSession?(s) {
+                try await save(Journal(id:h.id,claim:claim,device:c.actor.deviceId,local:JSONEncoder().encode(local),handoff:h,commitStarted:true),c)
+                return true
+            }
+        }
+        recoveryChecked.formUnion(batch.filter { !returned.contains($0.handoffID) })
+        recoveryPending.removeFirst(batch.count)
+        if changed { status = "Transfer recovered" }
+        return changed
     }
     private func validate(_ h: CloudHandoff, _ j: Journal, _ c: Context, terminal: Bool = false) throws {
         guard [h.id,h.transferId,h.sessionId,h.workspaceId].allSatisfy({ UUID(uuidString: $0) != nil }),
@@ -162,6 +235,7 @@ struct CloudTransferSource: Codable, Sendable {
             }
             guard try await cache.epoch(c.scope) == epoch else { guardProcess?.stop(); throw CancellationError() }
             if journal == nil {
+                if try await recoverFences(c) { return true }
                 guard Date() >= nextDiscovery else { return false }
                 nextDiscovery = Date().addingTimeInterval(10)
                 struct Next: Decodable { var id: String }
