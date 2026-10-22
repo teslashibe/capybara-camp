@@ -126,6 +126,12 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO request_controls(id,request_id,provider_id,kind,input_hash,accepted_text,state) VALUES($1,$2,$4,'steer',$3,'Preserved direction','resolved')`, controlID, request, bytes.Repeat([]byte{19}, 32), controlID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = provider.UpTo(ctx, 19); err != nil {
+		t.Fatal(err)
+	}
+	if Ready(ctx, pool) == nil {
+		t.Fatal("schema 19 accepted without transfer storage")
+	}
 	if err = Migrate(ctx, u.String()); err != nil {
 		t.Fatal(err)
 	}
@@ -134,6 +140,10 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	}
 	if err = Ready(ctx, pool); err != nil {
 		t.Fatal(err)
+	}
+	var transferCount int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM session_transfers`).Scan(&transferCount); err != nil || transferCount != 0 {
+		t.Fatal("migration invented session transfers", err)
 	}
 	var unrecorded bool
 	if err = pool.QueryRow(ctx, `SELECT execution_location IS NULL AND execution_epoch IS NULL AND execution_workspace_id IS NULL FROM planning_participants WHERE plan_id=$1`, plan).Scan(&unrecorded); err != nil || !unrecorded {

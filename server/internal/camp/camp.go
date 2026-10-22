@@ -22,9 +22,12 @@ type Store struct {
 	pool           *pgxpool.Pool
 	secret         []byte
 	providerCipher cipher.AEAD
+	transferSlots  chan struct{}
 }
 
-func New(pool *pgxpool.Pool, secret string) *Store { return &Store{pool: pool, secret: []byte(secret)} }
+func New(pool *pgxpool.Pool, secret string) *Store {
+	return &Store{pool: pool, secret: []byte(secret), transferSlots: make(chan struct{}, 2)}
+}
 
 type Camp struct {
 	ID     string `json:"id"`

@@ -210,6 +210,11 @@ Default settings, the prepared-workspace requirement and unfinished transfer
 behavior are documented in [execution locations](docs/execution-locations.md)
 and the delivery status.
 
+The Go API includes encrypted, resumable uploads for reviewed file-transfer
+manifests. They are an internal part of the unfinished transfer flow: a ready
+upload does not move the session or apply files. See the [transfer contract](docs/transfer-payload.md)
+for ownership, limits, recovery, and the remaining destination/handoff work.
+
 For operators, start with [self-hosting](docs/self-hosting.md), then the
 [runner provisioning guide](docs/runner-provisioning.md). The repository includes
 public Kubernetes and Hetzner K3s templates. Deploy the base Camp service and
@@ -305,7 +310,7 @@ schema and removes it on exit. It must never point at production.
 | [Cloud accounts](docs/cloud-accounts.md) | Account ownership, login and credential lifecycle |
 | [GitHub](docs/github.md) | GitHub App setup, repository authorization and checkouts |
 | [Execution locations](docs/execution-locations.md) | Run on Local/Cloud and transfer limits |
-| [Transfer payload](docs/transfer-payload.md) | Internal capture format, exclusions and remaining handoff work |
+| [Transfer payload](docs/transfer-payload.md) | Capture format, resumable upload API, encryption, limits and remaining handoff work |
 | [Cloud provider turns](docs/runner-turns.md) | Streaming, recovery and pending live acceptance |
 | [Cloud chat controls](docs/cloud-controls.md) | Steering, queues, approvals and delivery recovery |
 | [Self-hosting](docs/self-hosting.md) | Kubernetes/K3s configuration, upgrades and backups |
