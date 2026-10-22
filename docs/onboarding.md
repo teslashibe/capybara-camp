@@ -1,6 +1,6 @@
 # First-run setup
 
-V1 development adds a six-step native setup sheet. It opens for a new local
+V1 development includes a seven-step native setup sheet. It opens for a new local
 installation. Existing installations keep their board; anyone can reopen setup
 from **Capybara Camp → Set up Capybara Camp**.
 
@@ -31,13 +31,16 @@ from **Capybara Camp → Set up Capybara Camp**.
    links are optional and do not grant Git access. Creation saves before moving
    forward; an invalid name, unsafe URL or failed write leaves the inputs intact.
    Shared projects remain available in Camp settings.
-6. **Ready** shows the current import, connection and project state, offers
+6. **Defaults** chooses Local or Cloud for new plans through the shared execution
+   preferences form. Cloud requires a connected Camp; skipping leaves the
+   existing preference in place. This step does not move imported sessions.
+7. **Ready** shows the current import, connection and project state, offers
    optional desktop notifications through the existing macOS permission flow,
    and opens the board. New projects appear in the sidebar; setup keeps imported
    sessions visible and does not assign historical sessions automatically.
 
 Back preserves local project fields while the sheet is open. Skip this step advances past
-optional Camp/account/GitHub/project setup. Finish later closes the sheet and saves its current
+optional Camp/account/GitHub/project/defaults setup. Finish later closes the sheet and saves its current
 step and chosen local project. It does not reappear on every launch; the menu resumes it. A completed flow
 can be revisited from the beginning. Relaunch restores the step, not unsaved form
 text, email codes or invitation tokens. Successfully added sources and projects
@@ -73,7 +76,7 @@ folder picker cancellation, optional connection failures, project creation,
 notification choice, restart and the setup menu. A real second-user cloud test
 and provider account provisioning remain part of the overall V1 release gates.
 
-Local/Cloud execution defaults, repository execution grants and skill installation will extend
+Repository execution grants and skill installation will extend
 this flow when their underlying V1 services are implemented. They must show
 verified outcomes from those services; importing a
 folder or completing the sheet must never fabricate a connected account.
@@ -100,6 +103,12 @@ symlinks and reads no transcript content. Native computer use verified that the
 real build shows three discovered profile stores while their histories are
 still importing. No folder picker was used; the custom-path control stayed
 collapsed. These three stores are not a count of verified provider accounts.
+
+On October 22, the automatic-discovery and separate-profile/read-only-store
+regressions passed again with the Go race detector. Discovery covers standard
+and alternate profile folders in readable home directories, provider-home
+environment settings passed to the app, and saved custom roots. It does not
+search arbitrary files across the whole disk or bypass macOS folder access.
 
 ### Cloud account regression checks
 

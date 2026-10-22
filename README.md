@@ -74,9 +74,9 @@ The current unreleased V1 work is on `codex/capybara-v1`. To try that work,
 switch to that branch before building. The default branch and published
 download may be behind the development branch.
 
-The [six-step onboarding flow](docs/onboarding.md) discovers local profiles,
+The [seven-step onboarding flow](docs/onboarding.md) discovers local profiles,
 then offers optional Camp sign-in, cloud provider accounts, GitHub, a project
-and notifications. Each optional step can be skipped. **Finish later** saves
+and Local/Cloud defaults, followed by notifications. Each optional step can be skipped. **Finish later** saves
 your place; **Capybara Camp → Set up Capybara Camp** reopens setup.
 
 Profile discovery does not require choosing folders. Use **Manage sources**
