@@ -78,6 +78,7 @@ struct SharedPlanningModelMenu: View {
     let id: String
     let slot: Int
     var expanded = false
+    var cardRow = false
     var body: some View {
         if let draft = planning.draft(id), draft.input.planners.indices.contains(slot) {
             let p = draft.input.planners[slot]
@@ -87,7 +88,7 @@ struct SharedPlanningModelMenu: View {
             ModelSettingsMenu(provider: provider, title: "\(provider) planner", sessionModel: p.model,
                 modelLabel: p.model.isEmpty ? "Session default" : p.model, models: models,
                 caps: models.first { $0.id == p.model } ?? ModelOption(id: p.model, label: p.model),
-                choice: ModelTuning(effort: p.effort, speed: p.speed), locked: planning.pending(id), expanded: expanded, context: "Model for this planning revision",
+                choice: ModelTuning(effort: p.effort, speed: p.speed), locked: planning.pending(id), expanded: expanded, planningRow: cardRow, context: "Model for this planning revision",
                 selectModel: { planning.selectModel(id, slot: slot, model: $0) },
                 tune: { effort, speed in planning.edit(id) { input in if let effort { input.planners[slot].effort = effort }; if let speed { input.planners[slot].speed = speed } } })
         }
@@ -101,41 +102,46 @@ struct SharedPlanningCard: View {
     var body: some View {
         let id = session.sessionID, draft = planning.draft(id), ticket = planning.tickets.first { $0.id == id }
         let mode = draft?.input.workflow ?? ticket?.workflow ?? .comparison
-        VStack(alignment: .leading, spacing: 8) {
+        CampTaskCard(store: store, session: session) {
             HStack {
-                ProviderMark(provider: "Planning", size: 17)
-                Text("Planning").font(.system(size: 10, weight: .medium)).foregroundStyle(campMuted)
+                CampCardProvider(provider: "Planning")
                 Spacer()
                 Image(systemName: "person.2").font(.system(size: 10)).foregroundStyle(campMuted).help("Shared Camp")
-                Menu { Button("Open plan") { store.open(session) };ProjectAssignmentMenu(store:store,session:session) } label: { Image(systemName: "ellipsis").frame(width: 24, height: 20) }
+                Menu { Button("Open plan") { store.open(session) };ProjectAssignmentMenu(store:store,session:session) } label: { Image(systemName: "ellipsis").foregroundStyle(campMuted).frame(width: 28, height: 28) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Plan actions for \(session.title)")
             }
-            Button { store.open(session) } label: {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34, alignment: .topLeading)
-                    Label(store.projectSummary(session), systemImage: "folder").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
-                    HStack { Text(mode.title); Spacer(); Text(Date(timeIntervalSince1970: session.updated), style: .relative) }.font(.system(size: 9)).foregroundStyle(campMuted)
-                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain)
-            Divider().overlay(campInk.opacity(0.04))
-            if let draft {
-                ForEach(draft.input.planners.indices, id: \.self) { slot in SharedPlanningModelMenu(store: store, planning: planning, id: id, slot: slot) }
-            } else if let ticket {
-                ForEach(ticket.planners, id: \.slot) { p in
-                    ModelSettingsMenu(provider: p.provider, title: "\(p.provider) planner", sessionModel: p.model, modelLabel: p.model,
-                        models: [], caps: ModelOption(id: p.model, label: p.model), choice: ModelTuning(effort: p.effort, speed: p.speed), locked: true, selectModel: { _ in }, tune: { _, _ in })
+        } models: {
+            VStack(spacing: 0) {
+                if let draft {
+                    ForEach(draft.input.planners.indices, id: \.self) { slot in
+                        let provider = store.cloud.sessions.first { $0.id == draft.input.planners[slot].sessionId }?.provider ?? (slot == 0 ? "Codex" : "Claude")
+                        PlanningCardModelRow(provider: provider, open: { store.openPlan(session, slot: slot) }) {
+                            SharedPlanningModelMenu(store: store, planning: planning, id: id, slot: slot, cardRow: true)
+                        }
+                    }
+                } else if let ticket {
+                    ForEach(ticket.planners, id: \.slot) { p in
+                        PlanningCardModelRow(provider: p.provider, open: { store.openPlan(session, slot: p.slot) }) {
+                            ModelSettingsMenu(provider: p.provider, title: "\(p.provider) planner", sessionModel: p.model, modelLabel: p.model,
+                                models: [], caps: ModelOption(id: p.model, label: p.model), choice: ModelTuning(effort: p.effort, speed: p.speed), locked: true, planningRow: true, selectModel: { _ in }, tune: { _, _ in })
+                        }
+                    }
                 }
             }
-            Spacer(minLength: 0)
+        } status: {
             HStack(spacing: 6) {
                 if ticket?.state == "running" || planning.pending(id) { ProgressView().controlSize(.mini).frame(width: 12, height: 12) }
+                else { Image(systemName: ticket?.state == "ready" ? "checkmark" : "circle").font(.system(size: 8)) }
                 Text(draft?.cancelRequested == true ? "Cancellation waiting to sync" : planning.pending(id) ? "Waiting to sync" : ticket?.state == "ready" ? "Plan ready to review" : "\(ticket?.completed ?? 0) of \(mode.turnLimit) · \(ticket?.state ?? "draft")")
                     .font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
-                Spacer()
-                Button { store.open(session) } label: { Image(systemName: "chevron.right").frame(width: 28, height: 28) }.buttonStyle(.plain).help("Open plan")
-            }.frame(height: 17)
-        }.modifier(CampCardStyle())
+            }
+        } actions: {
+            HStack {
+                Button { store.openPlan(session, section: "History") } label: { Label("History", systemImage: "clock.arrow.circlepath").frame(minHeight: 28).contentShape(Rectangle()) }.buttonStyle(.plain).disabled(draft != nil)
+                Spacer(minLength: 4)
+                CampCardOpenAction(title: "Open plan") { store.openPlan(session) }
+            }
+        }
     }
 }
 
@@ -205,10 +211,15 @@ struct SharedPlanningWorkspace: View {
                     }
                 }.padding(22).disabled(planning.pending(id) && draft.cancelRequested)
             }.disabled(!planning.ready).onChange(of: draft.input.workflow) { _, _ in focusedSlot = nil }
+                .onAppear { applyCardNavigation() }.onChange(of: store.planNavigation) { _, _ in applyCardNavigation() }
         } else if let result = planning.detail(id, version: planning.selectedVersion) {
             SharedPlanningResultView(store: store, result: result)
         } else {
             VStack(spacing: 12) { ProgressView(); Text(planning.error.isEmpty ? "Loading plan" : planning.error); Button("Back to board") { store.view = "Board" } }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+    private func applyCardNavigation() {
+        guard let request = store.planNavigation, request.id == "camp-plan-draft:" + id else { return }
+        focusedSlot = request.slot.flatMap { planning.draft(id)?.input.planners.indices.contains($0) == true ? $0 : nil }
     }
 }

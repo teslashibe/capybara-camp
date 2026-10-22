@@ -77,11 +77,16 @@ struct SharedPlanningResultView: View {
                 }.disabled(store.sharedPlanning.pending(result.id))
                 if !store.sharedPlanning.error.isEmpty { Text(store.sharedPlanning.error).font(.caption).foregroundStyle(.orange) }
             }.padding(22).frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.onAppear { if store.notificationPlanVersion != nil && result.version.workflow == .comparison { section = "Combined plan" } }
+        }.onAppear {
+            if store.notificationPlanVersion != nil && result.version.workflow == .comparison { section = "Combined plan" }
+            applyCardNavigation()
+        }
+            .onChange(of: store.planNavigation) { _, _ in applyCardNavigation() }
             .onChange(of: result.version.workflow) { _, _ in section = "Plans"; focusedSlot = nil }
             .onChange(of: result.id) { _, _ in
                 section = store.notificationPlanVersion != nil && result.version.workflow == .comparison ? "Combined plan" : "Plans"
                 focusedSlot = nil
+                applyCardNavigation()
             }
     }
     private var plannerPanes: some View {
@@ -98,6 +103,11 @@ struct SharedPlanningResultView: View {
                     .id("\(result.id):\(result.version.version):\(planner.slot):\(section)")
             }
         }
+    }
+    private func applyCardNavigation() {
+        guard let request = store.planNavigation, request.id == "camp-plan:" + result.id else { return }
+        section = request.section
+        focusedSlot = request.slot.flatMap { slot in result.version.planners.contains { $0.slot == slot } ? slot : nil }
     }
     private var participants: [PlanningParticipant] {
         result.version.planners.map { planner in

@@ -4,16 +4,26 @@ import AppKit
 struct ProviderMark: View {
     let provider: String
     var size: CGFloat = 18
+    var muted = false
     static func wash(_ provider: String) -> Color { Color(hex: provider == "Claude" ? 0xFBEDE5 : provider == "Planning" ? 0xF1EAF8 : 0xEAF2EC) }
+    static func ink(_ provider: String) -> Color { Color(hex: provider == "Claude" ? 0xAD5636 : provider == "Planning" ? 0x75539D : 0x396C4D) }
     var body: some View {
-        Image(nsImage: Self.image(provider: provider, size: size))
-            .resizable().scaledToFit().frame(width: size, height: size).accessibilityHidden(true)
+        Group {
+            if muted {
+                if provider == "Claude" {
+                    Image(nsImage: Self.image(provider: provider, size: size, muted: true)).resizable().scaledToFit()
+                } else {
+                    Image(nsImage: Self.image(provider: provider, size: size)).renderingMode(.template)
+                        .resizable().scaledToFit().foregroundStyle(campMuted)
+                }
+            } else { Image(nsImage: Self.image(provider: provider, size: size)).resizable().scaledToFit() }
+        }.frame(width: size, height: size).accessibilityHidden(true)
     }
     private static let scaledImages = NSCache<NSString, NSImage>()
-    private static func image(provider: String, size: CGFloat) -> NSImage {
-        let key = "\(provider):\(size)" as NSString
+    private static func image(provider: String, size: CGFloat, muted: Bool = false) -> NSImage {
+        let key = "\(provider):\(size):\(muted)" as NSString
         if let cached = scaledImages.object(forKey: key) { return cached }
-        let source = provider == "Claude" ? claudeImage : provider == "Planning" ? planningImage : codexImage
+        let source = provider == "Claude" ? (muted ? mutedClaudeImage : claudeImage) : provider == "Planning" ? planningImage : codexImage
         // AppKit menus use the image's intrinsic size, even when a SwiftUI
         // frame is smaller. Cache the correct intrinsic size for that surface.
         let result = NSImage(size: NSSize(width: size, height: size), flipped: true) { _ in
@@ -25,8 +35,11 @@ struct ProviderMark: View {
     }
     // These paths match the approved mock. Native Menu labels render NSImage
     // reliably, so every card, menu and chat reuses the same cached marks.
-    private static let claudeImage = NSImage(size: NSSize(width: 22, height: 22), flipped: true) { _ in
-        color(0xAD5636).setFill()
+    private static let claudeImage = makeClaudeImage(0xAD5636)
+    private static let mutedClaudeImage = makeClaudeImage(0x9C664F)
+    private static func makeClaudeImage(_ fill: Int) -> NSImage {
+      NSImage(size: NSSize(width: 22, height: 22), flipped: true) { _ in
+        color(fill).setFill()
         let path = NSBezierPath()
         let points: [NSPoint] = [(5,3),(17,3),(17,6),(20,6),(20,15),(17,15),(17,19),(15,19),(15,15),(12,15),(12,19),(10,19),(10,15),(7,15),(7,19),(5,19),(5,15),(2,15),(2,6),(5,6)].map { NSPoint(x: $0.0, y: $0.1) }
         path.move(to: points[0])
@@ -35,6 +48,7 @@ struct ProviderMark: View {
         NSColor.white.setFill()
         for x in [6,14] { NSBezierPath(rect: NSRect(x: x, y: 8, width: 2, height: 3)).fill() }
         return true
+      }
     }
     private static let codexImage = NSImage(size: NSSize(width: 22, height: 22), flipped: true) { _ in
         color(0x396C4D).setStroke()

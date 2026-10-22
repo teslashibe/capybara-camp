@@ -2,6 +2,11 @@ import Foundation
 
 @main struct SessionMentionsTests {
     @MainActor static func main() async throws {
+        precondition(sessionMentionQuery("Read @") == "")
+        precondition(sessionMentionQuery("Use this\n@navigation") == "navigation")
+        precondition(sessionMentionQuery("email@example.com") == nil)
+        precondition(sessionMentionQuery("@already finished") == nil)
+        precondition(sessionMentionQuery("@" + String(repeating: "a", count: 81)) == nil)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("camp-context-tests-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = CampStore(stateDirectory: root)

@@ -41,6 +41,8 @@ the release candidate after remaining capabilities are implemented.
 | UI-17 | Toast placement and main-chat response metadata differ from the reference | The foreground toast now uses the compact dark bottom-center layout. Notification history uses the right-side drawer, unread rows, separate settings and count badge. The second native pass verified Escape returns focus to the bell, Tab and arrow-key filtering, result navigation and mark-all-read. Native history and live replies now preserve the recorded model, effort and speed. The synthetic Claude capture shows distinct settings for two replies and provider-only text for an unknown reply. Changing the next model did not relabel past messages; child transcripts also showed their own model. Missing provider metadata remains unset |
 | UI-18 | Provider questions were centered and the scroll area collapsed to a partial option list | Left alignment and question headers are corrected. The review caught that an ideal height still shrank under the main transcript, so the question viewport now reserves 180 points and scrolls longer content. Verified the final form at 1370×860 and after native zoom to 1728×1005 and back: both questions and all choices remained visible, and submitting a selected option plus text resolved the request. The 1060×720 minimum and larger question sets remain in the final audit |
 | UI-19 | An acknowledged Stop showed the unconfirmed-exit warning | Confirmed cancellation now says Stopped. The native fixture verified the banner and Active now returning to zero; the conversation regression still distinguishes uncertain exits |
+| UI-20 | Card types used different internal spacing and planning put its status in the footer | One shared card now fixes the heading, summary, models, status and actions into the reference's slots. Planning has compact provider/model rows and separate History/Open plan actions. The first native check passed Claude planner drill-down and equal-height single/comparison/session cards. Final signed-build checks are recorded below |
+| UI-21 | Child chats lacked the reference's title, status row and return action | The selected child now updates the main heading, shows its own read-only transcript and returns through Main chat. The tree has a connecting line, provider icons and separate status text. Recent sessions use tinted provider icons. Native child navigation and return passed at wide and narrow sizes |
 
 Local captures are in `build/ui-audit/`: `reference-chat.png`,
 `reference-board.png`, `reference-planning.png`, `native-chat-before.png`, and
@@ -220,3 +222,39 @@ synthetic profiles. This does not complete the full UI or release acceptance.
 The final normal signed build also displayed the three metadata cases together
 in `message-normal-final.png`. It uses synthetic state, leaves the existing app
 in place, and does not register the production source-link scheme.
+
+## Card and conversation layout review
+
+Compared the reference's final CSS with the native board, ordinary chat and
+child chat. Card height is 264 points, with fixed heading, summary, model,
+status and action rows. Local and shared plans use the same card component as
+provider sessions. The compact planning rows retain settings in their menu or
+accessible description, and their provider buttons open the corresponding chat.
+History has its own action. Colors remain neutral, including the separators.
+
+The first computer-use cycle checked single and comparison cards, opened the
+Claude planner, entered planning history, selected the accessibility child and
+returned to Main chat. The child title, read-only status, parent link and
+separate recent-session list were visible after narrowing the window. Captures
+are `native-board-pass21.png`, `native-child-pass21.png` and
+`reference-child-pass21.png` in `build/ui-audit/`.
+
+That cycle caught the loss of the Claude robot's eyes when applying a template
+tint. The muted icon now has its own colored drawing. It also identified the
+extra empty context row above the composer. The shared context chips now appear
+above the transcript, and the chat picker opens from `@ Context` beside Send.
+The composer follows the reference's 100-point outer height.
+
+The state, local/shared planning, implementation, conversation and context
+suites passed. The normal signed development build then verified the compact
+Claude icon, the Context button, typing `@`, choosing a two-message snapshot,
+the chip above the transcript, removal, and clearing the synthetic draft. The
+strip retained its bounded height. Captures are `final-board-pass21.png` and
+`final-context-pass21.png`.
+
+The current build is `build/Capybara Camp UI Audit Current.app`, with bundle ID
+`com.capybaracamp.current-layout-review`, isolated synthetic state and an Apple
+Development signature. It does not register the production source-link scheme
+or replace the user's existing app. The diff passed the local secret scan.
+This review does not complete the remaining cloud, memory, skills or full
+release audit.

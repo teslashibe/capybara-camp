@@ -212,12 +212,35 @@ struct SessionContextComposer: View {
     let destination: CampSession
     @State private var picking = false
     @State private var initialQuery = ""
-    var references: [SessionReference] { mentions.references(for: destination.id) }
     var body: some View {
         HStack(spacing: 8) {
             Button { initialQuery = ""; picking = true } label: { Image(systemName: "at").frame(width: 28, height: 28) }
                 .buttonStyle(.plain).help("Attach a session as context").accessibilityLabel("Attach session context")
                 .popover(isPresented: $picking) { SessionContextPicker(store: store, destination: destination, query: initialQuery) { picking = false } }
+            SessionContextChips(store: store, mentions: mentions, destination: destination, showPlaceholder: true)
+        }
+        .onChange(of: store.draft) { _, text in
+            if !picking, let query = sessionMentionQuery(text) { initialQuery = query; picking = true }
+        }
+    }
+}
+
+func sessionMentionQuery(_ text: String) -> String? {
+    guard let suffix = text.split(separator: "\n", omittingEmptySubsequences: false).last,
+          let at = suffix.lastIndex(of: "@"), at == suffix.startIndex || suffix[suffix.index(before: at)].isWhitespace else { return nil }
+    let search = String(suffix[suffix.index(after: at)...])
+    return search.count <= 80 && !search.contains(" ") ? search : nil
+}
+
+struct SessionContextChips: View {
+    @ObservedObject var store: CampStore
+    @ObservedObject var mentions: SessionMentions
+    let destination: CampSession
+    var showPlaceholder = false
+    var transcriptStrip = false
+    private var references: [SessionReference] { mentions.references(for: destination.id) }
+    var body: some View {
+        if !references.isEmpty || showPlaceholder {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 7) {
                     ForEach(references) { source in
@@ -229,15 +252,9 @@ struct SessionContextComposer: View {
                                 .buttonStyle(.plain).help("Remove source")
                         }.font(.system(size: 10)).padding(.leading, 8).background(campGreen.opacity(0.07)).clipShape(RoundedRectangle(cornerRadius: 7))
                     }
-                    if references.isEmpty { Text("Tag any session with @").font(.system(size: 10)).foregroundStyle(campMuted) }
+                    if references.isEmpty && showPlaceholder { Text("Tag any session with @").font(.system(size: 10)).foregroundStyle(campMuted) }
                 }
-            }
-        }
-        .onChange(of: store.draft) { _, text in
-            guard !picking, let suffix = text.split(separator: "\n", omittingEmptySubsequences: false).last,
-                  let at = suffix.lastIndex(of: "@"), at == suffix.startIndex || suffix[suffix.index(before: at)].isWhitespace else { return }
-            let search = String(suffix[suffix.index(after: at)...])
-            if search.count <= 80 && !search.contains(" ") { initialQuery = search; picking = true }
+            }.frame(height: 28).padding(.horizontal, transcriptStrip ? 22 : 0).padding(.bottom, transcriptStrip ? 7 : 0)
         }
     }
 }

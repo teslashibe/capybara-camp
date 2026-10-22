@@ -1,6 +1,95 @@
 import SwiftUI
 import AppKit
 
+// All task types use the reference's six fixed slots. Long titles and a second
+// planning model must not move the status or actions into a neighboring card.
+struct CampTaskCard<Heading: View, Models: View, Status: View, Actions: View>: View {
+    @ObservedObject var store: CampStore
+    let session: CampSession
+    let heading: Heading
+    let models: Models
+    let status: Status
+    let actions: Actions
+    init(store: CampStore, session: CampSession, @ViewBuilder heading: () -> Heading,
+         @ViewBuilder models: () -> Models, @ViewBuilder status: () -> Status,
+         @ViewBuilder actions: () -> Actions) {
+        self.store = store; self.session = session
+        self.heading = heading(); self.models = models(); self.status = status(); self.actions = actions()
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            heading.frame(height: 28)
+            Button { store.open(session) } label: {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
+                        .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 32, alignment: .top)
+                    Label(store.projectSummary(session), systemImage: "folder").font(.system(size: 10)).foregroundStyle(campMuted)
+                        .lineLimit(1).frame(height: 13)
+                    HStack { Text(session.sourceLabel).lineLimit(1); Spacer(minLength: 4)
+                        Text(Date(timeIntervalSince1970: session.updated), style: .relative).lineLimit(1)
+                    }.font(.system(size: 9)).foregroundStyle(campMuted).frame(height: 12)
+                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            }.buttonStyle(.plain).frame(height: 67)
+            Rectangle().fill(Color(hex: 0xECECE7)).frame(height: 1)
+            models.frame(maxWidth: .infinity, alignment: .leading).frame(height: 52)
+            status.font(.system(size: 10)).foregroundStyle(campMuted).frame(maxWidth: .infinity, alignment: .leading).frame(height: 28)
+            actions.font(.system(size: 10)).foregroundStyle(campMuted).frame(maxWidth: .infinity).frame(height: 28)
+                .overlay(alignment: .top) { Rectangle().fill(Color(hex: 0xF0F0EC)).frame(height: 1) }
+        }.padding(14).frame(maxWidth: .infinity).frame(height: 264, alignment: .topLeading)
+            .background(.white).clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(hex: 0xDEDFD8)))
+    }
+}
+
+struct CampCardProvider: View {
+    let provider: String
+    var body: some View {
+        HStack(spacing: 5) {
+            ProviderMark(provider: provider, size: 13, muted: true)
+            Text(provider).font(.system(size: 10, weight: .medium)).foregroundStyle(campMuted)
+        }
+    }
+}
+
+struct CampCardOpenAction: View {
+    let title: String
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) { Text(title); Image(systemName: "chevron.right").font(.system(size: 8)) }
+                .frame(minHeight: 28).contentShape(Rectangle())
+        }.buttonStyle(.plain)
+    }
+}
+
+struct PlanningCardModelRow<Content: View>: View {
+    let provider: String
+    let open: () -> Void
+    @ViewBuilder let content: () -> Content
+    var body: some View {
+        HStack(spacing: 8) {
+            Button(action: open) { CampCardProvider(provider: provider).frame(width: 62, alignment: .leading).frame(height: 26).contentShape(Rectangle()) }
+                .buttonStyle(.plain).accessibilityLabel("Open \(provider) planner")
+            content().frame(maxWidth: .infinity, alignment: .leading)
+        }.frame(height: 26)
+    }
+}
+
+struct PlanNavigationRequest: Equatable {
+    var id: String
+    var section: String
+    var slot: Int?
+    var nonce = UUID()
+}
+
+extension CampStore {
+    func openPlan(_ session: CampSession, section: String = "Plans", slot: Int? = nil) {
+        open(session)
+        reviewingPlan = session.id
+        planNavigation = PlanNavigationRequest(id: session.id, section: section, slot: slot)
+    }
+}
+
 // App-owned sheets must allow the normal application delegate to save and quit.
 // AppKit otherwise rejects termination before asking the delegate.
 private struct CampWindowConfiguration: NSViewRepresentable {

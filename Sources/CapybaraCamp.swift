@@ -246,6 +246,9 @@ final class TranscriptWatch {
     @Published var shareSheet: CampSession?
     @Published var contextInspection: ContextInspection?
     @Published var reviewingPlan: String?
+    @Published var planNavigation: PlanNavigationRequest?
+    @Published var selectedChildID: String?
+    var selectedChild: ChildSession? { children.first { $0.id == selectedChildID } }
     var implementationTranscriptReader: ((CampSession, Int) async throws -> Transcript)?
     @Published var cloudSessions: [String: CloudSession] = [:]
     @Published var recentType = "All types"
@@ -862,6 +865,8 @@ final class TranscriptWatch {
     func open(_ session: CampSession) {
         sharedPlanResult = nil
         reviewingPlan = nil
+        planNavigation = nil
+        selectedChildID = nil
         notificationPlanVersion = nil; notificationMessageID = nil
         if selectedID != session.id {
             if let previous = selectedID { drafts[previous] = draft }
@@ -1311,7 +1316,7 @@ struct RootView: View {
     var header: some View {
         VStack(alignment: .leading, spacing: 19) {
             HStack {
-                VStack(alignment: .leading, spacing: 5) { Text(store.view == "Board" ? "Your Camp for big ideas" : store.sharedPlanResult?.title ?? store.selected?.title ?? "Choose a session").font(.system(size: 23, weight: .semibold)).lineLimit(1); Text(store.view == "Board" ? "\(store.filtered.count.formatted()) \(store.filtered.count == 1 ? "session" : "sessions") · Pick up where you left off" : store.sharedPlanResult != nil ? "Planning · Shared Camp" : "\(store.selected?.provider ?? "") · \(store.selected.map(store.projectSummary) ?? "")").font(.system(size: 12)).foregroundStyle(campMuted) }
+                VStack(alignment: .leading, spacing: 5) { Text(headerTitle).font(.system(size: 23, weight: .semibold)).lineLimit(1); Text(headerSubtitle).font(.system(size: 12)).foregroundStyle(campMuted) }
                 Spacer()
                 if store.view == "Chat", let selected=store.selected { ProjectAssignmentMenu(store:store,session:selected) }
                 Menu {
@@ -1333,6 +1338,14 @@ struct RootView: View {
                 HStack { Image(systemName: "magnifyingglass"); TextField("Find a session or project", text: $store.search).textFieldStyle(.plain) }.font(.system(size: 12)).foregroundStyle(campMuted).padding(9).frame(width: 255).background(.white.opacity(0.8)).clipShape(RoundedRectangle(cornerRadius: 8))
             }
         }.padding(25)
+    }
+    private var headerTitle: String {
+        store.view == "Board" ? "Your Camp for big ideas" : store.selectedChild?.name ?? store.sharedPlanResult?.title ?? store.selected?.title ?? "Choose a session"
+    }
+    private var headerSubtitle: String {
+        if store.view == "Board" { return "\(store.filtered.count.formatted()) \(store.filtered.count == 1 ? "session" : "sessions") · Pick up where you left off" }
+        if store.selectedChild != nil { return "Subagent of \(store.selected?.title ?? "")" }
+        return store.sharedPlanResult != nil ? "Planning · Shared Camp" : "\(store.selected?.provider ?? "") · \(store.selected.map(store.projectSummary) ?? "")"
     }
 }
 
@@ -1381,10 +1394,9 @@ struct SessionCard: View {
         return live.state == "running" ? "Running in \(live.owner)" : live.state == "idle" ? "Open in \(live.owner)" : "\(live.owner) · \(live.state)"
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        CampTaskCard(store: store, session: session) {
             HStack {
-                ProviderMark(provider: session.provider, size: 17)
-                Text(session.provider).font(.system(size: 10, weight: .medium)).foregroundStyle(campMuted)
+                CampCardProvider(provider: session.provider)
                 if session.isCloud { Image(systemName: "person.2").font(.system(size: 9)).foregroundStyle(campMuted).help("Shared Camp session") }
                 Spacer()
                 Menu {
@@ -1392,18 +1404,12 @@ struct SessionCard: View {
                     ProjectAssignmentMenu(store:store,session:session)
                     if !session.isCloud && session.provider != "Planning" { Button("Permissions…") { store.permissionSheet = session } }
                     if let local = store.shareSource(session) { Divider(); Button("Share with Camp…") { store.shareSheet = local } }
-                } label: { Image(systemName: "ellipsis").frame(width: 24, height: 20) }
+                } label: { Image(systemName: "ellipsis").foregroundStyle(campMuted).frame(width: 28, height: 28) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Move \(session.title)")
             }
-            Button { store.open(session) } label: {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading).frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34, alignment: .topLeading)
-                    HStack(spacing: 4) { Image(systemName: "folder"); Text(store.projectSummary(session)).lineLimit(1) }.font(.system(size: 10)).foregroundStyle(campMuted)
-                    HStack { Text(session.sourceLabel).lineLimit(1); Spacer(); Text(Date(timeIntervalSince1970: session.updated), style: .relative).lineLimit(1) }.font(.system(size: 9)).foregroundStyle(campMuted)
-                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain)
-            Divider().overlay(campInk.opacity(0.04))
+        } models: {
             ModelMenu(store: store, session: session).frame(maxWidth: .infinity, alignment: .leading)
+        } status: {
             HStack(alignment: .center, spacing: 6) {
                 if running || live != nil {
                     HStack(spacing: 7) {
@@ -1412,16 +1418,18 @@ struct SessionCard: View {
                         else { Circle().fill(campGreen).frame(width: 5, height: 5) }
                         Text(statusText).lineLimit(1)
                     }.foregroundStyle(campGreen).font(.system(size: 10))
-                } else { Text(store.stage(session).rawValue).font(.system(size: 10)).foregroundStyle(campMuted) }
+                } else {
+                    Image(systemName: store.stage(session) == .done ? "checkmark" : "circle").font(.system(size: 7))
+                    Text(store.stage(session).rawValue)
+                }
                 Spacer(minLength: 0)
                 if !store.queued(session).isEmpty { Text("\(store.queued(session).count) queued").font(.system(size: 9)).foregroundStyle(campMuted) }
-            }.frame(height: 17)
-            Spacer(minLength: 0)
-            Divider().overlay(campInk.opacity(0.04))
+            }
+        } actions: {
             Button { store.open(session) } label: {
-                HStack { Label("Subagents", systemImage: "person.2"); Spacer(); Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold)) }.frame(minHeight: 24).contentShape(Rectangle())
+                HStack { Label("Subagents", systemImage: "person.2"); Spacer() }.frame(minHeight: 28).contentShape(Rectangle())
             }.buttonStyle(.plain).font(.system(size: 10)).foregroundStyle(campMuted).help("Show subagents")
-        }.modifier(CampCardStyle())
+        }
             .contextMenu { ForEach(Stage.allCases, id: \.self) { dest in Button("Move to \(dest.rawValue)") { store.move(session.id, dest) } } }
     }
 }
@@ -1445,9 +1453,15 @@ struct RecentSessionsList: View {
                 LazyVStack(spacing: 5) {
                     ForEach(store.recentSessions) { s in Button { store.open(s) } label: {
                         HStack(alignment: .top, spacing: 8) {
-                            ProviderMark(provider: s.provider, size: 15).padding(.top, 2)
-                            VStack(alignment: .leading, spacing: 5) { Text(s.title).font(.system(size: 12, weight: .medium)).lineLimit(2); Text("\(s.provider) · \(store.projectSummary(s))").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1) }
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(8).background(store.selectedID == s.id ? campGreen.opacity(0.10) : .clear).clipShape(RoundedRectangle(cornerRadius: 8))
+                            ProviderMark(provider: s.provider, size: 15).frame(width: 25, height: 25)
+                                .background(ProviderMark.wash(s.provider)).clipShape(RoundedRectangle(cornerRadius: 6)).padding(.top, 1)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(s.title).font(.system(size: 12, weight: .medium)).lineLimit(2)
+                                Text("\(Text(s.provider).foregroundColor(ProviderMark.ink(s.provider)))\(Text(" · \(store.projectSummary(s))").foregroundColor(campMuted))")
+                                    .font(.system(size: 9)).lineLimit(1)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 7).padding(.vertical, 8)
+                            .background(store.selectedID == s.id ? Color(hex: 0xEEEEE7) : .clear).clipShape(RoundedRectangle(cornerRadius: 6))
                     }.buttonStyle(.plain) }
                     if store.recentSessions.isEmpty { Text("No recent \(store.recentType == "All types" ? "" : store.recentType.lowercased() + " ")sessions").font(.caption).foregroundStyle(campMuted).padding() }
                 }.padding(10)
@@ -1459,15 +1473,20 @@ struct RecentSessionsList: View {
 }
 struct ChatView: View {
     @ObservedObject var store: CampStore
-    @State private var pickedChild: ChildSession?
+    private var pickedChild: ChildSession? {
+        get { store.selectedChild }
+        nonmutating set { store.selectedChildID = newValue?.id }
+    }
     @State private var subagentsExpanded = true
+    @State private var contextPicking = false
+    @State private var contextQuery = ""
     var currentChild: ChildSession? { store.children.first { $0.id == pickedChild?.id } }
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 if let session = store.selected {
                     VStack(alignment: .leading, spacing: 9) {
-                        HStack(spacing: 5) { ProviderMark(provider: session.provider, size: 14); Text(session.provider).font(.system(size: 10, weight: .medium)).foregroundStyle(campMuted) }
+                        ProviderBadge(provider: session.provider)
                         Text(session.title).font(.system(size: 12, weight: .medium)).lineLimit(2)
                     }.padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 4)
                     Button { pickedChild = nil } label: {
@@ -1479,7 +1498,7 @@ struct ChatView: View {
                             }
                             Spacer(minLength: 0)
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
-                            .background(pickedChild == nil ? campGreen.opacity(0.1) : .clear).clipShape(RoundedRectangle(cornerRadius: 8))
+                            .background(pickedChild == nil ? Color(hex: 0xDFE5D8) : .clear).clipShape(RoundedRectangle(cornerRadius: 7))
                     }.buttonStyle(.plain).padding(.horizontal, 10).accessibilityLabel(session.isPlan ? "Implementation" : "Main chat")
                     Button { subagentsExpanded.toggle() } label: {
                         HStack(spacing: 6) {
@@ -1496,22 +1515,25 @@ struct ChatView: View {
                             ForEach(store.children) { child in
                                 Button { pickedChild = child } label: {
                                     HStack(alignment: .top, spacing: 8) {
-                                        Image(systemName: "arrow.turn.down.right").foregroundStyle(campMuted)
+                                        if child.status == "running" { ProgressView().controlSize(.mini).frame(width: 13, height: 13) }
+                                        else { ProviderMark(provider: session.provider, size: 13) }
                                         VStack(alignment: .leading, spacing: 4) {
                                             Text(child.name).font(.system(size: 11, weight: .medium)).lineLimit(1)
-                                            Text(child.phase.isEmpty ? child.status : "\(child.status) · \(child.phase)").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(2)
+                                            Text(child.phase.isEmpty ? child.workflow : child.phase).font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
                                         }
                                         Spacer(minLength: 0)
-                                        if child.status == "running" { ProgressView().controlSize(.mini) }
-                                    }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
-                                        .background(pickedChild?.id == child.id ? campGreen.opacity(0.1) : .clear).clipShape(RoundedRectangle(cornerRadius: 8))
+                                        Text(child.status.capitalized).font(.system(size: 9)).foregroundStyle(campMuted).lineLimit(1)
+                                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 5).padding(.vertical, 8)
+                                        .background(pickedChild?.id == child.id ? Color(hex: 0xDFE5D8) : .clear).clipShape(RoundedRectangle(cornerRadius: 7))
                                 }.buttonStyle(.plain)
                             }
                             if store.children.isEmpty && !store.childrenLoading {
                                 Text(session.isCloud ? "Subagents have not been shared" : "No saved subagents").font(.system(size: 10)).foregroundStyle(campMuted).padding(10)
                             }
-                        }.padding(.leading, 20).padding(.trailing, 10)
-                    }.frame(maxHeight: store.children.isEmpty ? 35 : min(CGFloat(store.children.count) * 54, 170))
+                        }.padding(.leading, 7)
+                    }.overlay(alignment: .leading) { Rectangle().fill(Color(hex: 0xCCD4C5)).frame(width: 1) }
+                        .padding(.leading, 23).padding(.trailing, 10)
+                        .frame(maxHeight: store.children.isEmpty ? 35 : min(CGFloat(store.children.count) * 54, 180))
                     }
                     if session.isPlan {
                         Button { store.reviewingPlan = session.id } label: {
@@ -1526,10 +1548,10 @@ struct ChatView: View {
             Rectangle().fill(campInk.opacity(0.08)).frame(width: 1)
             VStack(spacing: 0) {
                 if let child = currentChild, let parent = store.selected {
-                    ChildTranscriptView(store: store, parent: store.shareSource(parent) ?? parent, child: child).id("\(parent.id):\(child.id)")
+                    ChildTranscriptView(store: store, parent: store.shareSource(parent) ?? parent, child: child, openMain: { pickedChild = nil }).id("\(parent.id):\(child.id)")
                 } else if let s = store.selected {
                     HStack {
-                        Label(s.isPlan ? "Implementation" : "Main chat", systemImage: "bubble.left").font(.system(size: 11)); Spacer()
+                        HStack(spacing: 7) { ProviderMark(provider: s.provider, size: 16); Text(s.isPlan ? "Implementation" : "Main chat") }.font(.system(size: 11)); Spacer()
                         if let local = store.shareSource(s) { Button { store.shareSheet = local } label: { Image(systemName: "person.2") }.buttonStyle(.plain).help("Share with Camp").accessibilityLabel("Share with Camp") }
                         ModelMenu(store: store, session: s, expanded: true)
                         if !s.isCloud && s.provider != "Planning" { Button { store.permissionSheet = s } label: { Image(systemName: "lock.shield") }.buttonStyle(.plain).frame(width: 28, height: 28).help("Permissions").accessibilityLabel("Permissions") }
@@ -1537,6 +1559,7 @@ struct ChatView: View {
                     if store.planning.ticket(s.id)?.implementation != nil { ImplementationStatusView(store: store, planning: store.planning, id: s.id) }
                     if let live = store.activityFor(s) { Text("\(live.owner) · \(live.state) · Model choice applies to the next Camp reply").font(.system(size: 11)).foregroundStyle(campGreen).padding(.bottom, 8) }
                     HStack { Text(s.sourceLabel).font(.system(size: 10, weight: .medium)); if !s.accountID.isEmpty { Text("· author \(s.accountID.prefix(8))").font(.system(size: 10)).foregroundStyle(campMuted) }; Spacer(); Menu(store.stage(s).rawValue) { ForEach(Stage.allCases, id: \.self) { stage in Button(stage.rawValue) { store.move(s.id, stage) } } }.fixedSize() }.padding(.horizontal, 22).padding(.vertical, 10)
+                    SessionContextChips(store: store, mentions: store.mentions, destination: s, transcriptStrip: true)
                       ScrollViewReader { proxy in
                         CampTranscriptViewport(padding: 25, followBottom: { proxy.scrollTo("bottom", anchor: .bottom) }) {
                             // Pages are bounded to 120 messages; measure their real heights so
@@ -1563,12 +1586,14 @@ struct ChatView: View {
                         if let conversation = store.conversation(s) { ConversationApprovalsView(conversation: conversation) }
                         if let remote = store.cloudSessions[s.id] { CloudRequestQueueView(cloud: store.cloud, session: remote) }
                         else { PromptQueueView(store: store, session: s) }
-                        SessionContextComposer(store: store, mentions: store.mentions, destination: s)
-                        TextEditor(text: $store.draft).font(.system(size: 13)).scrollContentBackground(.hidden).frame(minHeight: 55, maxHeight: 100).padding(8).background(.white).clipShape(RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(campInk.opacity(0.13)))
+                        TextEditor(text: $store.draft).font(.system(size: 13)).scrollContentBackground(.hidden).frame(minHeight: 64, maxHeight: 84).padding(8).background(.white).clipShape(RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(campInk.opacity(0.13)))
                         HStack(spacing: 10) {
                             Text(s.isCloud ? "Saved to Camp · Runs on the session owner's Mac after approval" : store.runningID == s.id ? "Steer now or queue for after this turn" : store.activityFor(s) != nil ? "Open in \(s.provider) · Camp queue waits until it is closed" : s.isPlan || store.sessionPermissions.grants[s.id] != nil ? "Uses \(s.sourceLabel) login · \(store.permissionSettings(s).summary)" : "Uses \(s.sourceLabel) login · Chat-only local preview")
                                 .font(.system(size: 10)).foregroundStyle(campMuted).fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 8)
+                            Button("@ Context") { contextQuery = ""; contextPicking = true }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(campGreen)
+                                .accessibilityLabel("Attach session context")
+                                .popover(isPresented: $contextPicking) { SessionContextPicker(store: store, destination: s, query: contextQuery) { contextPicking = false } }
                             if store.runningID == s.id || store.activityFor(s) != nil {
                                 Button("Queue") { store.enqueueDraft() }.disabled(store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).keyboardShortcut(.return, modifiers: [.command, .shift])
                             }
@@ -1588,8 +1613,12 @@ struct ChatView: View {
         }
         .task(id: store.selectedID) {
             pickedChild = nil
+            contextPicking = false
             if let session = store.selected, let local = store.executionSource(session) { store.loadChildren(local) }
             else { store.children = [] }
+        }
+        .onChange(of: store.draft) { _, text in
+            if !contextPicking, let query = sessionMentionQuery(text) { contextQuery = query; contextPicking = true }
         }
         .onChange(of: store.children.map(\.id)) { _, ids in
             if let child = pickedChild, !ids.contains(child.id) { pickedChild = nil }
@@ -1656,6 +1685,7 @@ struct ModelSettingsMenu: View {
     let locked: Bool
     var reported: ReportedModelSettings? = nil
     var expanded = false
+    var planningRow = false
     var context = "Model for the next Camp reply"
     let selectModel: (String) -> Void
     let tune: (String?, String?) -> Void
@@ -1691,9 +1721,11 @@ struct ModelSettingsMenu: View {
                     .accessibilityLabel("Model settings for \(title)")
                     .accessibilityValue("\(displayedModel), \(effortTitle) effort, \(speedTitle), current run")
             } else { settingsMenu }
-            Text("\(effortTitle) effort · \(speedTitle)")
-                .font(.system(size: 9)).foregroundStyle(campMuted).lineLimit(1)
-        }
+            if !planningRow {
+                Text("\(effortTitle) effort · \(speedTitle)")
+                    .font(.system(size: 9)).foregroundStyle(campMuted).lineLimit(1)
+            }
+        }.help("\(provider) · \(displayedModel) · \(effortTitle) effort · \(speedTitle)")
     }
     var settingsMenu: some View {
         Menu {
@@ -1773,7 +1805,10 @@ struct ModelSettingsMenu: View {
         }
     }
     private var modelLabelView: some View {
-        HStack(spacing: 6) { ProviderMark(provider: provider, size: 14); Text(displayedModel).font(.system(size: 10)).foregroundStyle(campInk).lineLimit(1) }
+        HStack(spacing: 5) {
+            if !planningRow { ProviderMark(provider: provider, size: 13, muted: true) }
+            Text(displayedModel).font(.system(size: planningRow ? 9 : 10)).foregroundStyle(campInk).lineLimit(1)
+        }.frame(minHeight: 24)
     }
     @ViewBuilder func row(_ title: String, checked: Bool) -> some View {
         if checked { Label(title, systemImage: "checkmark") } else { Text(title) }

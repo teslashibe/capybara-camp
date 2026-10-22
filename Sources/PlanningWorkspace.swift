@@ -1,13 +1,5 @@
 import SwiftUI
 
-struct CampCardStyle: ViewModifier {
-    func body(content: Content) -> some View {
-        content.padding(14).frame(maxWidth: .infinity).frame(height: 264, alignment: .topLeading)
-            .background(.white).clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(campInk.opacity(0.08)))
-    }
-}
-
 extension CampStore {
     func planningProfiles(_ provider: String) -> [CampSession] {
         var seen = Set<String>()
@@ -63,13 +55,14 @@ struct PlanningModelMenu: View {
     let version: LocalPlanVersion
     let slot: Int
     var expanded = false
+    var cardRow = false
     var body: some View {
         let p = version.planners[slot]
         let models = store.availableModels(p.session)
         ModelSettingsMenu(provider: p.session.provider, title: "\(p.session.provider) planner", sessionModel: p.session.model,
             modelLabel: p.model.isEmpty ? "Session default" : p.model, models: models,
             caps: models.first { $0.id == p.model } ?? ModelOption(id: p.model, label: p.model), choice: p.tuning,
-            locked: !version.editable, expanded: expanded, context: "Model for this planning revision",
+            locked: !version.editable, expanded: expanded, planningRow: cardRow, context: "Model for this planning revision",
             selectModel: { store.planModel(id, slot: slot, model: $0) },
             tune: { store.planTuning(id, slot: slot, effort: $0, speed: $1) })
     }
@@ -81,39 +74,40 @@ struct PlanningCard: View {
     let id: String
     var body: some View {
         if let plan = planning.ticket(id) {
-            VStack(alignment: .leading, spacing: 8) {
+            CampTaskCard(store: store, session: plan.session) {
                 HStack {
-                    ProviderMark(provider: "Planning", size: 17)
-                    Text("Planning").font(.system(size: 10, weight: .medium)).foregroundStyle(campMuted)
+                    CampCardProvider(provider: "Planning")
                     Spacer()
                     Menu {
                         Button("Open plan") { store.open(plan.session) }
                         ProjectAssignmentMenu(store:store,session:plan.session)
                         Button("Start over") { planning.restart(id); store.open(plan.session) }
                         Button("Cancel planning") { planning.cancel(id) }.disabled(plan.current.state == "ready" || plan.current.state == "cancelled")
-                    } label: { Image(systemName: "ellipsis").frame(width: 24, height: 20) }
+                    } label: { Image(systemName: "ellipsis").foregroundStyle(campMuted).frame(width: 28, height: 28) }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Plan actions for \(plan.title)")
                 }
-                Button { store.open(plan.session) } label: {
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text(plan.title).font(.system(size: 13, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading)
-                            .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34, alignment: .topLeading)
-                        Label(store.projectSummary(plan.session), systemImage: "folder").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
-                        HStack { Text(plan.current.workflow.title); Spacer(); Text(Date(timeIntervalSince1970: plan.updated), style: .relative) }.font(.system(size: 9)).foregroundStyle(campMuted)
-                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                }.buttonStyle(.plain)
-                Divider().overlay(campInk.opacity(0.04))
-                ForEach(plan.current.planners.indices, id: \.self) { slot in PlanningModelMenu(store: store, id: id, version: plan.current, slot: slot) }
-                Spacer(minLength: 0)
+            } models: {
+                VStack(spacing: 0) {
+                    ForEach(plan.current.planners.indices, id: \.self) { slot in
+                        PlanningCardModelRow(provider: plan.current.planners[slot].session.provider, open: { store.openPlan(plan.session, slot: slot) }) {
+                            PlanningModelMenu(store: store, id: id, version: plan.current, slot: slot, cardRow: true)
+                        }
+                    }
+                }
+            } status: {
                 HStack(spacing: 6) {
                     if plan.current.state == "running" { ProgressView().controlSize(.mini).frame(width: 12, height: 12) }
+                    else { Image(systemName: plan.current.state == "ready" ? "checkmark" : "circle").font(.system(size: 8)) }
                     Text(plan.current.state == "ready" ? "Plan ready to review" : "\(plan.current.completedCount) of \(plan.current.workflow.turnLimit) · \(plan.current.state.replacingOccurrences(of: "_", with: " "))")
                         .font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
-                    Spacer()
-                    Button { store.open(plan.session) } label: { Image(systemName: "chevron.right").frame(width: 28, height: 28) }
-                        .buttonStyle(.plain).help("Open plan").accessibilityLabel("Open \(plan.title)")
-                }.frame(height: 17)
-            }.modifier(CampCardStyle())
+                }
+            } actions: {
+                HStack {
+                    Button { store.openPlan(plan.session, section: "History") } label: { Label("History", systemImage: "clock.arrow.circlepath").frame(minHeight: 28).contentShape(Rectangle()) }.buttonStyle(.plain)
+                    Spacer(minLength: 4)
+                    CampCardOpenAction(title: "Open plan") { store.openPlan(plan.session) }.accessibilityLabel("Open \(plan.title)")
+                }
+            }
         }
     }
 }
@@ -201,6 +195,7 @@ struct PlanningWorkspace: View {
                 if let version = store.notificationPlanVersion { expandedVersions.insert(version) }
                 reviewedUnknown = false
                 focusedSlot = nil
+                applyCardNavigation()
                 profiles = ["Codex": store.planningProfiles("Codex"), "Claude": store.planningProfiles("Claude")]
             }
             .onChange(of: brief) { _, value in
@@ -213,8 +208,14 @@ struct PlanningWorkspace: View {
                 }
             }
             .onChange(of: plan.current.workflow) { _, _ in focusedSlot = nil; section = "Plans" }
+            .onChange(of: store.planNavigation) { _, _ in applyCardNavigation() }
             .onDisappear { saveTask?.cancel(); if planning.ticket(id)?.current.number == plan.current.number { planning.edit(id) { $0.brief = brief } } }
         }
+    }
+    private func applyCardNavigation() {
+        guard let request = store.planNavigation, request.id == id else { return }
+        section = request.section
+        focusedSlot = request.slot.flatMap { planning.ticket(id)?.current.planners.indices.contains($0) == true ? $0 : nil }
     }
     private func participants(_ plan: LocalPlan) -> [PlanningParticipant] {
         plan.current.planners.indices.map { slot in
