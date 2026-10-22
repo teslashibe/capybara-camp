@@ -108,6 +108,13 @@ that creates unbound planning participants.
 
 ## Storage and recovery
 
+Schema 32 adds shared implementation approval records and their pinned source
+grants. Back up before migration and deploy the matching API image; readiness
+requires its exact schema. Approvals do not dispatch work in this development
+slice. Downgrading to schema 31 is allowed only when no approval records exist.
+A retained approval, including a cancelled one, blocks destructive downgrade;
+retain a compatible binary or restore a complete backup instead.
+
 The example uses one 20 GiB persistent volume. Size it for your retained shared
 history, monitor free space, and configure encrypted base backups plus WAL
 archiving to an off-host destination. A local volume or mirrored disks do not

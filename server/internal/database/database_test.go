@@ -202,7 +202,23 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = pool.Exec(ctx, `UPDATE session_transfers SET history_sha256=$2 WHERE id=$1`, transfer, strings.Repeat("d", 64)); err != nil {
 		t.Fatal(err)
 	}
-	// An empty import table can roll back without affecting prior histories.
+	// An approval remains durable even when an older build is restored.
+	approval := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO planning_execution_approvals(id,camp_id,plan_id,plan_version,plan_revision,plan_sha256,creator_user_id,owner_user_id,owner_device_id,session_id,profile_id,session_revision,transcript_revision,permission_revision,provider,model,effort,speed,execution_location,execution_epoch,permissions,prompt) VALUES($1,$2,$3,1,1,$4,$5,$5,$6,$7,$8,1,0,1,'Codex','fixture','high','standard','local',1,'{}','Preserved execution approval')`, approval, camp, plan, strings.Repeat("a", 64), id, device, session, profile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 31); err == nil {
+		t.Fatal("Downgrade discarded implementation approval")
+	}
+	var retainedPrompt string
+	if err = pool.QueryRow(ctx, `SELECT prompt FROM planning_execution_approvals WHERE id=$1`, approval).Scan(&retainedPrompt); err != nil || retainedPrompt != "Preserved execution approval" {
+		t.Fatal("Approval changed during refused downgrade", err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM planning_execution_approvals WHERE id=$1`, approval); err != nil {
+		t.Fatal(err)
+	}
+	// Empty implementation tables can roll back without affecting prior histories.
+
 	space, observation := uuid.NewString(), uuid.NewString()
 	if _, err = pool.Exec(ctx, `INSERT INTO memory_spaces(id,camp_id,project_id,owner_user_id) VALUES($1,$2,$3,$4)`, space, camp, project, id); err != nil {
 		t.Fatal(err)
@@ -214,7 +230,7 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO memory_jobs(id,camp_id,space_id,creator_user_id,provider,model,effort,speed,location,profile_id,owner_device_id,observation_ids,memory_refs) VALUES($1,$2,$3,$4,'Codex','fixture','','standard','local',$5,$6,ARRAY[$7]::uuid[],'[]')`, job, camp, space, id, profile, device, observation); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = provider.Down(ctx); err == nil {
+	if _, err = provider.DownTo(ctx, 30); err == nil {
 		t.Fatal("Downgrade discarded memory jobs")
 	}
 	if _, err = pool.Exec(ctx, `DELETE FROM memory_jobs WHERE id=$1`, job); err != nil {

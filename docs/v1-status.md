@@ -33,6 +33,20 @@ credentials and isolated native client state against the local API for
 collaboration, permissions, replay and ownership tests. Those checks supplement
 the final two-Mac/cloud acceptance; they do not replace it.
 
+Shared implementation now has a durable API approval prerequisite at schema 32.
+The plan creator selects an independent executor; its owner approves the exact
+plan revision, model/settings, source grants and Local/Cloud assignment. Local
+approval binds the owning device's CLI context fingerprint. Changed plans,
+targets, permissions and source access require review again. Either person can
+withdraw stale consent without receiving inaccessible content. Focused race
+tests cover replay, concurrent retries, revocation/resharing, unrelated members,
+cloud assignment changes, plan restart, HTTP authorization and migration retention
+(`build/planning-approval-tests.log`). The full Go race suite and vet pass against
+disposable PostgreSQL at schema 32 (`build/planning-approval-full-suite.log`),
+and Linux backend command builds pass. These approvals do not enqueue work.
+Dispatch, native review, persistent implementation-session creation and full
+provider acceptance remain open.
+
 The two-account HTTP journey now passes against disposable PostgreSQL with the
 real authentication and API handlers. Separate clients sign in through captured
 OTP email, persist independent device credentials, join a Camp, publish shared

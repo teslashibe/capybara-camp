@@ -60,6 +60,39 @@ non-persistent Claude session; it does not append planning turns to the anchor
 conversation. The request mode also refuses mid-turn steering of the frozen
 brief and bounds visible output to 8 KiB per step.
 
+## Shared implementation approvals
+
+The development API can prepare and approve an executor selection for a completed
+shared plan. Dispatch and the native approval interface are still pending. These
+endpoints save consent only; they never enqueue a provider turn.
+
+`POST /v1/camps/{camp}/planning/{plan}/execution-approvals` freezes the plan's
+version, revision and content hash, its final implementation prompt, and an
+independently selected executor session, account, model, effort, speed and
+permissions. The request supplies expected session/transcript revisions and the
+reviewed Local/Cloud assignment. The plan creator prepares it; the executor's
+owner approves it through `/{approval}/approve`. Local approval must come from
+the owning device and include its CLI context fingerprint. Cloud approval must
+match the prepared implementation workspace's exact permissions.
+
+Both people must still have access to every source and the executor session.
+Source permission revisions remain pinned: revoking and restoring access does
+not revive old consent. Restarting the plan, changing the target transcript or
+execution assignment, or losing either person's membership invalidates review.
+Imported history must first become a new reviewed planning revision.
+
+Either principal can withdraw unused consent through `/{approval}/cancel`, even
+after source access changes. The collection GET returns minimal statuses so a
+stale approval can be withdrawn without revealing its saved prompt. Detail GET
+rechecks access. Events are restricted to those two people. Each write uses the
+normal idempotency key contract, and one plan has at most one pending or approved
+selection.
+
+The remaining dispatcher must atomically consume approved consent and establish
+the implementation session, then recheck its bindings before provider submission.
+The native worker must verify the approved CLI context against its actual project
+and profile. Ordinary chat requests do not grant implementation permission.
+
 ## Shared planning in the native app
 
 Use the Plan menu's shared Camp actions to create a saved draft. Choose one accessible source session for Plan, or two for comparison, then select model/effort/speed settings and pinned message ranges. Comparison also selects the combining provider. Each planner shows its saved execution location. An owner-Mac assignment uses that owner's local profile; a cloud assignment uses its prepared workspace and account. Plans

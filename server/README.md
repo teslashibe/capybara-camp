@@ -7,9 +7,9 @@ requests, atomic command receipts, recipient notification history with shared
 read receipts and an ordered event stream. It also supports versioned planning,
 cloud accounts, Git workspace preparation, execution assignments and cloud
 provider-turn transport. The separate installation runner executes assigned
-work; the native owner-Mac worker handles local work. Memory, skills and the
+work; the native owner-Mac worker handles local work. Shared skills and the
 remaining cloud workflows are unfinished. Live deployment and provider
-acceptance remain open in [V1 delivery status](../docs/v1-status.md).
+acceptance remain open; Cortex memory is deferred from V1. See [V1 delivery status](../docs/v1-status.md).
 
 ## Run locally
 
