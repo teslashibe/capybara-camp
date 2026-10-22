@@ -30,22 +30,12 @@ struct SharedPlanningResultView: View {
                         .buttonStyle(.plain).help("Back to board").accessibilityLabel("Back to board")
                 }
                 Text(result.version.brief).font(.system(size: 12)).textSelection(.enabled).lineLimit(4)
-                if !result.version.sources.isEmpty {
-                    ScrollView(.horizontal) { HStack {
-                        ForEach(result.version.sources, id: \.sessionId) { source in
-                            Button("@ " + (store.sessions.first { $0.id == "camp:" + source.sessionId }?.title ?? "Shared session")) {
-                                Task {
-                                    do {
-                                        guard let session = store.cloudSessions["camp:" + source.sessionId] else { throw CampError.message("This source is no longer shared") }
-                                        let page = try await store.cloud.context(session: session, source: source)
-                                        let messages = page.messages.map { Message(id: $0.id, role: $0.role, text: $0.text) }
-                                        store.contextInspection = ContextInspection(sourceID: "camp:" + source.sessionId, title: session.title, messages: messages, selectedMessage: messages.first?.id ?? "")
-                                    } catch { store.banner = error.localizedDescription }
-                                }
-                            }.font(.system(size: 11)).buttonStyle(.borderless)
-                        }
-                    } }
+                if let imported = result.version.imported {
+                    Label("Imported history · " + imported.state.replacingOccurrences(of: "_", with: " "), systemImage: "tray.and.arrow.down")
+                        .font(.system(size: 11)).foregroundStyle(campMuted)
+                        .help("Saved local results. Importing did not run the providers")
                 }
+                SharedPlanningSources(store: store, result: result).id("\(result.id):\(result.version.version)")
                 PlanningStageBar(mode: result.version.workflow, section: $section, completed: completedStages, showImplementation: false)
                 if section == "History" || section == "Combined plan" {
                     ScrollView {
@@ -148,6 +138,51 @@ struct SharedPlanningResultView: View {
                 MessageView(message: Message(id: String(step.id), role: "assistant", text: step.output),
                     metadata: planner.map { "\($0.provider) · \($0.model) · \(ModelMenu.effortName($0.effort)) effort · \(ModelMenu.speedName($0.speed))" }, fontSize: 12)
             }
+            if let saved = result.version.imported?.steps.first(where: { $0.ordinal == step.ordinal }) {
+                if saved.state == "unknown", !step.output.isEmpty {
+                    Label("Unconfirmed outcome", systemImage: "questionmark.circle").font(.caption).foregroundStyle(campMuted)
+                }
+                if let error = saved.error, !error.isEmpty { Text(error).font(.caption).foregroundStyle(campMuted).textSelection(.enabled) }
+            }
+        }
+    }
+}
+
+private struct SharedPlanningSources: View {
+    @ObservedObject var store: CampStore
+    let result: CloudPlanningResult
+    @State private var task: Task<Void, Never>?
+    @State private var loading = false
+    @State private var generation = UUID()
+
+    var body: some View {
+        if !result.version.sources.isEmpty || result.version.imported?.localSources.isEmpty == false {
+            ScrollView(.horizontal) {
+                HStack {
+                    ForEach(result.version.sources, id: \.sessionId) { source in
+                        Button("@ " + (store.sessions.first { $0.id == "camp:" + source.sessionId }?.title ?? "Shared session")) {
+                            open(source.sessionId, imported: false)
+                        }
+                    }
+                    ForEach(result.version.imported?.localSources ?? []) { source in
+                        Button("@ " + (source.title.isEmpty ? "Imported source" : source.title)) { open(source.id, imported: true) }
+                    }
+                    if loading { ProgressView().controlSize(.small) }
+                }.font(.system(size: 11)).buttonStyle(.borderless).disabled(loading)
+            }.onDisappear { generation = UUID(); task?.cancel(); task = nil; loading = false }
+        }
+    }
+    private func open(_ id: String, imported: Bool) {
+        task?.cancel(); loading = true
+        generation = UUID()
+        let token = generation
+        task = Task {
+            defer { if generation == token { loading = false; task = nil } }
+            do {
+                let inspection = try await store.inspectPlanningSource(result, sourceID: id, imported: imported)
+                try Task.checkCancellation()
+                store.contextInspection = inspection
+            } catch is CancellationError {} catch { if generation == token && !Task.isCancelled { store.banner = error.localizedDescription } }
         }
     }
 }

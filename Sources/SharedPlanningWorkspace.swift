@@ -39,6 +39,7 @@ extension CampStore {
         sharedPlanning.edit(id) { $0.mode = mode; $0.planners = planners; $0.mergeSlot = 0 }
     }
     func syncSharedPlans() {
+        if let id = contextInspection?.planID, !sharedPlanning.tickets.contains(where: { $0.id == id }) { contextInspection = nil }
         let names = Dictionary(uniqueKeysWithValues: cloud.projects.map { ($0.id, $0.name) })
         let replacing = Set(sharedPlanning.drafts.compactMap(\.restartPlanID))
         var values = sharedPlanning.drafts.map { value in

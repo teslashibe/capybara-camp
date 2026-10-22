@@ -605,7 +605,7 @@ final class TranscriptWatch {
         if cloudProjectIndex != newProjects { cloudProjectIndex=newProjects; projectsChanged() }
         let previous = cloudSessions
         let next = Dictionary(uniqueKeysWithValues: values.map { ("camp:" + $0.id, $0) })
-        if let inspection=contextInspection, !inspection.remainsVisible(scope:cloud.scope?.key,permissionRevision:next[inspection.sourceID]?.permissionRevision) { contextInspection=nil }
+        if let inspection=contextInspection, !inspection.remainsVisible(scope:cloud.scope?.key,permissionRevision:next[inspection.sourceID]?.permissionRevision, availablePermissions:next.mapValues(\.permissionRevision)) { contextInspection=nil }
         if cloudSessions != next { cloudSessions = next }
         let active = Set(cloud.requests.filter { !$0.isPlanning && ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId))
         if activeRequestSessions != active { activeRequestSessions = active; filterRevision += 1; objectWillChange.send() }

@@ -144,6 +144,7 @@ struct CloudPlanningResult: Codable, Equatable, Sendable {
     struct Version: Codable, Equatable, Sendable {
         var version: Int; var state: String; var brief: String; var planners: [Planner]; var steps: [Step]; var sources: [CloudSourceRef]; var mergeSlot: Int = 0; var budgetPolicy: String = "calls"
         var mode: PlanningMode? = nil
+        var imported: ImportedPlanningSnapshot? = nil
         var workflow: PlanningMode { mode ?? .comparison }
     }
     var id: String; var title: String; var projectId: String; var version: Version
@@ -157,7 +158,7 @@ struct CloudPlanningResult: Codable, Equatable, Sendable {
         Set(version.planners.map(\.slot)) == Set(0..<version.workflow.plannerCount) &&
         (0..<version.workflow.plannerCount).contains(version.mergeSlot) &&
         version.planners.allSatisfy { $0.model.utf8.count <= 200 && UUID(uuidString: $0.sessionId) != nil && ($0.execution?.valid ?? true) } &&
-        version.sources.count <= 20 && version.sources.allSatisfy { UUID(uuidString: $0.sessionId) != nil } && version.steps.count <= version.workflow.turnLimit &&
+        version.sources.count <= 20 && version.sources.allSatisfy { UUID(uuidString: $0.sessionId) != nil } && (version.imported?.valid(for: version) ?? true) && version.steps.count <= version.workflow.turnLimit &&
         Set(version.steps.map(\.id)).count == version.steps.count && version.steps.allSatisfy {
             $0.output.utf8.count <= 8192 && (0..<version.workflow.plannerCount).contains($0.slot) && (0..<version.workflow.turnLimit).contains($0.ordinal) &&
             $0.slot == ($0.ordinal == 4 ? version.mergeSlot : $0.ordinal % 2) && $0.phase == ($0.ordinal < 2 ? "draft" : $0.ordinal < 4 ? "review" : "merge")

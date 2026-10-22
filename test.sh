@@ -14,7 +14,7 @@ swiftc -parse-as-library -emit-library -emit-module -enable-testing -D CAMP_TEST
   -o build/test-support/libCampTestSupport.dylib
 WORK="$(mktemp -d "$ROOT/build/.camp-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-SUITES=(CampStateTests CampCloudTests CampSharingTests CampChildHistoryTests LocalConversationTests CampWorkerTests CampHandoffTests CampTransferTests BridgeIntegrationTests SessionMentionsTests LocalPlanningTests ExecutionApprovalTests ImplementationFlowTests CampNotificationTests CampPlanningTests CodexActivityTests CampProjectsTests PermissionSettingsTests CampOnboardingTests CampProviderAccountTests CampGitConnectionTests CampExecutionTests ExecutionDefaultsTests)
+SUITES=(CampStateTests CampCloudTests CampSharingTests CampChildHistoryTests LocalConversationTests CampWorkerTests CampHandoffTests CampTransferTests BridgeIntegrationTests SessionMentionsTests LocalPlanningTests ExecutionApprovalTests ImplementationFlowTests CampNotificationTests CampPlanningTests ImportedPlanningTests CodexActivityTests CampProjectsTests PermissionSettingsTests CampOnboardingTests CampProviderAccountTests CampGitConnectionTests CampExecutionTests ExecutionDefaultsTests)
 if [ "$#" -gt 0 ]; then
   for requested in "$@"; do
     found=false

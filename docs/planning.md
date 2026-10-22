@@ -192,6 +192,18 @@ table is supported; once imports exist, retain an import-aware server. The
 migration refuses to discard them. This backend increment is not a released
 native transfer feature.
 
+The native reader retains import metadata in its scoped cache and shows the
+original saved state, step errors and unconfirmed outcomes. Quoted sources open
+in the existing snapshot inspector after a fresh authorized plan read. Changing
+Camp, losing plan access or observing a source permission change closes the
+snapshot; a late response cannot reopen it. Ordinary shared-plan source chips
+use the same access checks.
+
+Restarting an imported version with quoted local sources is currently blocked
+until those sources can be carried into the new Camp request. The reader must
+not silently drop them. Completing that continuation path, native import review
+and implementation-history transfer remain release work.
+
 Planning tables were introduced in schema 5. The current required schema is
 defined by `SchemaVersion` in [the database package](../server/internal/database/database.go).
 Schema 19 stores each planner's execution binding. Older history remains

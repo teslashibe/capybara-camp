@@ -155,6 +155,9 @@ struct CampPlanningState: Codable, Sendable {
     func restartDraft(_ ticket: CloudPlanningResult) async throws {
         let activeState = state.tickets.first { $0.id == ticket.id }?.state ?? ticket.version.state
         guard ticket.creatorUserId == context?.actor.userId, let revision = ticket.revision, !pending(ticket.id), !["running", "needs_review"].contains(activeState) else { throw CampError.message("Stop or review the current plan before starting over") }
+        guard ticket.version.imported?.localSources.isEmpty != false else {
+            throw CampError.message("This imported plan has local source snapshots. Keep them in history until their Camp context is ready for a new planning turn")
+        }
         var input = CloudPlanningInput(title: ticket.title, projectId: ticket.projectId, brief: ticket.version.brief, shared: ticket.shared ?? false,
             planners: ticket.version.planners.sorted { $0.slot < $1.slot }.map { CloudPlannerInput(sessionId: $0.sessionId, model: $0.model, effort: $0.effort, speed: $0.speed, execution: executionTargets[$0.sessionId]) }, sources: ticket.version.sources)
         input.mergeSlot = ticket.version.mergeSlot
@@ -198,6 +201,9 @@ struct CampPlanningState: Codable, Sendable {
     func act(_ action: String, on ticket: CloudPlanningResult, input: CloudPlanningInput? = nil) async {
         guard let c = context, ticket.creatorUserId == c.actor.userId, let revision = ticket.revision, !pending(ticket.id),
               ["start", "pause", "resume", "cancel", "restart"].contains(action) else { return }
+        guard ticket.version.imported == nil || ["cancel", "restart"].contains(action) else {
+            error = "Imported history cannot resume a saved provider turn. Review a new planning revision first"; return
+        }
         guard state.operations.count < 100 else { error = "The planning queue is full. Let pending actions sync first"; return }
         do {
             var body: [String: Any] = ["action": action, "expected_revision": revision]
@@ -209,6 +215,19 @@ struct CampPlanningState: Codable, Sendable {
         } catch { self.error = "The planning action could not be queued" }
     }
     func open(_ id: String, version: Int = 0) { selectedID = id; selectedVersion = version; refresh() }
+    func verifiedDetail(_ ticket: CloudPlanningResult) async throws -> CloudPlanningResult {
+        guard let c = context, ticket.campId == c.scope.campId, ticket.valid,
+              ticket.referencedSessions.isSubset(of: visibleSessions) else { throw CampCloudError.invalidResponse }
+        let access = accessRevision
+        let data = try await c.transport.perform(CampPublication(kind: "read", method: "GET",
+            path: "/v1/camps/\(c.scope.campId)/planning/\(ticket.id)?version=\(ticket.version.version)", body: Data()))
+        try check(c)
+        let current = try CampWire.decoder().decode(CloudPlanningResult.self, from: data)
+        guard accessRevision == access, current.valid, current.campId == c.scope.campId, current.id == ticket.id,
+              current.referencedSessions.isSubset(of: visibleSessions),
+              current.version.version == ticket.version.version else { throw CampCloudError.invalidResponse }
+        return current
+    }
     func flush() async {
         saveTask?.cancel(); saveTask = nil
         if ready { do { try await persist() } catch { self.error = "The planning draft could not be saved" } }

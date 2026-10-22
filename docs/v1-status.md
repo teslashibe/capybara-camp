@@ -41,6 +41,19 @@ bounds, empty drafts, reviewed restart and migration retention. Linux server,
 runner, controller, helper and migration builds pass; the staged secret scan
 is clean. This does not complete the native import flow or live acceptance.
 
+The native reader retains imported source metadata and displays saved
+errors and unconfirmed outcomes in the existing planning workspace. Source
+inspection rechecks the plan and source access, including late responses after
+sign-out or revocation. The upload/review flow and carrying quoted sources into
+a restarted Camp plan remain unfinished.
+The focused native import, planning and context suites pass. They exercise
+metadata/cache round trips, invalid snapshots, blocked historical execution,
+and a read held across revocation or sign-out. The shared app module compiles;
+the staged secret scan is clean. Visual acceptance remains pending because
+computer use still reports the Mac as locked.
+Both synthetic audit apps have been rebuilt with this module and pass strict
+signature verification using the existing development identity.
+
 The current Local-to-Cloud increment adds native working-file selection, exact
 captured-file previews, a pinned Git base, destination preparation, source
 verification and final permission review. Upload and cancellation state survive

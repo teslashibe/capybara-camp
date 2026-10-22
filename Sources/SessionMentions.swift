@@ -88,8 +88,11 @@ struct ContextInspection: Identifiable {
     var scope: String? = nil
     var permissionRevision: Int64? = nil
     var childID: String? = nil
-    func remainsVisible(scope current: String?, permissionRevision observed: Int64?) -> Bool {
+    var planID: String? = nil
+    var sourcePermissions: [String: Int64]? = nil
+    func remainsVisible(scope current: String?, permissionRevision observed: Int64?, availablePermissions: [String: Int64] = [:]) -> Bool {
         guard let scope else { return true }
+        if let sourcePermissions { return scope == current && sourcePermissions.allSatisfy { availablePermissions[$0.key] == $0.value } }
         return scope == current && observed != nil && permissionRevision == observed
     }
 }
