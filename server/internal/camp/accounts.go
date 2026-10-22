@@ -52,6 +52,8 @@ type ProviderAccount struct {
 	State               string     `json:"state"`
 	Epoch               int64      `json:"epoch"`
 	CredentialExpiresAt *time.Time `json:"credential_expires_at,omitempty"`
+	WorkloadState       string     `json:"workload_state,omitempty"`
+	WorkloadError       string     `json:"workload_error,omitempty"`
 }
 type ProviderAccountInput struct {
 	Provider string `json:"provider"`
@@ -111,11 +113,11 @@ func (s *Store) ProviderAccountStatus(ctx context.Context, actor auth.Actor, id 
 	return out, tx.Commit(ctx)
 }
 
-const accountColumns = `a.id,a.owner_user_id,a.provider,a.label,COALESCE(a.verified_subject,''),a.revision,i.id,i.location,i.state,i.epoch,i.credential_expires_at`
+const accountColumns = `a.id,a.owner_user_id,a.provider,a.label,COALESCE(a.verified_subject,''),a.revision,i.id,i.location,i.state,i.epoch,i.credential_expires_at,i.workload_state,i.workload_error`
 
 func scanAccount(row pgx.Row) (ProviderAccount, error) {
 	var a ProviderAccount
-	err := row.Scan(&a.ID, &a.OwnerUserID, &a.Provider, &a.Label, &a.VerifiedSubject, &a.Revision, &a.InstallationID, &a.Location, &a.State, &a.Epoch, &a.CredentialExpiresAt)
+	err := row.Scan(&a.ID, &a.OwnerUserID, &a.Provider, &a.Label, &a.VerifiedSubject, &a.Revision, &a.InstallationID, &a.Location, &a.State, &a.Epoch, &a.CredentialExpiresAt, &a.WorkloadState, &a.WorkloadError)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = ErrDenied
 	}
@@ -186,7 +188,7 @@ func (s *Store) CreateProviderAccount(ctx context.Context, actor auth.Actor, key
 	if count >= 32 {
 		return out, ErrInput
 	}
-	out = ProviderAccount{ID: uuid.NewString(), OwnerUserID: actor.UserID, Provider: input.Provider, Label: input.Label, Revision: 1, InstallationID: uuid.NewString(), Location: "cloud", State: "pending", Epoch: 1}
+	out = ProviderAccount{ID: uuid.NewString(), OwnerUserID: actor.UserID, Provider: input.Provider, Label: input.Label, Revision: 1, InstallationID: uuid.NewString(), Location: "cloud", State: "pending", Epoch: 1, WorkloadState: "pending"}
 	if _, err = tx.Exec(ctx, `INSERT INTO provider_accounts(id,owner_user_id,provider,label) VALUES($1,$2,$3,$4)`, out.ID, actor.UserID, out.Provider, out.Label); err != nil {
 		return out, err
 	}
@@ -227,7 +229,7 @@ func (s *Store) CreateRunnerGrant(ctx context.Context, actor auth.Actor, id, key
 	if a.State == "disconnecting" || a.State == "disconnected" {
 		return out, ErrTransition
 	}
-	if _, err = tx.Exec(ctx, `UPDATE runner_grants SET revoked_at=now() WHERE installation_id=$1 AND revoked_at IS NULL`, a.InstallationID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE runner_grants SET revoked_at=now(),encrypted_token=NULL WHERE installation_id=$1 AND revoked_at IS NULL`, a.InstallationID); err != nil {
 		return out, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE provider_login_attempts SET state='failed',failure_code='runner_replaced',encrypted_challenge=NULL,encrypted_code=NULL,updated_at=now() WHERE installation_id=$1 AND state IN ('queued','running','waiting')`, a.InstallationID); err != nil {
@@ -429,7 +431,7 @@ func (s *Store) DisconnectProviderAccount(ctx context.Context, actor auth.Actor,
 		}
 		// Existing runner grants retain only the ability to fetch and acknowledge
 		// cleanup. All credential reads and login completion are fenced immediately.
-		_, err = tx.Exec(ctx, `UPDATE provider_installations SET state=$2,epoch=epoch+1,encrypted_credentials=NULL,credential_expires_at=NULL,updated_at=now() WHERE id=$1`, a.InstallationID, state)
+		_, err = tx.Exec(ctx, `UPDATE provider_installations SET state=$2,epoch=epoch+1,encrypted_credentials=NULL,credential_expires_at=NULL,workload_state='erasing',workload_error='',updated_at=now() WHERE id=$1`, a.InstallationID, state)
 		if err != nil {
 			return a, err
 		}
@@ -484,7 +486,7 @@ func (s *Store) ReactivateProviderAccount(ctx context.Context, actor auth.Actor,
 	if unrevoked {
 		return a, ErrTransition
 	}
-	if _, err = tx.Exec(ctx, `UPDATE provider_installations SET state='pending',epoch=epoch+1,encrypted_credentials=NULL,credential_expires_at=NULL,updated_at=now() WHERE id=$1`, a.InstallationID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE provider_installations SET state='pending',epoch=epoch+1,encrypted_credentials=NULL,credential_expires_at=NULL,workload_state='pending',workload_error='',updated_at=now() WHERE id=$1`, a.InstallationID); err != nil {
 		return a, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE provider_accounts SET revision=revision+1 WHERE id=$1`, a.ID); err != nil {

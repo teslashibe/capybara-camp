@@ -15,6 +15,9 @@ spec:
         - podSelector:
             matchLabels:
               app: camp-migrate
+        - podSelector:
+            matchLabels:
+              app: camp-controller
       ports:
         - protocol: TCP
           port: 5432

@@ -85,6 +85,10 @@ struct CampProviderAccountsView: View {
             if let subject = account.verifiedSubject, !subject.isEmpty {
                 Text("Verified identity: \(subject)").font(.system(size: 11)).foregroundStyle(campMuted).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             }
+            if let message = account.workloadMessage {
+                Label(message, systemImage: account.workloadState == "failed" ? "exclamationmark.circle" : "clock")
+                    .font(.system(size: 12)).foregroundStyle(campMuted).fixedSize(horizontal: false, vertical: true)
+            }
             if let login = accounts.detail?.login, login.active {
                 loginDetails(login, account)
             } else if accounts.preparing {

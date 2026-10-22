@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: camp-controller
+  namespace: capybara-camp
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: camp-controller
+  namespace: capybara-runners
+rules:
+  - apiGroups: [""]
+    resources: [pods, persistentvolumeclaims, secrets]
+    verbs: [get, list, create, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: camp-controller
+  namespace: capybara-runners
+subjects:
+  - kind: ServiceAccount
+    name: camp-controller
+    namespace: capybara-camp
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: camp-controller

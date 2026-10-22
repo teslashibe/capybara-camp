@@ -120,6 +120,12 @@ actor ProviderAccountFixture: CampAccountTransport {
         await transport.waitForCode(id)
         await restored.refresh()
         guard let account = restored.selection, let login = restored.detail?.login else { preconditionFailure("Missing account") }
+        var workload = account
+        workload.workloadState = "failed"; workload.workloadError = "capacity"
+        let roundtrip = try CampWire.decoder().decode(CloudProviderAccount.self, from: CampWire.encoder().encode(workload))
+        precondition(roundtrip.valid(owner: credential.actor.userId) && roundtrip.workloadMessage == "All cloud runner slots are in use")
+        workload.workloadState = "invalid"
+        precondition(!workload.valid(owner: credential.actor.userId), "Unknown worker states must be rejected")
         precondition(login.state == "waiting" && login.valid(account: account))
         await restored.submitCode("fixture-return-code#state", account: account, login: login)
         let receivedCode = await transport.code()

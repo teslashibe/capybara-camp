@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: camp-controller-config
+  namespace: capybara-camp
+data:
+  CAMP_PUBLIC_URL: https://camp.example.invalid
+  CAMP_RUNNER_NAMESPACE: capybara-runners
+  CAMP_RUNNER_RUNTIME_CLASS: runsc
+  CAMP_RUNNER_STORAGE_CLASS: local-path
+  CAMP_RUNNER_CAPACITY: "32"
+  CAMP_RUNNER_IMAGE: ghcr.io/teslashibe/capybara-camp-runner@sha256:REPLACE_WITH_TESTED_DIGEST
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: camp-controller
+  namespace: capybara-camp
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: camp-controller}
+  template:
+    metadata:
+      labels: {app: camp-controller}
+    spec:
+      serviceAccountName: camp-controller
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: controller
+          image: ghcr.io/teslashibe/capybara-camp:REPLACE_WITH_TESTED_VERSION
+          command: [/camp-controller]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          envFrom:
+            - configMapRef: {name: camp-controller-config}
+          env:
+            - name: CAMP_CONTROLLER_DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_CONTROLLER_DATABASE_URL}
+            - name: CAMP_PROVIDER_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_PROVIDER_ENCRYPTION_KEY}
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {cpu: "1", memory: 256Mi}

@@ -5,12 +5,11 @@ devices, membership, projects, selected session sharing, versioned transcripts,
 durable prompt requests and ordered events. The development desktop also runs
 approved shared requests through the owning Mac's local CLI, with leased
 execution and explicit review of uncertain outcomes. The Go server also persists
-versioned planning tickets and their bounded five-step queue. The native planning
-workspace, memory and skills are still being built. Cloud provider login and
-execution are scoped
-in [Local and cloud execution](cloud-execution.md); the current manifests do not
-yet deploy provider runners. Do not treat these templates
-as the completed V1 release or a production deployment sign-off.
+versioned planning tickets and their bounded five-step queue. Memory, skills and
+cloud inference are still being built. The base manifests serve shared state;
+an optional [runner overlay and controller](runner-provisioning.md) supplies
+auth-worker provisioning. Live-cluster validation is still pending. Do not treat
+these templates as the completed V1 release or a production deployment sign-off.
 
 Every collaborating Mac connects to the same HTTPS service origin and Camp.
 People keep separate identities and choose what to share. Separate installations

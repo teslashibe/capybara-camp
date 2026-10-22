@@ -328,7 +328,7 @@ func (s *Store) AcknowledgeRunnerErased(ctx context.Context, token string) error
 	if _, err = tx.Exec(ctx, `UPDATE provider_installations SET state='disconnected',updated_at=now() WHERE id=$1 AND state='disconnecting'`, r.account.InstallationID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE runner_grants SET revoked_at=now() WHERE installation_id=$1 AND revoked_at IS NULL`, r.account.InstallationID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE runner_grants SET revoked_at=now(),encrypted_token=NULL WHERE installation_id=$1 AND revoked_at IS NULL`, r.account.InstallationID); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE provider_accounts SET revision=revision+1 WHERE id=$1`, r.account.ID); err != nil {

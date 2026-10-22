@@ -18,7 +18,8 @@ preserves the working credentials. No account is merged by email or label.
 
 Schema 9 adds `provider_accounts`, `provider_installations`, `runner_grants` and
 `provider_login_attempts`. Schema 10 adds encrypted Claude authorization-code
-delivery. Existing local `profiles` and shared `sessions` keep
+delivery; schema 11 adds managed grants and workload status. Existing local
+`profiles` and shared `sessions` keep
 their existing ownership. Cloud account metadata does not enter Camp snapshots,
 shared events or exported transcripts. There is a limit of 32 account records per
 person in this initial service.
@@ -58,10 +59,12 @@ All routes require the person's Camp device token. Writes require an
 A runner grant lasts 24 hours, is installation-scoped and is stored only as a
 hash, except its encrypted idempotency receipt. Replaying grant creation can
 recover the same token while it is valid; it cannot revive an expired, replaced
-or cleanup-only grant. Grant renewal and automatic provisioning still need their
-controller integration before unattended execution ships.
+or cleanup-only grant. The [controller](runner-provisioning.md) now issues and
+renews separate managed grants for its auth workers. It preserves a grant during
+active sign-in and rejects manual-grant conflicts. Live validation and the
+inference lifecycle are still required before unattended execution ships.
 
-The provisioning integration must deliver grants privately to isolated workloads.
+The provisioning controller delivers grants privately to isolated workloads.
 A human Camp token must never be installed in a runner. Manual grant creation is
 currently an internal API capability, not the final user onboarding flow.
 
@@ -135,7 +138,8 @@ but cannot read credentials or complete a login. The account stays
 workload stopped merely because its database credentials were removed. After the
 acknowledgment the grant is revoked and the account is `disconnected`. Workload
 termination, handling an offline or expired runner grant, and credential-volume
-removal must be implemented by the provisioning controller before release.
+removal are implemented by the controller and still require live-cluster
+acceptance before release.
 An account that has never received a runner grant can disconnect immediately.
 
 Reconnect after a completed disconnect reactivates the same account and
@@ -210,15 +214,16 @@ The journal is encrypted with a key derived from the random installation grant
 and bound to the service origin. Grant rotation requires the provisioning
 controller to stop the old workload and remove its journal before replacing the
 grant. Changing a grant in place cannot decrypt the previous journal and fails
-closed. No grant-renewal controller has shipped yet.
+closed. The controller creates a fresh private volume when replacing a managed grant.
 
 Run one worker per isolated installation container. The container supervisor must
 terminate all processes before a replacement worker starts; a filesystem lock
 alone cannot prove that a killed worker's children have stopped. Startup removes
 only this adapter's abandoned scratch profiles, under that container lifecycle
 contract. Host execution after an ungraceful kill is not a supported recovery
-path. The future Kubernetes controller must enforce this lifecycle and handle
-offline workers and expired grants before cloud execution is enabled.
+path. The Kubernetes controller enforces this lifecycle and handles offline
+workers and expired grants. Its live-cluster isolation checks remain a gate
+before cloud execution is enabled.
 
 PostgreSQL/HTTPS fixture tests exercise both providers' full worker paths,
 one-time-code delivery, lost acknowledgments, durable result retries, interrupted
@@ -247,5 +252,6 @@ Only the visible account form polls for status. It shows queued, waiting,
 cancelled, expired, failed and connected states. Disconnect remains pending until
 the runner acknowledges erasure; unavailable usage is labeled explicitly. A
 server without cloud account storage shows that configuration is unavailable.
-The provisioning controller is still required to prepare runners automatically;
-the native form does not manufacture a connected state while waiting for one.
+The provisioning controller prepares runners automatically; the native form
+does not manufacture a connected state while waiting for one. The public runner
+overlay is optional and has not yet been deployed to the target cluster.

@@ -12,13 +12,17 @@ struct CloudProviderAccount: Codable, Equatable, Identifiable, Sendable {
     var state: String
     var epoch: Int64
     var credentialExpiresAt: Date?
+    var workloadState: String? = nil
+    var workloadError: String? = nil
 
     func valid(owner: String) -> Bool {
         UUID(uuidString: id) != nil && ownerUserId == owner && UUID(uuidString: installationId) != nil &&
         ["Codex", "Claude"].contains(provider) && location == "cloud" && revision > 0 && epoch > 0 &&
         ["pending", "connected", "needs_login", "disconnecting", "disconnected"].contains(state) &&
         !label.isEmpty && label.utf8.count <= 120 && !label.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) &&
-        (verifiedSubject?.utf8.count ?? 0) <= 256
+        (verifiedSubject?.utf8.count ?? 0) <= 256 &&
+        (workloadState == nil || ["pending", "starting", "ready", "erasing", "erased", "failed"].contains(workloadState!)) &&
+        (workloadError == nil || ["", "capacity", "manual_grant", "cluster_unavailable", "resource_conflict", "workload_pending", "workload_failed"].contains(workloadError!))
     }
     var statusLabel: String {
         switch state {
@@ -27,6 +31,17 @@ struct CloudProviderAccount: Codable, Equatable, Identifiable, Sendable {
         case "disconnecting": return "Disconnecting"
         case "disconnected": return "Disconnected"
         default: return "Not signed in"
+        }
+    }
+    var workloadMessage: String? {
+        switch workloadError {
+        case "capacity": return "All cloud runner slots are in use"
+        case "manual_grant": return "This account has a manually configured runner"
+        case "cluster_unavailable": return "The cloud runner service is unavailable"
+        case "resource_conflict": return "The cloud runner needs an operator to review its resources"
+        case "workload_pending": return "Preparing the cloud runner"
+        case "workload_failed": return "The cloud runner could not start"
+        default: return nil
         }
     }
 }

@@ -56,6 +56,9 @@ spec:
             - name: CAMP_MIGRATION_DB_PASSWORD
               valueFrom:
                 secretKeyRef: {name: camp-secrets, key: CAMP_MIGRATION_DB_PASSWORD}
+            - name: CAMP_CONTROLLER_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_CONTROLLER_DB_PASSWORD, optional: true}
           ports:
             - name: postgres
               containerPort: 5432
@@ -92,10 +95,17 @@ data:
   01-roles.sql: |
     \getenv runtime_password CAMP_RUNTIME_DB_PASSWORD
     \getenv migration_password CAMP_MIGRATION_DB_PASSWORD
+    \getenv controller_password CAMP_CONTROLLER_DB_PASSWORD
     CREATE ROLE camp_runtime LOGIN PASSWORD :'runtime_password';
     CREATE ROLE camp_migrator LOGIN PASSWORD :'migration_password';
+    \if :{?controller_password}
+    CREATE ROLE camp_controller LOGIN PASSWORD :'controller_password';
+    \endif
     ALTER DATABASE camp OWNER TO camp_migrator;
     \connect camp
     REVOKE CREATE ON SCHEMA public FROM PUBLIC;
     GRANT USAGE, CREATE ON SCHEMA public TO camp_migrator;
     GRANT USAGE ON SCHEMA public TO camp_runtime;
+    \if :{?controller_password}
+    GRANT USAGE ON SCHEMA public TO camp_controller;
+    \endif

@@ -37,14 +37,18 @@ responses, credentials or authorization headers in logging middleware.
 Use `Authorization: Bearer <device-token>` after sign-in.
 
 Cloud account endpoints and their unfinished runtime integration are described
-in [cloud accounts](../docs/cloud-accounts.md). Schema 10 includes encrypted
-Claude code delivery without changing existing profile or session rows. Run the
-migration before this binary; keep a compatible schema-10 build as the rollback floor.
+in [cloud accounts](../docs/cloud-accounts.md). Schema 11 includes managed runner
+grants and workload status without changing existing session rows. Run the
+migration before this binary; keep a compatible schema-11 build as the rollback floor.
 
 The separate `cmd/camp-runner` binary implements installation-scoped sign-in
 only. Its private grant/state setup and container restart contract are documented
 in [cloud accounts](../docs/cloud-accounts.md#auth-only-worker). It does not yet
 execute cloud chat turns.
+
+`cmd/camp-controller` provisions auth workers using a limited database role and
+namespace-scoped Kubernetes permissions. Its configuration and optional public
+overlay are in [runner provisioning](../docs/runner-provisioning.md).
 
 | Method and path | Input or result |
 | --- | --- |
