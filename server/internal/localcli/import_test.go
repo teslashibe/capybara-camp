@@ -55,7 +55,7 @@ func record(id, text string) string {
 }
 
 func TestTitleBoundAndInstructionFiltering(t *testing.T) {
-	for _, raw := range []string{strings.Repeat("word ", 500000), strings.Repeat("x", 2000000), strings.Repeat(" First\tsecond\nthird ", 100000), strings.Repeat(" ", 100000) + "First\u2003second"} {
+	for _, raw := range []string{strings.Repeat("word ", 500000), strings.Repeat("x", 2000000), strings.Repeat(" First\tsecond\nthird ", 100000), strings.Repeat(" ", 100000) + "First\u2003second", "first" + strings.Repeat(" ", 100000) + "last"} {
 		expected := []rune(strings.Join(strings.Fields(raw), " "))
 		if len(expected) > 110 {
 			expected = expected[:110]

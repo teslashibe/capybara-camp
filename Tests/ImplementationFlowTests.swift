@@ -26,20 +26,7 @@ import Foundation
         await LocalSessionIndex.shared.save(ImportResult(sessions: [a,b], sources: [], errors: []), directory: state)
         let trace = root.appendingPathComponent("requests")
         let store = CampStore(stateDirectory: state, conversationProcess: {
-            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-            p.arguments = ["-u", "-c", """
-            import json,sys,time
-            request=json.loads(sys.stdin.readline())
-            assert request['mode']=='implementation' and request['executionApproved']
-            assert request['executionContext']=='a'*64
-            with open(sys.argv[1],'a') as f:f.write(json.dumps(request)+'\\n')
-            if request['newSession']:print(json.dumps({'type':'session','sessionID':request['session']['sessionID']}),flush=True)
-            print('{"type":"started"}',flush=True)
-            time.sleep(.2)
-            print(json.dumps({'type':'text','text':'Implemented with '+request['model']}),flush=True)
-            print('{"type":"done"}',flush=True)
-            """, trace.path]
-            return p
+            fixtureProcess("implementation", [trace.path])
         })
         store.implementationTranscriptReader = { _, _ in Transcript(messages: [], total: 0) }
         store.modelCatalogs[b.sourceID] = [ModelOption(id: "third-model", label: "Third model", efforts: ["high"], speeds: ["standard"])]

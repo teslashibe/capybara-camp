@@ -19,15 +19,15 @@ Go tests in `server/internal/localcli/codex_observer_test.go` cover partial and
 oversized socket frames, read-only RPCs, private socket permissions, approval-ID
 collisions, inode ownership, partial rollout records, repeated shutdown and
 bounded unfinished-record buffers. Conversation ownership also uses Go, with
-the same private socket and verified writer checks. The Python reference
-remains temporarily for regression-test conversion.
+the same private socket and verified writer checks. The former Python reference
+was removed after its regression cases had Go replacements.
 
 A ten-second comparison on October 21 found the same 12 live Codex session IDs
 and states in both implementations: eleven idle and one running, with no decode
 or observer errors. Both observer processes exited cleanly on cancellation.
 No model turn was started for this check.
 
-`Tests/test_codex_activity.py` covers the socket protocol, bounded frames, fragmented messages, read-only calls, turn transitions, partial writes, changed inodes, ownership checks, subprocess cleanup and an end-to-end helper stream. `Tests/CodexActivityTests.swift` covers board transitions, independent Claude polling, removed profiles, helper replacement and unexpected EOF. These checks supplement the full Python and native regression suites.
+Go tests cover the socket protocol, bounded frames, fragmented messages, read-only calls, turn transitions, partial writes, changed inodes, ownership checks, subprocess cleanup and an end-to-end helper stream. `Tests/CodexActivityTests.swift` covers board transitions, independent Claude polling, removed profiles, helper replacement and unexpected EOF using the Go test provider.
 
 Real-provider observation and native computer-use evidence are recorded separately from synthetic protocol tests. A short runtime check does not satisfy the V1 performance soak, two-Mac validation or release review gates.
 

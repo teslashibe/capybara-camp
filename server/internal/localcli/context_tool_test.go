@@ -158,6 +158,10 @@ func TestContextGrantPrivateImmutableAndCleaned(t *testing.T) {
 	grant, err := newContextGrant(sources, t.TempDir(), "/synthetic/camp-local")
 	requireApprovalOK(t, err)
 	path := filepath.Join(grant.directory, "sources.json")
+	args, ok := grant.server["args"].([]string)
+	if grant.server["command"] != "/synthetic/camp-local" || !ok || len(args) != 2 || args[0] != "context-tool" || args[1] != path {
+		t.Fatal("Context did not use the selected bundled Go executable", grant.server)
+	}
 	for _, file := range []string{grant.directory, path, grant.instructionsPath, filepath.Join(grant.directory, "owner.json")} {
 		info, err := os.Stat(file)
 		if err != nil || info.Mode().Perm()&0077 != 0 {

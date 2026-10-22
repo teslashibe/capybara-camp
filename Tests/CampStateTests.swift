@@ -2,6 +2,12 @@ import Foundation
 
 @main struct CampStateTests {
     @MainActor static func main() async throws {
+        do { _ = try Bridge.process("unsupported-fixture-action"); preconditionFailure("Unsupported helper action accepted") }
+        catch { precondition(error.localizedDescription.contains("Unsupported local session action")) }
+        // Test executables have no app bundle. Missing bundled helpers must
+        // fail explicitly without probing for an alternate language runtime.
+        do { _ = try Bridge.process("conversation"); preconditionFailure("Missing bundled helper accepted") }
+        catch { precondition(error.localizedDescription.contains("bundled Go session helper is missing")) }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = CampStore(stateDirectory: root)
@@ -131,10 +137,7 @@ import Foundation
         watcher.stop()
         for background in [false, true] {
             let rejected = CampStore(stateDirectory: root.appendingPathComponent("rejected-\(background)"), conversationProcess: {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/bin/sh")
-                process.arguments = ["-c", "read -r request; printf '%s\\n' '{\"type\":\"error\",\"message\":\"Session ownership could not be verified\"}'; exit 1"]
-                return process
+                fixtureProcess("rejected")
             })
             rejected.sessions = [a, b]; rejected.selectedID = a.id; rejected.view = "Chat"
             rejected.draft = "Preserve this rejected prompt"

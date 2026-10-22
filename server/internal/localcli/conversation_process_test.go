@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -84,6 +85,17 @@ func runConversationCodexFixture() {
 			if flow == "stall" {
 				continue
 			}
+			if flow == "failure" {
+				out(codexEvent("turn/completed", map[string]any{"turn": map[string]any{"id": "active", "status": "failed", "error": map[string]any{"message": "session limit reached"}}}))
+				continue
+			}
+			if flow == "malformed" {
+				fmt.Fprintln(os.Stdout, "not json\n[]\n{}")
+				return
+			}
+			if flow == "stderr" {
+				_, _ = io.WriteString(os.Stderr, strings.Repeat("x", 300000))
+			}
 			if flow == "approval" {
 				approval := read()
 				if object(approval["result"])["decision"] != "accept" {
@@ -117,6 +129,9 @@ func runConversationClaudeFixture() {
 	}
 	out(map[string]any{"type": "system", "subtype": "init", "permissionMode": mode})
 	switch os.Getenv("CAMP_LOCAL_TEST_FLOW") {
+	case "failure":
+		out(map[string]any{"type": "result", "is_error": true, "result": "Not logged in"})
+		return
 	case "stall":
 		for {
 			read()

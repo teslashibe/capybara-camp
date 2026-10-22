@@ -277,6 +277,11 @@ func TestConversationLimitsAndMissingUsageStayHonest(t *testing.T) {
 	if len(*events) != 0 {
 		t.Fatal("Invented token usage", *events)
 	}
+	requireApprovalOK(t, emitUsage(emit, map[string]any{"inputTokens": json.Number("34"), "outputTokens": json.Number("12")}, true))
+	requireApprovalOK(t, emitUsage(emit, map[string]any{"input_tokens": json.Number("10"), "output_tokens": json.Number("8"), "cache_read_input_tokens": json.Number("3")}, false))
+	if len(*events) != 2 || !sameID((*events)[0]["inputTokens"], 34) || !sameID((*events)[0]["outputTokens"], 12) || !sameID((*events)[1]["inputTokens"], 13) || !sameID((*events)[1]["outputTokens"], 8) {
+		t.Fatal("Provider token accounting changed", *events)
+	}
 	if emitConversationText(conversationRequest{Mode: "planning"}, emit, strings.Repeat("🌱", 3000)) == nil {
 		t.Fatal("Unbounded planning text")
 	}

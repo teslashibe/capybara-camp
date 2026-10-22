@@ -12,9 +12,6 @@ jobs:
         with:
           go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.12'
       - name: Test fixture-only adapters and native state
         run: ./test.sh
       - name: Build universal macOS app
@@ -24,3 +21,8 @@ jobs:
           codesign --verify --strict "build/Capybara Camp.app"
           codesign --verify --strict "build/Capybara Camp.app/Contents/MacOS/camp-local"
           test "$(plutil -extract CFBundleShortVersionString raw 'build/Capybara Camp.app/Contents/Info.plist')" = "$(cat VERSION)"
+          lipo "build/Capybara Camp.app/Contents/MacOS/CapybaraCamp" -verify_arch arm64 x86_64
+          lipo "build/Capybara Camp.app/Contents/MacOS/camp-local" -verify_arch arm64 x86_64
+          test ! -e "build/Capybara Camp.app/Contents/MacOS/camp-test-provider"
+          test -z "$(git ls-files '*.py' '*.pyc' '*.pyo')"
+          test -z "$(find 'build/Capybara Camp.app/Contents' -type f \( -name '*.py' -o -name '*.pyc' -o -name '*.pyo' \))"

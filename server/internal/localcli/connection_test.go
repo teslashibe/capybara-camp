@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -41,6 +43,44 @@ func TestNativeRepeatedConnectionsReleaseReadersAndDescriptors(t *testing.T) {
 	}
 	if after, err := os.ReadDir("/dev/fd"); fdErr == nil && err == nil && len(after) > len(before)+2 {
 		t.Fatalf("Connection descriptors accumulated: %d -> %d", len(before), len(after))
+	}
+}
+
+func TestNativeCloseEscalatesForIgnoringProcessesAndDescendants(t *testing.T) {
+	for _, mode := range []string{"ignore-stop", "ignoring-descendant"} {
+		a := providerFixture(t, mode)
+		path := filepath.Join(a.Config.Home, "ignoring.pid")
+		a.Config.Environment = append(a.Config.Environment, "CAMP_LOCAL_TEST_PID="+path)
+		c, err := a.connect(context.Background(), Session{Provider: "Codex", Root: a.Config.Home, CWD: a.Config.Home}, []string{"codex"}, false, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		var data []byte
+		for time.Now().Before(deadline) {
+			data, err = os.ReadFile(path)
+			if err == nil {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if err != nil {
+			c.Close()
+			t.Fatal("Child never started", err)
+		}
+		started := time.Now()
+		c.Close()
+		if time.Since(started) > 3*time.Second {
+			t.Fatal("Close did not bound SIGTERM grace time")
+		}
+		pid, _ := strconv.Atoi(string(data))
+		deadline = time.Now().Add(time.Second)
+		for syscall.Kill(pid, 0) == nil && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if syscall.Kill(pid, 0) == nil {
+			t.Fatal("Ignoring child survived cleanup", mode, pid)
+		}
 	}
 }
 

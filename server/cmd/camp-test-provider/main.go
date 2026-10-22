@@ -1,0 +1,338 @@
+// camp-test-provider supplies synthetic stdio responses to the native test
+// suites. It is built by test.sh and is never bundled in the app or server.
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+type message = map[string]any
+
+type input struct{ values <-chan any }
+
+func newInput() input {
+	values := make(chan any, 1)
+	go func() {
+		defer close(values)
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Buffer(make([]byte, 65536), 2<<20)
+		for scanner.Scan() {
+			var value any
+			if json.Unmarshal(scanner.Bytes(), &value) != nil {
+				return
+			}
+			values <- value
+		}
+	}()
+	return input{values}
+}
+
+func (i input) next() (any, error) {
+	v, ok := <-i.values
+	if !ok {
+		return nil, io.EOF
+	}
+	return v, nil
+}
+
+func (i input) request() (message, error) {
+	v, err := i.next()
+	if err != nil {
+		return nil, err
+	}
+	r, ok := v.(map[string]any)
+	if !ok {
+		return nil, errors.New("Expected fixture request")
+	}
+	return r, nil
+}
+
+func emit(v any) error     { return json.NewEncoder(os.Stdout).Encode(v) }
+func object(v any) message { result, _ := v.(map[string]any); return result }
+func text(v any) string    { result, _ := v.(string); return result }
+func array(v any) []any    { result, _ := v.([]any); return result }
+func require(ok bool) error {
+	if !ok {
+		return errors.New("Native fixture protocol assertion failed")
+	}
+	return nil
+}
+
+func appendRecord(path string, value any) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	_, err = file.Write(append(data, '\n'))
+	return err
+}
+
+// wait returns true after Stop or EOF. Keeping one bounded input reader lets a
+// native cancellation interrupt a timed response without sleeping blindly.
+func (i input) wait(duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	for {
+		select {
+		case value, ok := <-i.values:
+			if !ok || text(object(value)["type"]) == "stop" {
+				_ = emit(message{"type": "cancelled"})
+				return true
+			}
+		case <-timer.C:
+			return false
+		}
+	}
+}
+
+func approval(id, kind string) message {
+	return message{"type": "approval", "id": id, "kind": kind, "title": "Run command", "detail": "echo test", "questions": []any{}, "canApprove": true, "acceptLabel": "Allow once"}
+}
+
+func run(scenario string, args []string) error {
+	if scenario == "stalled" {
+		_ = emit(message{"type": "started"})
+		time.Sleep(30 * time.Second) // Deliberately never read the initial request.
+		return nil
+	}
+	if scenario == "close-input" {
+		return os.Stdin.Close()
+	}
+	i := newInput()
+	if scenario == "observer-live" || scenario == "observer-once" {
+		value, err := i.next()
+		if err != nil {
+			return err
+		}
+		result := message{"activity": []any{}, "sessions": []any{}, "errors": message{}}
+		if scenario == "observer-live" {
+			rows := array(value)
+			if len(rows) == 0 {
+				return errors.New("Missing observer source")
+			}
+			id := text(object(rows[0])["id"])
+			result["activity"] = []any{message{"id": id + ":one", "sourceID": id, "state": "running", "model": "fixture", "children": []any{}, "owner": "Codex", "pid": 123}}
+		}
+		if err := emit(result); err != nil {
+			return err
+		}
+		if scenario == "observer-live" {
+			// The watcher closes its one-shot request pipe after sending source
+			// metadata. Its observer keeps running until the parent terminates it.
+			time.Sleep(30 * time.Second)
+		}
+		return nil
+	}
+	r, err := i.request()
+	if err != nil {
+		return err
+	}
+	switch scenario {
+	case "gated-reply":
+		if len(args) != 1 {
+			return errors.New("Missing gate folder")
+		}
+		if err := emit(message{"type": "started"}); err != nil {
+			return err
+		}
+		path := filepath.Join(args[0], text(object(r["session"])["id"]))
+		for {
+			if _, err := os.Stat(path); err == nil {
+				break
+			}
+			if i.wait(10 * time.Millisecond) {
+				return nil
+			}
+		}
+		_ = emit(message{"type": "text", "text": "reply " + text(r["prompt"])})
+	case "cancel":
+		_ = emit(message{"type": "started"})
+		for {
+			control, err := i.request()
+			if err != nil {
+				return err
+			}
+			if text(control["type"]) == "stop" {
+				return emit(message{"type": "cancelled", "text": "Stopped"})
+			}
+		}
+	case "oversized":
+		_, err := fmt.Fprintln(os.Stdout, strings.Repeat("x", 5<<20))
+		return err
+	case "stderr-done":
+		_, _ = io.WriteString(os.Stderr, strings.Repeat("x", 1<<20))
+	case "late-stop":
+		_ = emit(message{"type": "started"})
+		_ = emit(message{"type": "text", "text": "finished"})
+		_ = emit(message{"type": "done"})
+		_, _ = i.next()
+		return nil
+	case "isolated-plan":
+		if err := require(text(r["mode"]) == "planning"); err != nil {
+			return err
+		}
+		_ = emit(message{"type": "started"})
+		if i.wait(150 * time.Millisecond) {
+			return nil
+		}
+		for _, event := range []message{{"type": "text", "text": "first"}, {"type": "boundary"}, {"type": "text", "text": "second"}, {"type": "usage", "inputTokens": 123, "outputTokens": true}} {
+			_ = emit(event)
+		}
+	case "overflow-plan":
+		for _, event := range []message{{"type": "started"}, {"type": "text", "text": strings.Repeat("a", 8000)}, {"type": "boundary"}, {"type": "text", "text": strings.Repeat("b", 300)}} {
+			_ = emit(event)
+		}
+	case "started-only":
+		return emit(message{"type": "started"})
+	case "rejected":
+		return emit(message{"type": "error", "message": "Session ownership could not be verified"})
+	case "complete":
+		_ = emit(message{"type": "started"})
+		_ = emit(message{"type": "text", "text": "Complete"})
+	case "planning":
+		if len(args) != 1 {
+			return errors.New("Missing planning trace")
+		}
+		if err := require(text(r["mode"]) == "planning"); err != nil {
+			return err
+		}
+		contexts := array(r["context"])
+		if len(contexts) == 0 {
+			return errors.New("Missing pinned context")
+		}
+		messages := array(object(contexts[0])["messages"])
+		if len(messages) == 0 || text(object(messages[0])["text"]) != "Pinned context" {
+			return errors.New("Context changed")
+		}
+		phase := "draft"
+		if strings.Contains(text(r["prompt"]), "Review the other proposal once") {
+			phase = "review"
+		} else if strings.Contains(text(r["prompt"]), "Produce one combined plan") {
+			phase = "combined"
+		}
+		provider := text(object(r["session"])["provider"])
+		if err := appendRecord(args[0], message{"provider": provider, "phase": phase, "model": r["model"], "effort": r["effort"], "prompt": r["prompt"]}); err != nil {
+			return err
+		}
+		_ = emit(message{"type": "started"})
+		if i.wait(250 * time.Millisecond) {
+			return nil
+		}
+		_ = emit(message{"type": "text", "text": provider + " " + phase + " " + text(r["model"])})
+		_ = emit(message{"type": "usage", "inputTokens": 123, "outputTokens": 45})
+	case "implementation":
+		if len(args) != 1 {
+			return errors.New("Missing implementation trace")
+		}
+		if err := require(text(r["mode"]) == "implementation" && r["executionApproved"] == true && text(r["executionContext"]) == strings.Repeat("a", 64)); err != nil {
+			return err
+		}
+		if err := appendRecord(args[0], r); err != nil {
+			return err
+		}
+		if r["newSession"] == true {
+			_ = emit(message{"type": "session", "sessionID": object(r["session"])["sessionID"]})
+		}
+		_ = emit(message{"type": "started"})
+		if i.wait(200 * time.Millisecond) {
+			return nil
+		}
+		_ = emit(message{"type": "text", "text": "Implemented with " + text(r["model"])})
+	case "question-approval":
+		if len(args) != 2 {
+			return errors.New("Missing approval identities")
+		}
+		if err := require(text(r["mode"]) == "implementation" && r["executionApproved"] == true && r["newSession"] == true); err != nil {
+			return err
+		}
+		_ = emit(message{"type": "session", "sessionID": args[0]})
+		_ = emit(message{"type": "started"})
+		_ = emit(message{"type": "approval", "id": args[1], "kind": "question", "title": "Choose", "detail": "", "canApprove": true, "acceptLabel": "Submit answers", "questions": []any{message{"id": "answer", "header": "Format", "prompt": "Which format?", "options": []any{}, "multiple": false, "secret": false, "allowText": true}}})
+		answer, err := i.request()
+		if err != nil {
+			return err
+		}
+		if err := require(text(answer["id"]) == args[1] && text(answer["type"]) == "approval" && len(object(answer["answers"])) == 0); err != nil {
+			return err
+		}
+		_ = emit(message{"type": "approvalRejected", "requestID": args[1], "message": "Answer the question"})
+		answer, err = i.request()
+		if err != nil {
+			return err
+		}
+		selected := array(object(answer["answers"])["answer"])
+		if err := require(len(selected) == 1 && text(selected[0]) == "line 1\nline 2"); err != nil {
+			return err
+		}
+		_ = emit(message{"type": "approvalResolved", "requestID": args[1]})
+		_ = emit(message{"type": "text", "text": "Implemented"})
+	case "command-approval", "unexpected-approval":
+		if len(args) != 1 {
+			return errors.New("Missing approval identity")
+		}
+		_ = emit(approval(args[0], "command"))
+		if scenario == "unexpected-approval" {
+			return nil
+		}
+		control, err := i.request()
+		if err != nil {
+			return err
+		}
+		if err := require(text(control["type"]) == "stop"); err != nil {
+			return err
+		}
+		return emit(message{"type": "cancelled"})
+	case "permission-approval":
+		if len(args) != 2 {
+			return errors.New("Missing permission trace and identity")
+		}
+		if err := require(text(r["mode"]) == "implementation" && text(object(r["permissions"])["sandbox"]) == "read-only"); err != nil {
+			return err
+		}
+		if err := appendRecord(args[0], r); err != nil {
+			return err
+		}
+		_ = emit(message{"type": "permissions", "text": "read-only · on-request · user"})
+		_ = emit(message{"type": "started"})
+		request := approval(args[1], "command")
+		request["acceptLabel"] = "Allow"
+		request["decisions"] = []any{message{"id": "acceptForSession", "label": "Allow for this session", "allows": true}, message{"id": "cancel", "label": "Decline and stop", "allows": false}}
+		_ = emit(request)
+		answer, err := i.request()
+		if err != nil {
+			return err
+		}
+		if err := require(text(answer["decision"]) == "acceptForSession" && answer["allow"] == true); err != nil {
+			return err
+		}
+		_ = emit(message{"type": "approvalResolved", "requestID": args[1]})
+		_ = emit(message{"type": "text", "text": "Done"})
+	default:
+		return errors.New("Unknown native test scenario")
+	}
+	return emit(message{"type": "done"})
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "Choose a native test scenario")
+		os.Exit(2)
+	}
+	if err := run(os.Args[1], os.Args[2:]); err != nil && !errors.Is(err, io.EOF) {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}

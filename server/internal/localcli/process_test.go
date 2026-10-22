@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -47,17 +48,23 @@ func TestMain(m *testing.M) {
 		runConversationCodexFixture()
 	case "conversation-claude":
 		runConversationClaudeFixture()
-	case "wait":
+	case "wait", "ignore-stop":
+		if mode == "ignore-stop" {
+			signal.Ignore(syscall.SIGTERM)
+		}
 		_ = os.WriteFile(os.Getenv("CAMP_LOCAL_TEST_PID"), []byte(strconv.Itoa(os.Getpid())), 0600)
 		for {
 			time.Sleep(time.Second)
 		}
-	case "descendant":
+	case "descendant", "ignoring-descendant":
 		child := exec.Command(os.Args[0])
 		child.Env = append([]string{}, os.Environ()...)
 		for i, entry := range child.Env {
 			if strings.HasPrefix(entry, "CAMP_LOCAL_TEST_PROCESS=") {
 				child.Env[i] = "CAMP_LOCAL_TEST_PROCESS=wait"
+				if mode == "ignoring-descendant" {
+					child.Env[i] = "CAMP_LOCAL_TEST_PROCESS=ignore-stop"
+				}
 			}
 		}
 		child.Stdout, child.Stderr = os.Stdout, os.Stderr

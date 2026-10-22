@@ -5,10 +5,6 @@ import Foundation
         for _ in 0..<1000 { if condition() { return }; try await Task.sleep(for: .milliseconds(10)) }
         preconditionFailure("Timed out waiting for a local conversation at line \(line)")
     }
-    static func process(_ code: String, _ args: [String] = []) -> Process {
-        let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        p.arguments = ["-u", "-c", code] + args; return p
-    }
     static func session(_ id: String, _ provider: String, root: String) -> CampSession {
         CampSession(id: id, sessionID: id, provider: provider, sourceID: id, sourceLabel: id, root: root, title: id, cwd: root, updated: 1, path: "", accountID: "", archived: false)
     }
@@ -18,18 +14,7 @@ import Foundation
         defer { try? FileManager.default.removeItem(at: root) }
         let a = session("one", "Codex", root: root.path), b = session("two", "Claude", root: root.path)
         let c = session("three", "Codex", root: root.path)
-        let code = """
-        import json,sys,time,os,select
-        r=json.loads(sys.stdin.readline())
-        name=r['session']['id']
-        print(json.dumps({'type':'started'}),flush=True)
-        while not os.path.exists(sys.argv[1]+'/'+name):
-            ready,_,_=select.select([sys.stdin],[],[],.01)
-            if ready and not sys.stdin.readline():sys.exit(0)
-        print(json.dumps({'type':'text','text':'reply '+r['prompt']}),flush=True)
-        print(json.dumps({'type':'done'}),flush=True)
-        """
-        let store = CampStore(stateDirectory: root.appendingPathComponent("state"), conversationProcess: { process(code, [root.path]) })
+        let store = CampStore(stateDirectory: root.appendingPathComponent("state"), conversationProcess: { fixtureProcess("gated-reply", [root.path]) })
         store.sessions = [a,b,c]; store.selectedID = a.id
         store.messages = [Message(id: "history", role: "assistant", text: "Original A history")]
         precondition(store.start(a, prompt: "first", model: "", tuning: ModelTuning()))
@@ -65,15 +50,7 @@ import Foundation
         let cancel = LocalConversation(session: a, history: [], prompt: "cancel")
         cancel.completed = { result = $0 }
         try cancel.start(prompt: "cancel", model: "", tuning: ModelTuning(), makeProcess: {
-            process("""
-            import json,sys
-            json.loads(sys.stdin.readline())
-            print('{"type":"started"}',flush=True)
-            for line in sys.stdin:
-                if json.loads(line).get('type')=='stop':
-                    print('{"type":"cancelled","text":"Stopped"}',flush=True)
-                    break
-            """)
+            fixtureProcess("cancel")
         })
         try await until { cancel.ready }; cancel.stop()
         try await until { result != nil }
@@ -84,7 +61,7 @@ import Foundation
         let oversized = LocalConversation(session: a, history: [], prompt: "limit")
         oversized.completed = { result = $0 }
         try oversized.start(prompt: "limit", model: "", tuning: ModelTuning(), makeProcess: {
-            process("import sys;sys.stdin.readline();print('x'*(5*1024*1024),flush=True)")
+            fixtureProcess("oversized")
         })
         try await until { result != nil }
         precondition(result?.state == "uncertain" && result?.message.contains("size limit") == true)
@@ -94,7 +71,7 @@ import Foundation
         let stderr = LocalConversation(session: a, history: [], prompt: "bounded errors")
         stderr.completed = { result = $0 }
         try stderr.start(prompt: "bounded errors", model: "", tuning: ModelTuning(), makeProcess: {
-            process("import sys;sys.stdin.readline();sys.stderr.write('x'*(1024*1024));sys.stderr.flush();print('{\"type\":\"done\"}',flush=True)")
+            fixtureProcess("stderr-done")
         })
         try await until { result != nil }
         precondition(result?.state == "completed" && result?.message == "")
@@ -104,7 +81,7 @@ import Foundation
         let lateStop = LocalConversation(session: a, history: [], prompt: "late stop")
         lateStop.completed = { result = $0 }
         try lateStop.start(prompt: "late stop", model: "", tuning: ModelTuning(), makeProcess: {
-            process("import sys;sys.stdin.readline();print('{\"type\":\"started\"}',flush=True);print('{\"type\":\"text\",\"text\":\"finished\"}',flush=True);print('{\"type\":\"done\"}',flush=True);sys.stdin.readline()")
+            fixtureProcess("late-stop")
         })
         try await until { lateStop.text == "finished" }; lateStop.stop()
         try await until { result != nil }
@@ -115,7 +92,7 @@ import Foundation
         let stalled = LocalConversation(session: a, history: [], prompt: String(repeating: "x", count: 65000))
         stalled.completed = { result = $0 }
         try stalled.start(prompt: String(repeating: "x", count: 65000), model: "", tuning: ModelTuning(), makeProcess: {
-            process("import time;print('{\"type\":\"started\"}',flush=True);time.sleep(30)")
+            fixtureProcess("stalled")
         })
         try await until { stalled.ready }
         let beforeStop = Date(); stalled.stop()
@@ -127,18 +104,7 @@ import Foundation
         let isolated = LocalConversation(session: a, history: [], prompt: "plan")
         isolated.completed = { result = $0 }
         try isolated.start(prompt: "plan", model: "fixture", tuning: ModelTuning(), mode: .planning, makeProcess: {
-            process("""
-            import json,sys,time
-            request=json.loads(sys.stdin.readline())
-            assert request['mode']=='planning'
-            print('{"type":"started"}',flush=True)
-            time.sleep(.15)
-            print('{"type":"text","text":"first"}',flush=True)
-            print('{"type":"boundary"}',flush=True)
-            print('{"type":"text","text":"second"}',flush=True)
-            print('{"type":"usage","inputTokens":123,"outputTokens":true}',flush=True)
-            print('{"type":"done"}',flush=True)
-            """)
+            fixtureProcess("isolated-plan")
         })
         try await until { isolated.ready }
         do { try isolated.steer("Change the frozen plan"); preconditionFailure("Planning accepted steering") } catch {}
@@ -150,12 +116,7 @@ import Foundation
         let overflow = LocalConversation(session: a, history: [], prompt: "plan")
         overflow.completed = { result = $0 }
         try overflow.start(prompt: "plan", model: "fixture", tuning: ModelTuning(), mode: .planning, makeProcess: {
-            process("""
-            import json,sys
-            sys.stdin.readline()
-            for event in [{'type':'started'},{'type':'text','text':'a'*8000},{'type':'boundary'},{'type':'text','text':'b'*300},{'type':'done'}]:
-                print(json.dumps(event),flush=True)
-            """)
+            fixtureProcess("overflow-plan")
         })
         try await until { result != nil }
         precondition(result?.state == "failed" && result!.output.utf8.count <= 8192)
@@ -164,7 +125,7 @@ import Foundation
         let closedInput = LocalConversation(session: a, history: [], prompt: String(repeating: "x", count: 65000))
         closedInput.completed = { result = $0 }
         try closedInput.start(prompt: String(repeating: "x", count: 65000), model: "", tuning: ModelTuning(), makeProcess: {
-            process("import sys;sys.stdin.close()")
+            fixtureProcess("close-input")
         })
         try await until { result != nil }
         precondition(result?.state == "uncertain", "A closed input pipe must report an uncertain result without terminating Camp")

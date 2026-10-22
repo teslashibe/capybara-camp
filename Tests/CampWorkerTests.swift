@@ -247,9 +247,7 @@ actor WorkerFixture: CampPublishingTransport {
             let run = LocalConversation(session: native, history: history, prompt: prompt)
             run.completed = completed
             try! run.start(prompt: prompt, model: "", tuning: ModelTuning(), makeProcess: {
-                let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-                p.arguments = ["-u", "-c", "import sys,json;sys.stdin.readline();print('{\"type\":\"started\"}',flush=True);sys.stdin.readline();print('{\"type\":\"cancelled\"}',flush=True)"]
-                return p
+                fixtureProcess("cancel")
             })
             return run
         }

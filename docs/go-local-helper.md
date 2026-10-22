@@ -8,9 +8,16 @@ Each invocation closes its files and databases before exit. Visible history keep
 
 Sub-agent history does not prove that a process is running. Stored Codex descendants remain unknown until a live observation supplies state. Claude workflow activity requires a busy parent and its latest workflow to remain unfinished; ending that workflow does not make an older interrupted workflow appear active.
 
-## Migration still in progress
+## Runtime and test dependencies
 
-The app no longer invokes or bundles Python. Both provider conversations, approval relay, temporary context lifecycle and external-session ownership checks run in Go. Python source remains temporarily as a regression reference, and the retained Python suite and inline native fixtures still need conversion. V1 must remove those files, the test requirement and CI setup before release.
+The app no longer invokes or bundles Python. Both provider conversations, approval relay, temporary context lifecycle and external-session ownership checks run in Go. The remaining Python modules, regression files and inline native fixtures have been removed. Build, test and CI use Swift and Go. The separate `camp-test-provider` executable supplies controlled native test responses and is excluded from app bundles. The [migration record](python-test-migration.json) identifies replacements for all 103 former tests.
+
+The full Go race/vet checks and all fifteen native suites pass without a Python
+interpreter. A fresh universal development build contains arm64 and x86_64 app
+and helper binaries, retains `com.capybaracamp.app`, and passes signature
+verification with the existing development identity. Source and bundle checks
+find no Python files; the test provider is absent from the app bundle. This is
+an unreleased development build, not a notarized V1 release.
 
 Claude status comes from the installed CLI's safe-mode `agents --json` response. Registry files alone never prove activity. Each probe uses its selected profile, discards inherited provider credentials and tuning, caps stdout at 2 MiB and stderr at 64 KiB, and has an eight-second timeout within a thirty-second activity request. Failures report status as unavailable without exposing raw provider errors. Cancellation and timeout stop only the process group created by that probe.
 

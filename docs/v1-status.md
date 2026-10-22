@@ -12,13 +12,13 @@ and acceptance are separate milestones.
 | Planning and projects | Single-model plan, provider comparison, saved versions, same-ticket local implementation, project assignment across repositories | Shared implementation and owner-routed approval completion; cross-device validation |
 | Shared Camps | Go/PostgreSQL auth, membership, sessions, events, requests, native cache/outbox and owner-Mac worker | Real independent users on two Macs, remaining permission/recovery cases, production deployment |
 | Onboarding | Automatic profile discovery before full import, optional Camp sign-in, projects, notifications, skip/resume | Integrate verified cloud account, default execution target and Git connection steps as those services land |
-| Go migration | All native runtime actions use bundled Go, including conversations, approvals, context lifecycle and ownership checks; no Python in app bundles | Replace Python reference tests and inline native fixtures, then remove every remaining Python file and test/CI requirement |
+| Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
 | Cloud execution | Approved contracts and API/database foundation | Isolated provider authentication/accounts, runner, local/cloud defaults and transfers, usage states, disconnected-Mac execution |
 | Git | Project repository links and local CLI project execution | Independent member authorization, isolated cloud workspaces, Git actor attribution, branch/push/PR recovery |
 | Memory and skills | Approved Cortex/shared Markdown design | Actual native and Go integrations, provider/model consolidation, memory inspection, skill editing/version rollout and permission tests |
 | Hosting and release | Public Kubernetes/K3s base and local development builds | Runner/Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, Developer ID/notarization, universal V1 release and recorded website demo |
 
-Next: finish removing the Python reference tests and fixtures, then cloud account/runner and Git
+Next: finish cloud account/runner and Git
 contracts, then memory/skills and shared execution. Validate the full workflow
 locally before the owner provisions the Hetzner box with us. Cloud sign-in and
 the two-Mac acceptance run follow that deployment. Hardware has not been bought

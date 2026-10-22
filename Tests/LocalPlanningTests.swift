@@ -9,30 +9,8 @@ import Foundation
         CampSession(id: provider, sessionID: provider, provider: provider, sourceID: provider, sourceLabel: provider,
             root: root.path, title: provider, cwd: root.path, updated: 1, path: "", accountID: "", archived: false, model: provider + "-model")
     }
-    static func process(_ code: String, args: [String] = []) -> Process {
-        let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/python3"); p.arguments = ["-u", "-c", code] + args; return p
-    }
-    static let responder = """
-    import json,sys,time,os,select
-    r=json.loads(sys.stdin.readline())
-    assert r['mode']=='planning'
-    assert r['context'][0]['messages'][0]['text']=='Pinned context'
-    phase='review' if 'Review the other proposal once' in r['prompt'] else 'combined' if 'Produce one combined plan' in r['prompt'] else 'draft'
-    line=json.dumps({'provider':r['session']['provider'],'phase':phase,'model':r['model'],'effort':r['effort'],'prompt':r['prompt']})+'\\n'
-    fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_APPEND,0o600);os.write(fd,line.encode());os.close(fd)
-    print('{"type":"started"}',flush=True)
-    end=time.monotonic()+.25
-    while time.monotonic()<end:
-        if select.select([sys.stdin],[],[],.01)[0]:
-            item=json.loads(sys.stdin.readline())
-            if item.get('type')=='stop':print('{"type":"cancelled"}',flush=True);sys.exit(0)
-    text=r['session']['provider']+' '+phase+' '+r['model']
-    print(json.dumps({'type':'text','text':text}),flush=True)
-    print('{"type":"usage","inputTokens":123,"outputTokens":45}',flush=True)
-    print('{"type":"done"}',flush=True)
-    """
-    @MainActor static func configured(_ directory: URL, code: String = responder, trace: URL) -> LocalPlanning {
-        let engine = LocalPlanning(directory: directory, makeProcess: { process(code, args: [trace.path]) })
+    @MainActor static func configured(_ directory: URL, scenario: String = "planning", trace: URL) -> LocalPlanning {
+        let engine = LocalPlanning(directory: directory, makeProcess: { fixtureProcess(scenario, [trace.path]) })
         engine.prepare = { _, _ in [SessionContext(id: "context", title: "Context", revision: "1", messages: [Message(id: "m", role: "assistant", text: "Pinned context")])] }
         return engine
     }
@@ -93,7 +71,7 @@ import Foundation
         precondition(engine.ticket(restartID)?.versions[1].completedCount == 5)
 
         // A started process that closes without a terminal event is not retried.
-        let unknown = configured(root.appendingPathComponent("unknown"), code: "import sys;sys.stdin.readline();print('{\"type\":\"started\"}',flush=True)", trace: trace)
+        let unknown = configured(root.appendingPathComponent("unknown"), scenario: "started-only", trace: trace)
         let uncertainID = unknown.create(planners: planners)!
         unknown.edit(uncertainID) { $0.brief = "Unknown outcome"; $0.budgetPolicy = "calls" }
         unknown.start(uncertainID)

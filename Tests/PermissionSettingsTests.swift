@@ -17,22 +17,7 @@ import Foundation
         await LocalSessionIndex.shared.save(ImportResult(sessions: [source], sources: [], errors: []), directory: root)
         let requestID = UUID().uuidString, trace = root.appendingPathComponent("request.json")
         let store = CampStore(stateDirectory: root, conversationProcess: {
-            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-            p.arguments = ["-u", "-c", """
-            import json,sys
-            r=json.loads(sys.stdin.readline())
-            with open(sys.argv[1],'w') as f:json.dump(r,f)
-            assert r['mode']=='implementation' and r['permissions']['sandbox']=='read-only'
-            print(json.dumps({'type':'permissions','text':'read-only · on-request · user'}),flush=True)
-            print('{"type":"started"}',flush=True)
-            print(json.dumps({'type':'approval','id':sys.argv[2],'kind':'command','title':'Approve command','detail':'echo test','questions':[],'canApprove':True,'acceptLabel':'Allow','decisions':[{'id':'acceptForSession','label':'Allow for this session','allows':True},{'id':'cancel','label':'Decline and stop','allows':False}]}),flush=True)
-            response=json.loads(sys.stdin.readline())
-            assert response['decision']=='acceptForSession' and response['allow']
-            print(json.dumps({'type':'approvalResolved','requestID':sys.argv[2]}),flush=True)
-            print('{"type":"text","text":"Done"}',flush=True)
-            print('{"type":"done"}',flush=True)
-            """, trace.path, requestID]
-            return p
+            fixtureProcess("permission-approval", [trace.path, requestID])
         })
         store.executionContextReader = { session in ExecutionContext(fingerprint: String(repeating: "a", count: 64), cwd: session.cwd, profile: session.root, provider: session.provider, permissionSummary: "Fixture") }
         let initial = PermissionSettings(sandbox: "read-only", approval: "on-request", reviewer: "user")

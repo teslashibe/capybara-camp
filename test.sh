@@ -2,11 +2,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
-export PYTHONDONTWRITEBYTECODE=1
-python3 -c 'import sys; sys.exit("Python 3.11 or newer is required") if sys.version_info < (3, 11) else None'
 mkdir -p build/test-support
-(cd server && go test -race ./internal/localcli ./internal/config ./cmd/camp-local)
-python3 -m unittest discover -s Tests -v
+(cd server && go test -race ./internal/localcli ./internal/config ./cmd/camp-local ./cmd/camp-test-provider && go build -o ../build/camp-test-provider ./cmd/camp-test-provider)
 
 # Compile the shared app code once; every suite exercises that same module.
 swiftc -parse-as-library -emit-library -emit-module -enable-testing -D CAMP_TESTING \
@@ -19,6 +16,7 @@ WORK="$(mktemp -d "$ROOT/build/.camp-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 for suite in CampStateTests CampCloudTests CampSharingTests LocalConversationTests CampWorkerTests SessionMentionsTests LocalPlanningTests ExecutionApprovalTests ImplementationFlowTests CampNotificationTests CampPlanningTests CodexActivityTests CampProjectsTests PermissionSettingsTests CampOnboardingTests; do
   printf '%s\n' '@testable import CampTestSupport' > "$WORK/$suite.swift"
+  cat Tests/FixtureProcess.swift >> "$WORK/$suite.swift"
   cat "Tests/$suite.swift" >> "$WORK/$suite.swift"
   swiftc -parse-as-library -swift-version 5 -I build/test-support -L build/test-support \
     -lCampTestSupport -framework SwiftUI -framework AppKit -framework Security -lsqlite3 \

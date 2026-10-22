@@ -60,7 +60,7 @@ The v0.0.1 release includes a universal macOS ZIP and a SHA-256 checksum. Extrac
 
 Tests use local fixtures and fake CLI processes; they do not need provider accounts or API keys. The suite covers import isolation, native state, transcript notifications, streaming, cancellation, steering and queue recovery. Live compatibility has been checked on one Mac with Codex CLI 0.163.0 and Claude Code 2.1.306; provider interfaces can change.
 
-The retained regression suite temporarily requires Python 3.11 while its fixtures are converted. Python is not bundled in or invoked by the V1 app; removing the remaining test/reference files is still part of the V1 release gate.
+The build and test suite use Swift and Go. `test.sh` builds a separate Go fixture executable for native protocol tests; that executable is never included in the app. The [migration record](docs/python-test-migration.json) maps the 103 former Python tests to their replacements.
 
 By default, builds go into `build/` and use ad-hoc signing. Set `CAMP_SIGN_IDENTITY` for your own certificate, `CAMP_APP_PATH` for a different output bundle, or `CAMP_BUNDLE_ID` for a different identifier. The default identifier is `com.capybaracamp.app`. Repeated builds keep that identifier; a matching binary hash across different builds is not promised.
 
@@ -124,7 +124,7 @@ Verified multi-account login management, a usage dashboard, automatic credential
 - `server/` — Go API, PostgreSQL migrations and permission/lifecycle tests
 - `server/cmd/camp-local/`, `server/internal/localcli/` — bundled Go imports, live observation, conversations, approvals and attached context; [migration status](docs/go-local-helper.md)
 - `deploy/` — public Kubernetes and Hetzner K3s templates
-- `Resources/*.py` — temporary regression references, excluded from V1 app bundles
+- `server/cmd/camp-test-provider/`, `Tests/FixtureProcess.swift` — test-only native protocol fixtures
 - `Tests/` — fixture-only tests
 - `docs/index.html` — self-contained setup page with the generated mascot
 - `releases/` — versioned release notes

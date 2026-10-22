@@ -37,18 +37,10 @@ import Foundation
         precondition(store.activity[session.id] == nil, "Removed profiles cannot keep a live card")
 
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let script = root.appendingPathComponent("observer.py")
-        try """
-        import json, sys, time
-        sources = json.loads(sys.stdin.readline())
-        source = sources[0]
-        state = {'id': source['id'] + ':one', 'sourceID': source['id'], 'state':'running', 'model':'fixture', 'children':[], 'owner':'Codex', 'pid':123}
-        print(json.dumps({'activity':[state], 'sessions':[], 'errors':{}}), flush=True)
-        time.sleep(30)
-        """.write(to: script, atomically: true, encoding: .utf8)
+        var singleSnapshot = false
         var processes: [Process] = []
         let watcher = CodexActivityWatch(makeProcess: {
-            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/python3"); p.arguments = [script.path]
+            let p = fixtureProcess(singleSnapshot ? "observer-once" : "observer-live")
             processes.append(p); return p
         })
         var updates: [CodexActivityUpdate] = []
@@ -66,11 +58,7 @@ import Foundation
         try await Task.sleep(for: .milliseconds(50))
         precondition(updates.count == stoppedCount, "A stopped generation emitted a stale callback")
 
-        try """
-        import json, sys
-        sys.stdin.readline()
-        print(json.dumps({'activity':[], 'sessions':[], 'errors':{}}), flush=True)
-        """.write(to: script, atomically: true, encoding: .utf8)
+        singleSnapshot = true
         watcher.observe([source])
         try await eventually("Unexpected EOF did not clear live activity") { updates.last?.errors[source.id] != nil }
         watcher.stop()

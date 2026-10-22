@@ -164,9 +164,7 @@ import Foundation
 
         let state = root.appendingPathComponent("store")
         let store = CampStore(stateDirectory: state, conversationProcess: {
-            let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-            process.arguments = ["-u", "-c", "import sys,json;json.loads(sys.stdin.readline());print('{\"type\":\"started\"}',flush=True);print('{\"type\":\"text\",\"text\":\"Complete\"}',flush=True);print('{\"type\":\"done\"}',flush=True)"]
-            return process
+            fixtureProcess("complete")
         })
         let session = CampSession(id: "notification-session", sessionID: "fixture", provider: "Codex", sourceID: "fixture", sourceLabel: "Fixture", root: root.path, title: "Native completion", cwd: root.path, updated: 1, path: "", accountID: "", archived: false)
         store.sessions = [session]

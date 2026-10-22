@@ -1,0 +1,657 @@
+{
+  "version": 1,
+  "description": "Migration record for the 103 previous Python regression cases. Targets preserve behavioral assertions against the shipped Go runtime or native Swift client. The retired one-way exec wire format is replaced by the current app-server/stream-json protocol.",
+  "cases": [
+    {
+      "previous": "Tests/test_activity.py::test_live_parent_and_nested_workflow_are_grouped",
+      "coveredBy": [
+        "server/internal/localcli/activity_test.go::TestClaudeActivityUsesVerifiedLiveRowsAndKeepsChildHistory",
+        "server/internal/localcli/children_test.go::TestClaudeChildWorkflowActivityAndTerminalState"
+      ]
+    },
+    {
+      "previous": "Tests/test_activity.py::test_idle_parent_does_not_make_old_incomplete_agent_run",
+      "coveredBy": [
+        "server/internal/localcli/children_test.go::TestClaudeChildWorkflowActivityAndTerminalState"
+      ]
+    },
+    {
+      "previous": "Tests/test_activity.py::test_completed_agent_stays_done_under_running_parent",
+      "coveredBy": [
+        "server/internal/localcli/children_test.go::TestClaudeChildWorkflowActivityAndTerminalState"
+      ]
+    },
+    {
+      "previous": "Tests/test_activity.py::test_stale_registry_not_used_when_cli_reports_no_live_sessions",
+      "coveredBy": [
+        "server/internal/localcli/activity_test.go::TestActivityStaleRegistryAndErrorsDoNotInventRunningSessions"
+      ]
+    },
+    {
+      "previous": "Tests/test_activity.py::test_probe_failure_is_explicit",
+      "coveredBy": [
+        "server/internal/localcli/activity_test.go::TestActivityFailureIsProfileScopedAndSafe"
+      ]
+    },
+    {
+      "previous": "Tests/test_activity.py::test_external_owner_blocks_resume_even_when_idle",
+      "coveredBy": [
+        "server/internal/localcli/activity_test.go::TestActivityStatesAndIdleFocus"
+      ]
+    },
+    {
+      "previous": "Tests/test_activity.py::test_model_selection_reaches_both_cli_commands",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestAllClaudePermissionModesAndSelectedModelsReachCommands"
+      ]
+    },
+    {
+      "previous": "Tests/test_activity.py::test_subagent_transcript_is_readable_but_cannot_resume",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestSubagentTranscriptReadableButNeverResumed"
+      ]
+    },
+    {
+      "previous": "Tests/test_activity.py::test_model_catalog_uses_profile_cache_and_hides_internal_entries",
+      "coveredBy": [
+        "server/internal/localcli/models_test.go::TestModelCatalogueAndCLISettings"
+      ]
+    },
+    {
+      "previous": "Tests/test_activity.py::test_codex_descendants_use_native_edges_without_inventing_live_status",
+      "coveredBy": [
+        "server/internal/localcli/children_test.go::TestCodexChildGraphIncludesDescendantsAndStopsAtCycles"
+      ]
+    },
+    {
+      "previous": "Tests/test_bridge.py::test_source_identity_does_not_merge_accounts",
+      "coveredBy": [
+        "server/internal/localcli/import_test.go::TestCodexStoresAreReadOnlyAndProfilesStaySeparate"
+      ]
+    },
+    {
+      "previous": "Tests/test_bridge.py::test_paginated_codex_reads_history_without_rollout",
+      "coveredBy": [
+        "server/internal/localcli/import_test.go::TestCodexStoresAreReadOnlyAndProfilesStaySeparate"
+      ]
+    },
+    {
+      "previous": "Tests/test_bridge.py::test_claude_import_and_text_only_history",
+      "coveredBy": [
+        "server/internal/localcli/import_test.go::TestClaudeTextOnlyHistoryAndDuplicateMessages"
+      ]
+    },
+    {
+      "previous": "Tests/test_bridge.py::test_runtime_is_profile_bound_and_has_no_bypass",
+      "coveredBy": [
+        "server/internal/localcli/models_test.go::TestRuntimeEnvironmentSeparatesProfilesAndAmbientCredentials",
+        "server/internal/localcli/conversation_test.go::TestConversationConfigurationAndCommands"
+      ]
+    },
+    {
+      "previous": "Tests/test_bridge.py::test_default_claude_preserves_default_keychain_namespace",
+      "coveredBy": [
+        "server/internal/localcli/models_test.go::TestRuntimeEnvironmentSeparatesProfilesAndAmbientCredentials"
+      ]
+    },
+    {
+      "previous": "Tests/test_codex_activity.py::test_lifecycle_partial_lines_and_old_terminal_event",
+      "coveredBy": [
+        "server/internal/localcli/codex_observer_test.go::TestRolloutTracksOnlyCompletedRecordsAndOwnedInode",
+        "server/internal/localcli/migration_test.go::TestRolloutIgnoresOldCompletionAndTextMarkers"
+      ]
+    },
+    {
+      "previous": "Tests/test_codex_activity.py::test_text_markers_and_saved_log_age_are_not_live_evidence",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestRolloutIgnoresOldCompletionAndTextMarkers"
+      ]
+    },
+    {
+      "previous": "Tests/test_codex_activity.py::test_budget_replacement_and_expected_writer_inode",
+      "coveredBy": [
+        "server/internal/localcli/codex_observer_test.go::TestRolloutTracksOnlyCompletedRecordsAndOwnedInode"
+      ]
+    },
+    {
+      "previous": "Tests/test_codex_activity.py::test_oversized_line_is_skipped_without_retaining_it",
+      "coveredBy": [
+        "server/internal/localcli/codex_observer_test.go::TestRolloutTracksOnlyCompletedRecordsAndOwnedInode",
+        "server/internal/localcli/codex_observer_test.go::TestCodexObserverBoundsUnfinishedRecordBuffers"
+      ]
+    },
+    {
+      "previous": "Tests/test_codex_activity.py::test_writer_requires_real_writable_matching_inode_under_profile",
+      "coveredBy": [
+        "server/internal/localcli/codex_observer_test.go::TestLsofRequiresWritableMatchingInodeAndSource"
+      ]
+    },
+    {
+      "previous": "Tests/test_codex_activity.py::test_snapshot_cleans_disappeared_files_and_excludes_child_cards",
+      "coveredBy": [
+        "server/internal/localcli/codex_observer_test.go::TestCodexObserverBoundsUnfinishedRecordBuffers",
+        "server/internal/localcli/codex_observer_test.go::TestGoCodexObserverStreamsWithoutOwningSessions"
+      ]
+    },
+    {
+      "previous": "Tests/test_codex_activity.py::test_exact_states",
+      "coveredBy": [
+        "server/internal/localcli/codex_observer_test.go::TestObserverValidationAndStatusMapping"
+      ]
+    },
+    {
+      "previous": "Tests/test_codex_activity.py::test_daemon_protocol_is_read_only_and_excludes_transcript",
+      "coveredBy": [
+        "server/internal/localcli/codex_observer_test.go::TestCodexFramesKeepPartialReadsAndControlFrames",
+        "server/internal/localcli/codex_observer_test.go::TestCodexObserverRPCDoesNotAnswerApprovalIDCollision",
+        "server/internal/localcli/codex_observer_test.go::TestObserverValidationAndStatusMapping"
+      ]
+    },
+    {
+      "previous": "Tests/test_codex_activity.py::test_fragmented_frames_ping_timeout_and_oversize",
+      "coveredBy": [
+        "server/internal/localcli/codex_observer_test.go::TestCodexFramesKeepPartialReadsAndControlFrames",
+        "server/internal/localcli/codex_observer_test.go::TestCodexFramesRejectInvalidOrOversizedData"
+      ]
+    },
+    {
+      "previous": "Tests/test_codex_activity.py::test_private_socket_and_resume_ownership",
+      "coveredBy": [
+        "server/internal/localcli/codex_observer_test.go::TestCodexObserverRejectsSharedSocket",
+        "server/internal/localcli/conversation_ownership_test.go::TestConversationOwnershipRejectsLoadedSessionsWithoutResuming",
+        "server/internal/localcli/conversation_ownership_test.go::TestConversationOwnershipChecksWritersAndMetadata"
+      ]
+    },
+    {
+      "previous": "Tests/test_codex_activity.py::test_capture_cancellation_reaps_child",
+      "coveredBy": [
+        "server/internal/localcli/connection_test.go::TestNativeStartDistinguishesCancellationFromLaunchFailure",
+        "server/internal/localcli/process_test.go::TestProbeReapsOwnedChildrenOnDeadlineAndParentExit",
+        "server/internal/localcli/process_test.go::TestProbeHidesPrivateErrorsAndBoundsOutput"
+      ]
+    },
+    {
+      "previous": "Tests/test_codex_activity.py::test_bridge_streams_status_and_stops_its_observer",
+      "coveredBy": [
+        "server/internal/localcli/codex_observer_test.go::TestGoCodexObserverStreamsWithoutOwningSessions",
+        "server/internal/localcli/codex_observer_test.go::TestCodexObserverRepeatedStopReleasesReaders"
+      ]
+    },
+    {
+      "previous": "Tests/test_context_tool.py::test_reads_only_attached_messages_with_pinned_links",
+      "coveredBy": [
+        "server/internal/localcli/context_tool_test.go::TestContextReadsOnlyPinnedSelections",
+        "server/internal/localcli/context_tool_test.go::TestContextDigestAndEscapedProvenance"
+      ]
+    },
+    {
+      "previous": "Tests/test_context_tool.py::test_rejects_other_sessions_paths_and_invalid_ranges",
+      "coveredBy": [
+        "server/internal/localcli/context_tool_test.go::TestContextReadsOnlyPinnedSelections"
+      ]
+    },
+    {
+      "previous": "Tests/test_context_tool.py::test_tool_surface_contains_one_read_only_tool",
+      "coveredBy": [
+        "server/internal/localcli/context_tool_test.go::TestContextToolSurfaceAndErrors"
+      ]
+    },
+    {
+      "previous": "Tests/test_context_tool.py::test_manifest_is_owner_only_and_removed",
+      "coveredBy": [
+        "server/internal/localcli/context_tool_test.go::TestContextGrantPrivateImmutableAndCleaned"
+      ]
+    },
+    {
+      "previous": "Tests/test_context_tool.py::test_orphan_cleanup_preserves_live_and_unknown_directories",
+      "coveredBy": [
+        "server/internal/localcli/context_tool_test.go::TestContextCleanupPreservesLiveAndUnknownDirectories"
+      ]
+    },
+    {
+      "previous": "Tests/test_context_tool.py::test_real_stdio_mcp_exchange",
+      "coveredBy": [
+        "server/internal/localcli/context_tool_test.go::TestContextRealStdioExchangeAndLimits"
+      ]
+    },
+    {
+      "previous": "Tests/test_context_tool.py::test_packaged_app_uses_go_and_fails_if_helper_is_missing",
+      "coveredBy": [
+        "server/internal/localcli/context_tool_test.go::TestContextGrantPrivateImmutableAndCleaned",
+        "Tests/CampStateTests.swift"
+      ]
+    },
+    {
+      "previous": "Tests/test_context_tool.py::test_context_bounds_and_duplicate_ids",
+      "coveredBy": [
+        "server/internal/localcli/context_tool_test.go::TestContextWireValidationAndBounds"
+      ]
+    },
+    {
+      "previous": "Tests/test_conversation.py::test_context_instructions_do_not_change_user_prompt",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestCodexTurnPreviewPlanningAndOrderedStreaming"
+      ]
+    },
+    {
+      "previous": "Tests/test_conversation.py::test_output_backpressure_and_close_join_readers",
+      "coveredBy": [
+        "server/internal/localcli/connection_test.go::TestNativeCloseUnblocksBackpressureAndUnacknowledgedRPC",
+        "server/internal/localcli/connection_test.go::TestNativeRepeatedConnectionsReleaseReadersAndDescriptors"
+      ]
+    },
+    {
+      "previous": "Tests/test_conversation.py::test_oversized_native_event_fails_instead_of_growing",
+      "coveredBy": [
+        "server/internal/localcli/connection_test.go::TestNativeConnectionBoundsBacklogAndEvents"
+      ]
+    },
+    {
+      "previous": "Tests/test_conversation.py::test_cancel_unblocks_an_unacknowledged_rpc",
+      "coveredBy": [
+        "server/internal/localcli/connection_test.go::TestNativeCloseUnblocksBackpressureAndUnacknowledgedRPC"
+      ]
+    },
+    {
+      "previous": "Tests/test_conversation.py::test_codex_steer_checks_active_turn_and_keeps_streaming",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestCodexSteeringAndPreviewToolRejection"
+      ]
+    },
+    {
+      "previous": "Tests/test_conversation.py::test_claude_interrupt_waits_for_ack_and_turn_boundary",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestClaudeSteeringWaitsForBothAcknowledgments"
+      ]
+    },
+    {
+      "previous": "Tests/test_conversation.py::test_codex_rejects_stale_steering_without_claiming_delivery",
+      "coveredBy": [
+        "server/internal/localcli/conversation_ownership_test.go::TestCodexSteeringDistinguishesRejectedAndUncertain"
+      ]
+    },
+    {
+      "previous": "Tests/test_edge_cases.py::test_legacy_codex_import_supplies_all_native_fields",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestLegacyImportDefaultsWithoutTypedHeader"
+      ]
+    },
+    {
+      "previous": "Tests/test_edge_cases.py::test_legacy_archived_codex_retains_archive_state",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestLegacyImportDefaultsWithoutTypedHeader"
+      ]
+    },
+    {
+      "previous": "Tests/test_edge_cases.py::test_empty_history_database_falls_back_to_jsonl",
+      "coveredBy": [
+        "server/internal/localcli/import_test.go::TestLegacyCodexAndHistoryFallback"
+      ]
+    },
+    {
+      "previous": "Tests/test_edge_cases.py::test_invalid_source_is_rejected_without_saving",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestCustomSourceRejectsInvalidBeforeWritingAndDeduplicates"
+      ]
+    },
+    {
+      "previous": "Tests/test_edge_cases.py::test_source_can_have_any_directory_name_and_is_deduplicated",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestCustomSourceRejectsInvalidBeforeWritingAndDeduplicates",
+        "server/internal/localcli/import_test.go::TestSourcesConcurrentAddsAndFailureRetention"
+      ]
+    },
+    {
+      "previous": "Tests/test_edge_cases.py::test_disappeared_configured_source_is_reported",
+      "coveredBy": [
+        "server/internal/localcli/import_test.go::TestSourcesConcurrentAddsAndFailureRetention"
+      ]
+    },
+    {
+      "previous": "Tests/test_edge_cases.py::test_failed_profile_scan_reports_root_for_ui_retention",
+      "coveredBy": [
+        "server/internal/localcli/import_test.go::TestSourcesConcurrentAddsAndFailureRetention",
+        "server/internal/localcli/children_test.go::TestLegacyReadFailureRetainsSourceAndCanceledScanDoesNotSave"
+      ]
+    },
+    {
+      "previous": "Tests/test_edge_cases.py::test_duplicate_native_session_uses_newest_file",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestNewestDuplicateSessionKeepsOneCount"
+      ]
+    },
+    {
+      "previous": "Tests/test_edge_cases.py::test_claude_cache_refreshes_after_append",
+      "coveredBy": [
+        "server/internal/localcli/import_test.go::TestClaudeTextOnlyHistoryAndDuplicateMessages"
+      ]
+    },
+    {
+      "previous": "Tests/test_edge_cases.py::test_subagent_claude_files_are_not_imported",
+      "coveredBy": [
+        "server/internal/localcli/import_test.go::TestClaudeTextOnlyHistoryAndDuplicateMessages"
+      ]
+    },
+    {
+      "previous": "Tests/test_edge_cases.py::test_invalid_history_limit_is_rejected",
+      "coveredBy": [
+        "server/internal/localcli/transcript_test.go::TestExportBoundsIsolationAndProtocolValidation"
+      ]
+    },
+    {
+      "previous": "Tests/test_edge_cases.py::test_inherited_credentials_do_not_override_profile",
+      "coveredBy": [
+        "server/internal/localcli/models_test.go::TestRuntimeEnvironmentSeparatesProfilesAndAmbientCredentials"
+      ]
+    },
+    {
+      "previous": "Tests/test_execution.py::test_local_permission_snapshot_changes_with_project_configuration",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestExecutionFingerprintTracksEachProvidersProjectRules"
+      ]
+    },
+    {
+      "previous": "Tests/test_execution.py::test_stale_execution_snapshot_fails_before_provider_start",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestConversationApprovalAndSessionLockBeforeProviderLaunch"
+      ]
+    },
+    {
+      "previous": "Tests/test_execution.py::test_command_requires_explicit_single_action_answer",
+      "coveredBy": [
+        "server/internal/localcli/approval_test.go::TestApprovalExplicitDecisionAndSingleConsumption"
+      ]
+    },
+    {
+      "previous": "Tests/test_execution.py::test_cross_thread_and_cross_turn_are_rejected",
+      "coveredBy": [
+        "server/internal/localcli/approval_test.go::TestApprovalScopeCancellationAndUnsupportedRequests"
+      ]
+    },
+    {
+      "previous": "Tests/test_execution.py::test_duplicate_request_and_server_cancellation",
+      "coveredBy": [
+        "server/internal/localcli/approval_test.go::TestApprovalScopeCancellationAndUnsupportedRequests"
+      ]
+    },
+    {
+      "previous": "Tests/test_execution.py::test_file_approval_needs_complete_diff",
+      "coveredBy": [
+        "server/internal/localcli/approval_test.go::TestApprovalFilePreviewBoundedAndReplaced"
+      ]
+    },
+    {
+      "previous": "Tests/test_execution.py::test_permissions_are_exactly_requested_and_turn_scoped",
+      "coveredBy": [
+        "server/internal/localcli/approval_test.go::TestApprovalExactTurnPermissionsAndOfferedRules"
+      ]
+    },
+    {
+      "previous": "Tests/test_execution.py::test_questions_validate_answers_and_preserve_question_ids",
+      "coveredBy": [
+        "server/internal/localcli/approval_test.go::TestApprovalQuestionValidation"
+      ]
+    },
+    {
+      "previous": "Tests/test_execution.py::test_oversized_approval_is_declined_without_truncation",
+      "coveredBy": [
+        "server/internal/localcli/approval_test.go::TestApprovalBoundsMalformedRequestsAndFailedWrite"
+      ]
+    },
+    {
+      "previous": "Tests/test_execution.py::test_claude_response_preserves_input_and_does_not_save_rules",
+      "coveredBy": [
+        "server/internal/localcli/approval_test.go::TestApprovalClaudeInputAndQuestionMapping"
+      ]
+    },
+    {
+      "previous": "Tests/test_execution.py::test_commands_preserve_profile_configuration",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestConversationConfigurationAndCommands"
+      ]
+    },
+    {
+      "previous": "Tests/test_execution.py::test_implementation_requires_approval_before_process_creation",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestConversationApprovalAndSessionLockBeforeProviderLaunch"
+      ]
+    },
+    {
+      "previous": "Tests/test_execution.py::test_logical_ticket_cannot_bypass_native_session_lock",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestConversationApprovalAndSessionLockBeforeProviderLaunch"
+      ]
+    },
+    {
+      "previous": "Tests/test_execution.py::test_codex_buffers_approval_until_turn_ack",
+      "coveredBy": [
+        "server/internal/localcli/conversation_process_test.go::TestConversationRealProviderProcessesStreamAndApprove"
+      ]
+    },
+    {
+      "previous": "Tests/test_execution.py::test_claude_waits_for_initialized_permission_channel",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestClaudeApprovalInitializationAndModeConfirmation",
+        "server/internal/localcli/conversation_process_test.go::TestConversationRealProviderProcessesStreamAndApprove"
+      ]
+    },
+    {
+      "previous": "Tests/test_permissions.py::test_provider_modes_do_not_cross_or_silently_fall_back",
+      "coveredBy": [
+        "server/internal/localcli/permissions_test.go::TestProviderPermissionValidationAndManagedRestrictions",
+        "server/internal/localcli/migration_test.go::TestPermissionWireRejectsInvalidShapesBeforeProviderWork"
+      ]
+    },
+    {
+      "previous": "Tests/test_permissions.py::test_managed_profile_and_empty_allowlists_fail_closed",
+      "coveredBy": [
+        "server/internal/localcli/permissions_test.go::TestProviderPermissionValidationAndManagedRestrictions"
+      ]
+    },
+    {
+      "previous": "Tests/test_permissions.py::test_permission_change_invalidates_saved_execution_approval",
+      "coveredBy": [
+        "server/internal/localcli/permissions_test.go::TestExecutionContextPreservesSelectionAndTracksConfig",
+        "server/internal/localcli/conversation_test.go::TestConversationApprovalAndSessionLockBeforeProviderLaunch"
+      ]
+    },
+    {
+      "previous": "Tests/test_permissions.py::test_claude_modes_reach_the_cli_without_changing_saved_settings",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestAllClaudePermissionModesAndSelectedModelsReachCommands"
+      ]
+    },
+    {
+      "previous": "Tests/test_permissions.py::test_codex_confirms_selected_settings_before_submitting_prompt",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestCodexManagedPermissionsFailBeforeTurnStart",
+        "server/internal/localcli/conversation_process_test.go::TestConversationRealProviderProcessesStreamAndApprove"
+      ]
+    },
+    {
+      "previous": "Tests/test_permissions.py::test_only_offered_decisions_can_be_sent_including_session_scope",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestOfferedSessionDecisionIsConsumedOnlyOnce"
+      ]
+    },
+    {
+      "previous": "Tests/test_planning.py::test_codex_planning_uses_an_ephemeral_thread",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestCodexTurnPreviewPlanningAndOrderedStreaming"
+      ]
+    },
+    {
+      "previous": "Tests/test_planning.py::test_claude_planning_does_not_resume_or_persist",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestConversationConfigurationAndCommands",
+        "server/internal/localcli/conversation_process_test.go::TestConversationRealProviderProcessesStreamAndApprove"
+      ]
+    },
+    {
+      "previous": "Tests/test_planning.py::test_visible_output_is_bounded_in_utf8_bytes",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestConversationLimitsAndMissingUsageStayHonest"
+      ]
+    },
+    {
+      "previous": "Tests/test_planning.py::test_usage_preserves_unavailable_values",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestConversationLimitsAndMissingUsageStayHonest",
+        "server/internal/localcli/conversation_test.go::TestClaudeStreamingUsageAndContextConnection"
+      ]
+    },
+    {
+      "previous": "Tests/test_runtime.py::test_codex_completed_turn_and_stdin",
+      "coveredBy": [
+        "server/internal/localcli/conversation_process_test.go::TestConversationRealProviderProcessesStreamAndApprove",
+        "server/internal/localcli/conversation_test.go::TestCodexTurnPreviewPlanningAndOrderedStreaming"
+      ]
+    },
+    {
+      "previous": "Tests/test_runtime.py::test_claude_stream_and_final_response",
+      "coveredBy": [
+        "server/internal/localcli/conversation_process_test.go::TestConversationRealProviderProcessesStreamAndApprove",
+        "server/internal/localcli/conversation_test.go::TestClaudeStreamingUsageAndContextConnection"
+      ]
+    },
+    {
+      "previous": "Tests/test_runtime.py::test_provider_error_is_not_reported_as_success",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestConversationProviderFailuresAndStderrRemainBounded"
+      ]
+    },
+    {
+      "previous": "Tests/test_runtime.py::test_claude_auth_error_even_with_zero_exit",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestConversationProviderFailuresAndStderrRemainBounded"
+      ]
+    },
+    {
+      "previous": "Tests/test_runtime.py::test_missing_project_fails_before_start",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestConversationApprovalAndSessionLockBeforeProviderLaunch"
+      ]
+    },
+    {
+      "previous": "Tests/test_runtime.py::test_empty_project_never_defaults_to_current_directory",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestConversationApprovalAndSessionLockBeforeProviderLaunch"
+      ]
+    },
+    {
+      "previous": "Tests/test_runtime.py::test_malformed_output_and_missing_completion_fail_closed",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestConversationProviderFailuresAndStderrRemainBounded"
+      ]
+    },
+    {
+      "previous": "Tests/test_runtime.py::test_large_stderr_does_not_deadlock",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestConversationProviderFailuresAndStderrRemainBounded"
+      ]
+    },
+    {
+      "previous": "Tests/test_runtime.py::test_duplicate_send_is_rejected_and_stop_kills_ignoring_child",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestConversationApprovalAndSessionLockBeforeProviderLaunch",
+        "server/internal/localcli/connection_test.go::TestNativeCloseEscalatesForIgnoringProcessesAndDescendants",
+        "server/internal/localcli/conversation_process_test.go::TestConversationCancellationReapsProviderAndInputReader",
+        "server/internal/localcli/migration_test.go::TestCompletedConversationReleasesItsNativeSessionLock"
+      ]
+    },
+    {
+      "previous": "Tests/test_runtime.py::test_stop_also_kills_descendant_after_parent_exits",
+      "coveredBy": [
+        "server/internal/localcli/connection_test.go::TestNativeCloseEscalatesForIgnoringProcessesAndDescendants",
+        "server/internal/localcli/process_test.go::TestProbeReapsOwnedChildrenOnDeadlineAndParentExit"
+      ]
+    },
+    {
+      "previous": "Tests/test_runtime.py::test_claude_reports_fast_mode_fallback",
+      "coveredBy": [
+        "server/internal/localcli/conversation_test.go::TestClaudeStreamingUsageAndContextConnection"
+      ]
+    },
+    {
+      "previous": "Tests/test_titles.py::test_large_titles_keep_the_same_displayed_prefix",
+      "coveredBy": [
+        "server/internal/localcli/import_test.go::TestTitleBoundAndInstructionFiltering"
+      ]
+    },
+    {
+      "previous": "Tests/test_titles.py::test_instruction_and_empty_titles_remain_generic",
+      "coveredBy": [
+        "server/internal/localcli/import_test.go::TestTitleBoundAndInstructionFiltering"
+      ]
+    },
+    {
+      "previous": "Tests/test_transcript_index.py::test_pages_updates_deletions_and_reappearance_keep_ordinals",
+      "coveredBy": [
+        "server/internal/localcli/transcript_test.go::TestExportAmendmentsTombstonesAndReappearance"
+      ]
+    },
+    {
+      "previous": "Tests/test_transcript_index.py::test_size_bound_and_profile_isolation",
+      "coveredBy": [
+        "server/internal/localcli/transcript_test.go::TestExportBoundsIsolationAndProtocolValidation"
+      ]
+    },
+    {
+      "previous": "Tests/test_transcript_index.py::test_partial_write_does_not_commit_a_deletion",
+      "coveredBy": [
+        "server/internal/localcli/transcript_test.go::TestExportPartialWriteRollsBackAndMatchesExistingIndex"
+      ]
+    },
+    {
+      "previous": "Tests/test_tuning.py::test_codex_effort_and_fast_use_per_process_config",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestTuningFlagsAndModelChoiceDoNotRewriteProviderSettings"
+      ]
+    },
+    {
+      "previous": "Tests/test_tuning.py::test_codex_ultrafast_is_a_separate_speed",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestTuningFlagsAndModelChoiceDoNotRewriteProviderSettings",
+        "server/internal/localcli/models_test.go::TestModelCatalogueAndCLISettings"
+      ]
+    },
+    {
+      "previous": "Tests/test_tuning.py::test_standard_explicitly_clears_fast",
+      "coveredBy": [
+        "server/internal/localcli/migration_test.go::TestTuningFlagsAndModelChoiceDoNotRewriteProviderSettings",
+        "server/internal/localcli/models_test.go::TestClaudeVersionsEffortAndSpeedStayConsistent"
+      ]
+    },
+    {
+      "previous": "Tests/test_tuning.py::test_claude_effort_and_fast_are_session_scoped",
+      "coveredBy": [
+        "server/internal/localcli/models_test.go::TestClaudeVersionsEffortAndSpeedStayConsistent"
+      ]
+    },
+    {
+      "previous": "Tests/test_tuning.py::test_claude_does_not_offer_or_accept_ultrafast",
+      "coveredBy": [
+        "server/internal/localcli/models_test.go::TestClaudeVersionsEffortAndSpeedStayConsistent"
+      ]
+    },
+    {
+      "previous": "Tests/test_tuning.py::test_claude_fast_only_on_supported_opus",
+      "coveredBy": [
+        "server/internal/localcli/models_test.go::TestClaudeVersionsEffortAndSpeedStayConsistent"
+      ]
+    },
+    {
+      "previous": "Tests/test_tuning.py::test_unsupported_effort_is_rejected",
+      "coveredBy": [
+        "server/internal/localcli/models_test.go::TestModelCatalogueAndCLISettings",
+        "server/internal/localcli/models_test.go::TestClaudeVersionsEffortAndSpeedStayConsistent"
+      ]
+    },
+    {
+      "previous": "Tests/test_tuning.py::test_inherited_effort_cannot_override_saved_choice",
+      "coveredBy": [
+        "server/internal/localcli/models_test.go::TestRuntimeEnvironmentSeparatesProfilesAndAmbientCredentials"
+      ]
+    }
+  ]
+}
