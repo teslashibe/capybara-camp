@@ -46,6 +46,13 @@ Shift-Tab, Space and Return, with disabled Implementation skipped. Focused nativ
 tests and strict signature verification pass. These checks close those specific
 findings; pointer edge checks and the rest of the keyboard inventory remain open.
 
+The chat follow-up extends the same keyboard handling to Main chat, subagent
+navigation, Recent sessions and the child-view return button. Native computer
+use verified selection, collapse/expand, both return paths and opening a recent
+plan; the state, child-history and imported-planning regressions pass. Menu
+keyboard access and pointer edge checks remain open. See `docs/ui-audit.md`
+for the capture and the reverse-focus transition to repeat at final acceptance.
+
 The October 22 transfer review now keeps checking the source hold while the
 user reviews permissions. Computer use reproduced the stale Source verified
 label, then verified the correction with the real native handoff coordinator

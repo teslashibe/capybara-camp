@@ -63,6 +63,30 @@ still needs the full inventory audit. Pointer activation at a recent-session
 row edge continued to report no available windows, including after successful
 keyboard input; that hit area has not passed this check.
 
+## Chat keyboard navigation
+
+The October 22 follow-up reproduced Tab skipping Main chat, the subagent
+disclosure, child rows and Recent sessions. These controls now reuse the
+planning button's focus and Space/Return behavior. The bordered Main chat
+footer uses the same keyboard modifier without changing its appearance.
+
+Computer use on the rebuilt synthetic audit app verified Tab to Main chat,
+Space to collapse Subagents, Return to expand it, Space/Return to open a child,
+and both the sidebar and footer returns to the main transcript. A Recent-session
+row opened the expected planning ticket. Shift-Tab from the first child to
+Subagents and then Main chat passed on the repeated check; an earlier attempt
+had left focus on the child, so repeat this transition during the final audit.
+The native focus order can interleave the footer with visible Recent rows.
+The capture is `build/ui-audit/native-chat-keyboard-oct22.png`.
+
+`CampStateTests`, `CampChildHistoryTests` and `ImportedPlanningTests` pass in
+`build/chat-keyboard-tests.log`, along with the bundled Go helper race suites.
+The rebuilt audit bundle passes strict deep signature verification. Model,
+effort, speed and filter menu keyboard access still needs work: those menus
+were skipped in this Tab sequence. The far-right child-row pointer attempt
+again returned no available windows. This check does not close those findings
+or the full interaction audit.
+
 ## Transfer review
 
 `tools/transfer-ui-audit.sh` builds a separate native window using the production
@@ -204,6 +228,7 @@ remain unverified by pointer; this retry does not close the whole-app audit.
 | UI-28 | Imported implementations required an extra history detour, used inconsistent controls and could leave an empty pane after revision changes | The native API walkthrough verified direct opening, shared Chat/Attempts controls, formatted saved settings, complete-stage indication and revision navigation. Read-only imports hide execution actions. Pointer edges and the final whole-app audit remain open |
 | UI-29 | Provider tiles labelled unconfirmed or failed planning work as Ready or Draft ready | One presentation function now serves local and shared planning. Native synthetic-state checks verify Needs review, Failed, Paused, Cancelled and Reviewed; imported/local regressions pass. Status is also exposed to accessibility |
 | UI-30 | Tab skipped planning navigation and stages; focus alone did not make Space activate them | The shared plain button now supports focus and Space/Return activation. Native checks passed provider drill-down, Both chats, Reviews, reverse focus and skipping disabled Implementation. The remaining whole-app keyboard inventory is open |
+| UI-31 | Tab skipped the main/child chat navigation and Recent sessions | Shared keyboard handling now reaches those rows and the child footer. Native checks passed child selection, collapse/expand, both returns and recent-plan navigation. Menu keyboard access and the full pointer audit remain open |
 
 Local captures are in `build/ui-audit/`: `reference-chat.png`,
 `reference-board.png`, `reference-planning.png`, `native-chat-before.png`, and

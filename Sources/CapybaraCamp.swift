@@ -1579,7 +1579,7 @@ struct RecentSessionsList: View {
                     .help("Filter recent sessions").accessibilityLabel("Filter recent sessions").accessibilityValue(store.recentType)
                 ScrollView {
                 LazyVStack(spacing: 5) {
-                    ForEach(store.recentSessions) { s in Button { store.open(s) } label: {
+                    ForEach(store.recentSessions) { s in CampPlainButton { store.open(s) } label: {
                         HStack(alignment: .top, spacing: 8) {
                             ProviderMark(provider: s.provider, size: 15).frame(width: 25, height: 25)
                                 .background(ProviderMark.wash(s.provider)).clipShape(RoundedRectangle(cornerRadius: 6)).padding(.top, 1)
@@ -1591,7 +1591,7 @@ struct RecentSessionsList: View {
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 7).padding(.vertical, 8)
                             .background(store.selectedID == s.id ? Color(hex: 0xEEEEE7) : .clear).clipShape(RoundedRectangle(cornerRadius: 6))
                             .contentShape(Rectangle())
-                    }.buttonStyle(.plain) }
+                    } }
                     if store.recentSessions.isEmpty { Text("No recent \(store.recentType == "All types" ? "" : store.recentType.lowercased() + " ")sessions").font(.caption).foregroundStyle(campMuted).padding() }
                 }.padding(10)
                 }
@@ -1619,7 +1619,7 @@ struct ChatView: View {
                         ProviderBadge(provider: session.provider)
                         Text(session.title).font(.system(size: 12, weight: .medium)).lineLimit(2)
                     }.padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 4)
-                    Button { pickedChild = nil } label: {
+                    CampPlainButton { pickedChild = nil } label: {
                         HStack(spacing: 9) {
                             ProviderMark(provider: session.provider, size: 15)
                             VStack(alignment: .leading, spacing: 3) {
@@ -1630,21 +1630,21 @@ struct ChatView: View {
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
                             .background(pickedChild == nil ? Color(hex: 0xDFE5D8) : .clear).clipShape(RoundedRectangle(cornerRadius: 7))
                             .contentShape(Rectangle())
-                    }.buttonStyle(.plain).padding(.horizontal, 10).accessibilityLabel(session.isPlan ? "Implementation" : "Main chat")
-                    Button { subagentsExpanded.toggle() } label: {
+                    }.padding(.horizontal, 10).accessibilityLabel(session.isPlan ? "Implementation" : "Main chat")
+                    CampPlainButton { subagentsExpanded.toggle() } label: {
                         HStack(spacing: 6) {
                             Image(systemName: subagentsExpanded ? "chevron.down" : "chevron.right").font(.system(size: 8))
                             Text("Subagents"); Spacer()
                             if store.childrenLoading { ProgressView().controlSize(.mini) }
                             Text("\(store.children.count)")
                         }.font(.system(size: 10)).foregroundStyle(campMuted).frame(height: 26).contentShape(Rectangle())
-                    }.buttonStyle(.plain).padding(.horizontal, 16).accessibilityLabel("Subagents, \(store.children.count)")
+                    }.padding(.horizontal, 16).accessibilityLabel("Subagents, \(store.children.count)")
                         .accessibilityValue(subagentsExpanded ? "Expanded" : "Collapsed")
                     if subagentsExpanded {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 5) {
                             ForEach(store.children) { child in
-                                Button { pickedChild = child } label: {
+                                CampPlainButton { pickedChild = child } label: {
                                     HStack(alignment: .top, spacing: 8) {
                                         if child.status == "running" || child.status == "syncing" { ProgressView().controlSize(.mini).frame(width: 13, height: 13) }
                                         else { ProviderMark(provider: session.provider, size: 13) }
@@ -1657,7 +1657,7 @@ struct ChatView: View {
                                     }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 5).padding(.vertical, 8)
                                         .background(pickedChild?.id == child.id ? Color(hex: 0xDFE5D8) : .clear).clipShape(RoundedRectangle(cornerRadius: 7))
                                         .contentShape(Rectangle())
-                                }.buttonStyle(.plain).disabled(child.status=="syncing")
+                                }.disabled(child.status=="syncing")
                             }
                             if store.children.isEmpty && !store.childrenLoading {
                                 Text("No saved subagents").font(.system(size: 10)).foregroundStyle(campMuted).padding(10)
@@ -1668,10 +1668,10 @@ struct ChatView: View {
                         .frame(maxHeight: store.children.isEmpty ? 35 : min(CGFloat(store.children.count) * 54, 180))
                     }
                     if session.isPlan {
-                        Button { store.reviewingPlan = session.id } label: {
+                        CampPlainButton { store.reviewingPlan = session.id } label: {
                             Label("Planning history", systemImage: "clock.arrow.circlepath").font(.system(size: 11)).foregroundStyle(campMuted)
                                 .frame(maxWidth: .infinity, alignment: .leading).frame(height: 28).contentShape(Rectangle())
-                        }.buttonStyle(.plain).padding(.horizontal, 16)
+                        }.padding(.horizontal, 16)
                     }
                     Divider().padding(.horizontal, 14).padding(.top, 6)
                 }

@@ -45,17 +45,25 @@ struct CampIconLabel: View {
     }
 }
 
-struct CampPlainButton<Label: View>: View {
+struct CampKeyboardAction: ViewModifier {
     @Environment(\.isEnabled) private var isEnabled
     let action: () -> Void
-    @ViewBuilder let label: () -> Label
-    var body: some View {
-        Button(action: action, label: label).buttonStyle(.plain).focusable()
+    func body(content: Content) -> some View {
+        content.focusable()
             .onKeyPress(keys: [.space, .return]) { _ in
                 guard isEnabled else { return .ignored }
                 action()
                 return .handled
             }
+    }
+}
+
+struct CampPlainButton<Label: View>: View {
+    let action: () -> Void
+    @ViewBuilder let label: () -> Label
+    var body: some View {
+        Button(action: action, label: label).buttonStyle(.plain)
+            .modifier(CampKeyboardAction(action: action))
     }
 }
 import AppKit

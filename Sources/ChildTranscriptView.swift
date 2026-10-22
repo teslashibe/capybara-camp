@@ -50,6 +50,7 @@ struct ChildTranscriptView: View {
                 Label("From \(parent.title)", systemImage: "arrow.turn.down.right").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
                 Spacer(minLength: 8)
                 Button(action: openMain) { Label("Main chat", systemImage: "bubble.left") }.controlSize(.small)
+                    .modifier(CampKeyboardAction(action: openMain))
             }.padding(.horizontal, 22).padding(.vertical, 12)
         }.task(id: "\(parent.id):\(child.id):\(child.updated):\(child.status):\(fileRevision)") {
             watch.stop()
