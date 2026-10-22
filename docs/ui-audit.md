@@ -298,3 +298,30 @@ against moving away from published cloud history without a reviewed transfer.
 This pass does not accept the signed-in setup flow, actual provider execution,
 two-Mac behavior, transfer flow or the full final design audit. Those remain in
 the V1 checklist.
+
+## Signed-in cloud handoff — October 21
+
+The isolated native build signed in to a disposable PostgreSQL-backed Go API.
+Test-only adapters supplied synthetic Git and provider accounts; no provider
+process or remote Git operation ran. Computer use covered selecting a Camp
+project, copying the transcript privately, choosing the provider/Git accounts
+and repository, preparing and reviewing the pinned revision, and assigning it
+to Cloud. The server confirmed `shared=false` and `allow_requests=false`.
+
+The walkthrough found and fixed three handoff defects: a background update
+could switch a private cloud chat back to its local copy; the card cache did
+not invalidate when only execution metadata changed; and the returned local
+ticket lost its Camp project label. A private cloud card also incorrectly used
+the shared-session icon. The corrected build queued and cancelled a synthetic
+prompt while retaining the cloud chat, returned to the local chat with an
+unsent draft intact, and kept both returned tickets in the Demo project filter.
+Captures are `build/ui-audit/private-cloud-chat.png` and
+`build/ui-audit/local-handoff-project.png`.
+
+The execution, projects, state, sharing, cloud and worker native suites passed.
+The full Go race run passed all packages except an HTTP test that still
+expected manual workspace retirement. Its expectation now checks the atomic
+retirement on handoff; the complete HTTP package then passed with the race
+detector. `go vet ./...` passed. A Go domain test confirms the same account can
+claim the next workspace after this return. This is not the final pair of
+complete code reviews or a live cloud acceptance run.

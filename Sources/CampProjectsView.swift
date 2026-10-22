@@ -6,7 +6,7 @@ struct ProjectAssignmentMenu: View {
     var body: some View {
         Menu {
             Button("Inbox") { store.assignProject(session,to:nil) }
-            let values=session.isCloud ? store.cloud.projects : store.projects.projects
+            let values=store.sharedProjectSession(session) != nil ? store.cloud.projects : store.projects.projects
             ForEach(values.filter { !$0.isArchived && !$0.isInbox }) { project in
                 Button { store.assignProject(session,to:project.id) } label: {
                     if store.assignedProject(session)?.id==project.id { Label(project.name,systemImage:"checkmark") } else { Text(project.name) }
@@ -15,7 +15,7 @@ struct ProjectAssignmentMenu: View {
             Divider()
             Button("Manage projects") { store.projectSheet=true }
         } label: { Label(store.projectLabel(session),systemImage:"folder").lineLimit(1) }
-            .disabled(session.isCloud && !store.canManageSharedProjects)
+            .disabled(store.sharedProjectSession(session) != nil && !store.canManageSharedProjects)
             .accessibilityLabel("Project for "+session.title)
     }
 }

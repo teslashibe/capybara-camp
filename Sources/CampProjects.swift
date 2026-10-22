@@ -48,11 +48,16 @@ struct LocalProjectState: Sendable { var revision: Int64; var projects: [CampPro
 
 extension CampStore {
     var canManageSharedProjects: Bool { ["owner","editor"].contains(cloud.camps.first { $0.id == cloud.scope?.campId }?.role ?? "") }
+    func sharedProjectSession(_ s: CampSession) -> CloudSession? {
+        if let remote = cloudSessions[s.id] { return remote }
+        guard let binding = sharing.binding(for: s), binding.shared || binding.syncToCloud == true else { return nil }
+        return cloudSessions["camp:" + binding.id]
+    }
     func projectKey(_ s: CampSession) -> String {
         if s.isSharedPlan {
             if let project = sharedPlanning.draft(s.sessionID)?.input.projectId ?? sharedPlanning.tickets.first(where:{$0.id==s.sessionID})?.projectId { return "cloud:"+project }
         }
-        if let remote = cloudSessions[s.id] { return "cloud:"+remote.projectId }
+        if let remote = sharedProjectSession(s) { return "cloud:"+remote.projectId }
         return projects.assignments[s.id].map { "local:"+$0 } ?? ""
     }
     func assignedProject(_ s: CampSession) -> CampProject? {
@@ -79,7 +84,7 @@ extension CampStore {
                         sharedPlanning.edit(draft.id) { $0.projectId=target }
                     } else if let plan=sharedPlanning.detail(s.sessionID) { try await cloud.queuePlanningProject(plan,projectID:id ?? "") }
                     else { sharedPlanning.open(s.sessionID);throw CampError.message("Open this plan once before changing its project") }
-                } else if let remote=cloudSessions[s.id] { try await cloud.queueSessionProject(remote,projectID:id ?? "") }
+                } else if let remote=sharedProjectSession(s) { try await cloud.queueSessionProject(remote,projectID:id ?? "") }
                 else { try await projects.assign(s.id,to:id) }
             } catch { banner=error.localizedDescription }
         }

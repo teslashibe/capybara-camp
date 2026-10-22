@@ -218,7 +218,7 @@ struct RunLocationView: View {
             Button { review = false } label: { Image(systemName: "chevron.left"); Text("Back") }
             Spacer()
             Button("Use Cloud") { Task { await execution.assign(remote, workspace: workspace, permissions: permissions, approved: workspace.purpose == "implementation" && approved) } }
-                .buttonStyle(.borderedProminent).disabled(busy || execution.working || execution.pending || !current(workspace, session: remote) || workspace.purpose == "implementation" && !approved)
+                .buttonStyle(.borderedProminent).disabled(busy || execution.working || execution.pending || !current(workspace, session: remote) || execution.target?.location == "cloud" && execution.target?.workspaceId == workspace.id || workspace.purpose == "implementation" && !approved)
         }
         if execution.target?.location == "cloud", execution.target?.workspaceId == workspace.id { Label("Runs in Cloud", systemImage: "checkmark").font(.caption) }
     }

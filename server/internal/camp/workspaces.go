@@ -396,6 +396,10 @@ func (g *GitStore) CancelWorkspace(ctx context.Context, a auth.Actor, campID, id
 }
 
 func (g *GitStore) emitWorkspace(ctx context.Context, tx pgx.Tx, a auth.Actor, value Workspace) error {
+	return g.store.emitWorkspace(ctx, tx, a, value)
+}
+
+func (s *Store) emitWorkspace(ctx context.Context, tx pgx.Tx, a auth.Actor, value Workspace) error {
 	if err := emit(ctx, tx, a, value.CampID, "workspace.updated", map[string]any{"id": value.ID, "session_id": value.SessionID, "state": value.State, "revision": value.Revision}); err != nil {
 		return err
 	}

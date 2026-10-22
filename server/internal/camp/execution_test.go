@@ -112,6 +112,21 @@ func TestCloudAssignmentClaimsAndActivityUseOneQueue(t *testing.T) {
 	if _, err = g.ClaimRunnerRequest(t.Context(), grant.Token, w.ID, uuid.NewString()); err == nil {
 		t.Fatal("old assignment remained executable")
 	}
+	retired, err := g.Workspace(t.Context(), owner, w.CampID, w.ID)
+	if err != nil || retired.State != "cancelled" {
+		t.Fatal("unused workspace kept its account preparation slot", retired, err)
+	}
+	nextSession, err := s.PublishSession(t.Context(), owner, w.CampID, uuid.NewString(), SessionInput{ID: uuid.NewString(), ProjectID: w.ProjectID, ProfileID: session.ProfileID, LocalSessionID: uuid.NewString(), Title: "Next ticket", State: "idle", Stage: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextWorkspace, err := g.CreateWorkspace(t.Context(), owner, w.CampID, nextSession.ID, uuid.NewString(), WorkspaceInput{ProviderAccountID: w.ProviderAccountID, GitConnectionID: w.GitConnectionID, GitHubInstallationID: w.GitHubInstallationID, RepositoryID: w.RepositoryID, InstallationPage: 1, RepositoryPage: 1, Purpose: "planning", ExpectedSessionRevision: nextSession.Revision, ExpectedProjectRevision: w.ProjectRevision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = g.ClaimRunnerWorkspace(t.Context(), grant.Token, nextWorkspace.ID, uuid.NewString()); err != nil {
+		t.Fatal("next ticket could not prepare after local handoff", err)
+	}
 }
 
 func TestAssignmentRefusesPendingWorkAndStaleConsent(t *testing.T) {

@@ -31,6 +31,11 @@ after cloud assignment. The server also rejects local transcript writes while
 the cloud owns execution. Cloud activity and streaming update the existing
 session card and chat.
 
+Returning an unused cloud workspace to the Mac retires that preparation slot
+in the same transaction. The account can then prepare another ticket. The
+ticket retains its Camp project while connected, and its unsent draft remains
+in the composer. A used workspace still requires the transfer protocol below.
+
 ## API additions
 
 `GET /v1/camps/{camp}/sessions/{session}/workspaces` returns the newest 25
@@ -47,6 +52,11 @@ the app explains the requirement and the server blocks the move.
 
 The complete history/base/ref/patch transfer flow, location defaults and native
 cloud steering remain separate unfinished parts of V1. A plain repository
-checkout is not an accepted transfer of local edits. The native setup form
-still needs the full signed-in walkthrough and the deployed two-Mac test.
-No live cloud provider run has been accepted yet.
+checkout is not an accepted transfer of local edits. The signed-in native
+happy path has been exercised against the real local API and disposable
+PostgreSQL: private copy, project-linked repository selection, preparation,
+review, cloud assignment and returning an unused workspace to its original
+Mac. That fixture simulates Git and provider sign-in; it runs no model and
+does not establish a real checkout. Remaining signed-in failure states and
+the deployed two-Mac test are still open. No live cloud provider run has been
+accepted yet.

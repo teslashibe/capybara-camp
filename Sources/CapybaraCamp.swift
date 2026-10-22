@@ -251,7 +251,7 @@ final class TranscriptWatch {
     @Published var selectedChildID: String?
     var selectedChild: ChildSession? { children.first { $0.id == selectedChildID } }
     var implementationTranscriptReader: ((CampSession, Int) async throws -> Transcript)?
-    @Published var cloudSessions: [String: CloudSession] = [:]
+    @Published var cloudSessions: [String: CloudSession] = [:] { didSet { filterRevision += 1 } }
     @Published var recentType = "All types"
     @Published var remoteHasMore = false
     private var cloudHistory: [String: [CloudMessage]] = [:]
@@ -589,7 +589,7 @@ final class TranscriptWatch {
         }) { run.stop() }
         checkPlanningSources()
         if let selectedID, let binding = sharing.shares.first(where: { "camp:" + $0.id == selectedID && !$0.shared }),
-           let remote = cloudSessions[selectedID], !remote.shared, sessions.contains(where: { $0.id == binding.local.id }) {
+           let remote = cloudSessions[selectedID], !remote.shared, remote.executionLocation != "cloud", sessions.contains(where: { $0.id == binding.local.id }) {
             self.selectedID = binding.local.id; readGeneration = UUID()
             if let run = conversations[binding.local.id] { messages = run.messages; banner = run.notice }
             else { messages = []; loadHistory() }
@@ -1418,7 +1418,7 @@ struct SessionCard: View {
         CampTaskCard(store: store, session: session) {
             HStack {
                 CampCardProvider(provider: session.provider)
-                if session.isCloud { Image(systemName: "person.2").font(.system(size: 9)).foregroundStyle(campMuted).help("Shared Camp session") }
+                if session.isCloud && store.cloudSessions[session.id]?.shared == true { Image(systemName: "person.2").font(.system(size: 9)).foregroundStyle(campMuted).help("Shared Camp session") }
                 Spacer()
                 Menu {
                     ForEach(Stage.allCases, id: \.self) { dest in Button("Move to \(dest.rawValue)") { store.move(session.id, dest) } }

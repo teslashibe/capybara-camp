@@ -13,12 +13,12 @@ and acceptance are separate milestones.
 | Shared Camps | Go/PostgreSQL auth, membership, sessions, events, requests, native cache/outbox and owner-Mac worker | Real independent users on two Macs, remaining permission/recovery cases, production deployment |
 | Onboarding | Automatic profile discovery before full import, optional Camp sign-in, owner-only cloud account setup, GitHub connections, projects, notifications, skip/resume | Default execution target; final onboarding validation after remaining services land |
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
-| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments, native Run on controls and private transcript copy, a shared request queue, provider subprocess consumption, event streaming, owner approval transport and credential revision fencing, mandatory Linux child-process isolation | Execution defaults and cloud steering, signed-in native setup walkthrough, target-runtime isolation validation, reviewed transfers, usage states, live sandbox/network/login validation and disconnected-Mac execution |
+| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments, native Run on controls and private transcript copy, a shared request queue, provider subprocess consumption, event streaming, owner approval transport and credential revision fencing, mandatory Linux child-process isolation | Execution defaults and cloud steering, scheduling multiple cloud tickets per account, remaining signed-in recovery states, target-runtime isolation validation, reviewed transfers, reported runtime settings and usage states, live sandbox/network/login validation and disconnected-Mac execution |
 | Git | Project repository links, local CLI project execution, owner-bound GitHub App authorization, native repository browsing, encrypted tokens, signed revocation, exact-commit and scoped read-token adapters, workspace records, exclusive claims and isolated runner checkouts with restart/cancellation recovery | Execution grants, Git actor attribution in execution, branch/push/PR recovery and live two-user GitHub validation |
 | Memory and skills | Approved Cortex/shared Markdown design | Actual native and Go integrations, provider/model consolidation, memory inspection, skill editing/version rollout and permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image and local development builds | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, Developer ID/notarization, universal V1 release and recorded website demo |
 
-Next: validate signed-in native cloud setup, finish execution defaults and reviewed transfers, then memory/skills
+Next: finish cloud scheduling/controls, execution defaults and reviewed transfers, then memory/skills
 and shared execution. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
@@ -38,6 +38,14 @@ the native chat projection. Mandatory process isolation has passed Linux
 adversarial checks and the installed Codex/Claude version/help smoke test.
 The chosen cluster runtime still needs to pass the same boundary checks.
 No live cloud model turn has run yet.
+The signed-in native setup happy path has now run against disposable PostgreSQL
+and the real Go API with synthetic Git/provider adapters. It covered private
+copy, project/repository selection, preparation, cloud assignment, a queued
+prompt and cancellation, and return to the original local chat with its draft.
+This caught and corrected private-cloud selection, card-cache and project-label
+handoff bugs. It is not live Git or provider acceptance. The per-account worker
+still reserves one prepared workspace at a time; multi-ticket scheduling is a
+remaining V1 requirement.
 Local tests cover concurrency, limited database permissions, cleanup ordering
 and restart behavior. The runner image, database bootstrap and rendered
 manifests pass local checks. Live sandbox, storage, network and OAuth behavior

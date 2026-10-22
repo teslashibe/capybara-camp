@@ -133,6 +133,28 @@ actor ExecutionFixture: CampAccountTransport {
         do { try await cache.saveExecutionJournal(raw, scope: scope, expectedEpoch: epoch); preconditionFailure("Revoked cache accepted execution intent") } catch {}
         let cleared = try await cache.metadata("execution-setup:" + scope.key)
         precondition(cleared == nil, "Sign-out retained execution setup")
+        let native = CampSession(id: "fixture-native", sessionID: session.localSessionId, provider: "Codex", sourceID: "fixture", sourceLabel: "Fixture", root: "/fixture", title: session.title, cwd: "/fixture/project", updated: 1, path: "", accountID: "", archived: false)
+        let store = CampStore(stateDirectory: directory.appendingPathComponent("selection"))
+        store.sessions = [native]
+        var remote = session
+        remote.executionLocation = "cloud"; remote.executionEpoch = 2
+        let share = LocalShare(id: session.id, local: native, projectId: session.projectId, shared: false, allowRequests: false, remote: remote, syncToCloud: true, state: "Runs in Cloud")
+        try await store.cloud.cache!.saveShare(share, scope: scope)
+        store.sharing.attach(scope: scope, actor: credential.actor, transport: nil)
+        for _ in 0..<100 where store.sharing.shares.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        precondition(store.sharing.shares.count == 1)
+        let project = CloudProject(id: session.projectId, name: "Fixture project")
+        store.applyCloud([remote], projects: [project])
+        let mirrorID = "camp:" + session.id
+        store.selectedID = mirrorID; store.view = "Chat"; store.draft = "Keep this unsent prompt"
+        store.applyCloud([remote], projects: [project])
+        precondition(store.selectedID == mirrorID && store.visibleSessions.map(\.id) == [mirrorID], "Private cloud update returned chat to local execution")
+        remote.executionLocation = "local"; remote.executionEpoch = 3; remote.activityRevision = 2
+        store.applyCloud([remote], projects: [project])
+        precondition(store.selectedID == native.id && store.draft == "Keep this unsent prompt", "Returning local lost ticket selection or draft")
+        precondition(store.visibleSessions.map(\.id) == [native.id], "Execution change did not invalidate the card cache")
+        precondition(store.projectKey(native) == "cloud:" + project.id && store.projectLabel(native) == project.name, "Returning local dropped the ticket's Camp project")
+        store.sharing.attach(scope: nil, actor: nil, transport: nil)
         print("PASS: Native execution recovery, assignments, stale review, ownership, sign-out and journal fences")
     }
 }

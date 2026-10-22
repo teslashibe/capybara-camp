@@ -218,8 +218,12 @@ func TestWorkspaceHTTPRequiresOwnerAndReplaysReceipt(t *testing.T) {
 	call("POST", runnerPath+"/requests/"+request.ID+"/actions", grant.Token, uuid.NewString(), finishBody, 200)
 	localBody, _ := json.Marshal(camp.ExecutionInput{Location: "local", ExpectedEpoch: 2, ExpectedSessionRevision: session.Revision, ExpectedTranscriptRevision: session.TranscriptRevision})
 	call("PUT", executionPath, tokens[0], uuid.NewString(), localBody, 200)
+	raw = call("GET", readPath, tokens[0], "", nil, 200)
+	if err = json.Unmarshal(raw, &workspace); err != nil || workspace.State != "cancelled" || workspace.Revision != 4 {
+		t.Fatal("local handoff did not retire the unused workspace", err)
+	}
 	call("POST", readPath+"/cancel", tokens[1], uuid.NewString(), []byte(`{"expected_revision":1}`), 404)
-	raw = call("POST", readPath+"/cancel", tokens[0], uuid.NewString(), []byte(`{"expected_revision":3}`), 200)
+	raw = call("POST", readPath+"/cancel", tokens[0], uuid.NewString(), []byte(`{"expected_revision":4}`), 200)
 	if err = json.Unmarshal(raw, &workspace); err != nil || workspace.State != "cancelled" {
 		t.Fatal("cancellation failed", err)
 	}

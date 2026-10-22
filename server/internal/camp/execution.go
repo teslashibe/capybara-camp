@@ -223,6 +223,25 @@ func (s *Store) AssignExecution(ctx context.Context, a auth.Actor, campID, id, k
 		if needsTransfer {
 			return out, ErrTransition
 		}
+		// No cloud history or implementation needs retaining. Retire the old
+		// preparation slot atomically with the handoff so it cannot block the
+		// account's next checkout. Used workspaces remain transfer-gated above.
+		old, err := readWorkspace(ctx, tx, a, campID, session.ExecutionWorkspaceID)
+		if err != nil {
+			return out, err
+		}
+		if old.State != "cancelled" {
+			if _, err = tx.Exec(ctx, `UPDATE git_revocations SET not_before=LEAST(not_before,now()) WHERE id=(SELECT read_revocation_id FROM ticket_workspaces WHERE id=$1)`, old.ID); err != nil {
+				return out, err
+			}
+			if err = tx.QueryRow(ctx, `UPDATE ticket_workspaces SET state='cancelled',encrypted_read_token=NULL,token_state='closed',revision=revision+1,updated_at=now() WHERE id=$1 RETURNING revision`, old.ID).Scan(&old.Revision); err != nil {
+				return out, err
+			}
+			old.State = "cancelled"
+			if err = s.emitWorkspace(ctx, tx, a, old); err != nil {
+				return out, err
+			}
+		}
 	}
 	permissions := localcli.PermissionSettings{}
 	if in.Location == "cloud" {

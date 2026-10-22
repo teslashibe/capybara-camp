@@ -87,6 +87,10 @@ func TestNativeFixtureServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	project, err = store.UpdateProject(ctx, actors[0], c.ID, project.ID, uuid.NewString(), camp.ProjectUpdate{Name: project.Name, Repositories: []string{"https://github.com/test-user/project"}, ExpectedRevision: project.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
 	invite, err := store.Invite(ctx, actors[0], c.ID, uuid.NewString(), actors[1].Email, "editor")
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +99,7 @@ func TestNativeFixtureServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := &API{Pool: pool, Auth: auth.New(pool, strings.Repeat("fixture", 8), "https://fixture.example", fixtureMail{directory}), Camps: store, Origin: "https://fixture.example"}
-	api.Git, err = camp.NewGitStore(store, gitHTTPProvider{}, bytes.Repeat([]byte{41}, 32))
+	api.Git, err = camp.NewGitStore(store, nativeGitProvider{}, bytes.Repeat([]byte{41}, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,6 +115,7 @@ func TestNativeFixtureServer(t *testing.T) {
 	if err = api.Git.Exchange(ctx, gitClaim, "native-fixture-code"); err != nil {
 		t.Fatal(err)
 	}
+	grants := seedNativeAccounts(t, store, actors[0])
 	server := httptest.NewServer(api.Handler())
 	defer server.Close()
 	data, err := json.Marshal(map[string]any{"url": server.URL, "camp_id": c.ID, "project_id": project.ID, "pid": os.Getpid(), "owner": actors[0].Email, "teammate": actors[1].Email})
@@ -123,7 +128,10 @@ func TestNativeFixtureServer(t *testing.T) {
 	t.Log("Native fixture API ready on loopback")
 	fixtureContext, stopFixture := context.WithCancel(ctx)
 	fixtureDone := make(chan struct{})
-	go func() { defer close(fixtureDone); serveFixtureProviderAccounts(fixtureContext, store, actors[0]) }()
+	go func() {
+		defer close(fixtureDone)
+		serveFixtureProviderAccounts(fixtureContext, store, api.Git, actors[0], grants)
+	}()
 	defer func() { stopFixture(); <-fixtureDone }()
 	stopped := make(chan os.Signal, 1)
 	signal.Notify(stopped, os.Interrupt, syscall.SIGTERM)
