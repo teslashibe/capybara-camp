@@ -1,7 +1,62 @@
 import Foundation
 
 @main struct BridgeIntegrationTests {
+    @MainActor static func installation(root: URL, repository: URL, capture: TransferCapture) async throws {
+        for provider in ["Codex","Claude"] {
+            func id() -> String { UUID().uuidString.lowercased() }
+            let profile=root.deletingLastPathComponent().appendingPathComponent("install-"+provider)
+            try FileManager.default.createDirectory(at:profile.appendingPathComponent(provider=="Codex" ? "sessions" : "projects"),withIntermediateDirectories:true)
+            _ = try await Bridge.call("add-source",input:Data(profile.path.utf8))
+            struct Sources: Decodable { var sources: [Source] }
+            struct Source: Decodable { var id:String;var root:String;var provider:String }
+            let discovered=try JSONDecoder().decode(Sources.self,from:await Bridge.call("discover"))
+            let source=discovered.sources.first{$0.root==profile.resolvingSymlinksInPath().path && $0.provider==provider}!
+            let scope=CloudScope(origin:"https://fixture.example",userId:id(),campId:id())
+            let parentID=id(),childID=id(),profileID=id(),deviceID=id(),workspaceID=id()
+            let session=try CampWire.decoder().decode(CloudSession.self,from:CampWire.body([
+                "id":parentID,"camp_id":scope.campId,"project_id":"","profile_id":id(),"provider":provider,"profile_label":"Fixture",
+                "owner_user_id":scope.userId,"owner_device_id":deviceID,"local_session_id":"source","title":"Transferred history",
+                "model":"fixture-model","state":"idle","stage":"ready","shared":false,"allow_requests":false,"external_owner":false,
+                "revision":3,"transcript_revision":4,"permission_revision":2,"updated_at":"2026-10-22T00:00:00Z",
+                "execution_location":"cloud","execution_epoch":2,"execution_workspace_id":workspaceID
+            ]))
+            let child=CloudChildHistory(id:childID,parentId:parentID,sourceKey:String(repeating:"a",count:64),sourceRevision:String(repeating:"b",count:64),name:"Research",phase:"",workflow:"",state:"done",model:"fixture-model",complete:true,removed:false,revision:3,transcriptRevision:2)
+            let history=TransferHistoryArchive(origin:scope.origin,session:session,conversations:[
+                .init(id:parentID,messages:[CloudMessage(id:"parent",ordinal:0,role:"user",text:"Original parent 🦫",removed:false,revision:1)]),
+                .init(id:childID,child:child,messages:[CloudMessage(id:"child",ordinal:0,role:"assistant",text:"Original child",removed:false,model:"recorded-model",effort:"high",speed:"fast",revision:1)])
+            ])
+            let exported=CloudWorkspaceExport(id:id(),campId:scope.campId,sessionId:parentID,ownerUserId:scope.userId,deviceId:deviceID,
+                workspaceId:workspaceID,workspaceRevision:1,sourceEpoch:2,sourceRevision:3,transcriptRevision:4,permissionRevision:2,
+                kind:"capture",paths:["file.txt"],state:"ready",resultSha256:capture.payloadSha256,resultBytes:capture.payload!.count,expiresAt:Date().addingTimeInterval(3600))
+            let checkout=root.appendingPathComponent("installed-"+provider)
+            let clone=Process();clone.executableURL=URL(fileURLWithPath:"/usr/bin/git")
+            clone.arguments=["clone","--no-local","--no-hardlinks","--",repository.path,checkout.path]
+            clone.standardOutput=FileHandle.nullDevice;clone.standardError=FileHandle.nullDevice
+            try clone.run();clone.waitUntilExit();precondition(clone.terminationStatus==0)
+            try FileManager.default.setAttributes([.posixPermissions:0o700],ofItemAtPath:checkout.path)
+            let target=TransferInstallationTarget(profileID:profileID,sourceID:source.id,provider:provider,root:source.root,sessionID:id(),purpose:"implementation")
+            let transferID=id()
+            func install() async throws -> TransferInstallationResult {
+                try await CampTransferInstallation.install(scope:scope,transferID:transferID,destination:checkout.path,target:target,
+                    export:exported,payload:capture.payload!,review:capture,history:history)
+            }
+            let result=try await install(), restarted=try await install()
+            precondition(result==restarted,"A new helper process did not recover the installation")
+            let state=root.appendingPathComponent("restore-"+scope.key+"-"+transferID)
+            let saved=try Data(contentsOf:state.appendingPathComponent("history.json"))
+            let expected=try CampWire.encoder().encode(history)
+            precondition(saved==expected,"Installed history lost source metadata")
+            let receipt=try Data(contentsOf:state.appendingPathComponent("installation.json"))
+            precondition(PublishMessage.hash(receipt)==result.receiptSHA256)
+            precondition(result.receipt.target==target && result.receipt.sourceID==parentID)
+            try Data("Changed after installation".utf8).write(to:checkout.appendingPathComponent("file.txt"))
+            do { _=try await install();preconditionFailure("Installer overwrote newer local work") } catch {}
+            let profileFiles=try FileManager.default.contentsOfDirectory(atPath:profile.path)
+            precondition(profileFiles.count==1,"Installer wrote provider-native state")
+        }
+    }
     @MainActor static func main() async throws {
+
         guard let path = ProcessInfo.processInfo.environment["CAPY_SUPPORT"], path.contains("/.camp-tests."), path.hasSuffix("/bridge-support") else {
             preconditionFailure("Bridge tests require an isolated support directory")
         }
@@ -52,6 +107,7 @@ import Foundation
         precondition((receipt["receipt"] as? [String:Any])?["review_sha256"] as? String == capture.reviewSha256)
         let stagedAgain=try await Bridge.call("transfer-stage",input:restore)
         precondition(staged==stagedAgain,"Restarted helper changed the staging receipt")
+        try await installation(root:root,repository:repository,capture:capture)
         let restored=try String(contentsOf:destination.appendingPathComponent("file.txt"),encoding:.utf8)
         precondition(restored=="after\n","The bundled helper did not restore selected changes")
         try Data("new local work\n".utf8).write(to:destination.appendingPathComponent("file.txt"))

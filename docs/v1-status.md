@@ -22,8 +22,8 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: connect native destination checkout/history/attachment installation and
-review to the local handoff protocol, then finish the remaining transfer cases,
+Next: prepare isolated destination checkouts and connect the native file/history
+installer, attachment handling and review to the local handoff protocol, then finish the remaining transfer cases,
 shared skills and Git publication. Continue executor-setup acceptance and the
 native design audit as those surfaces are implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
@@ -91,6 +91,30 @@ export, child-cache and transfer suites pass together
 (`build/transfer-history-final-native.log`). Go fixture compilation/vet, shell
 checks and the staged secret scan pass. Fixture cleanup removes its temporary
 database, credentials and downloaded histories.
+
+The Go destination installer now preserves the exact parent/child archive beside
+reviewed files in an existing isolated checkout. Its private intent and receipt
+bind the export, source revision, selected discovered profile, new continuation
+UUID and all content hashes. Retries reverify files and reject changed bindings,
+missing completed history, corrupt archives, symlinks and hardlinks. Interrupted
+writes clean up only the installer's own temporary files. Provider profiles are
+read for discovery and remain unchanged; installation publishes no session and
+starts no model.
+
+The native export coordinator composes authorized file reads, pinned history,
+review verification and the bundled installer. It rechecks source access and
+cancellation before returning the receipt. Go staging/installation race tests
+pass (`build/transfer-install-final-go.log`). The freshly compiled native bridge,
+export/installation, history and transfer suites pass
+(`build/transfer-install-native-current.log`). The bundled helper installs both
+provider fixtures, preserves exact parent/child archives, recovers the same
+receipt after process restart and rejects newer local edits. The native
+coordinator refuses a changed reviewed digest and permission revocation during
+installation. Vet, the Linux helper build and staged secret scanning pass.
+These tests use synthetic providers and do not launch a live model.
+Checkout creation, attachments,
+review UI and committed-handoff continuation remain open; this component does
+not complete the Cloud-to-Local journey.
 
 Cloud source inspection and selected-file capture are now implemented at schema
 34. The owner creates a bounded export; only its assigned runner can claim it.

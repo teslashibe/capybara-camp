@@ -152,6 +152,10 @@ actor CampWorkspaceExport {
     func payload() async throws -> Data? {
         guard !busy else { throw CampError.message("A workspace export is already being updated") }
         busy = true; defer { busy = false }
+        return try await readPayload()
+    }
+    // Called only while payload() or installLocally() owns the actor's busy guard.
+    private func readPayload() async throws -> Data? {
         guard let j = try await current(), !j.cancelling, let e = j.export, e.state == "ready" else { return nil }
         var bytes = Data(); bytes.reserveCapacity(e.resultBytes)
         for index in 0..<((e.resultBytes + Self.chunkBytes - 1) / Self.chunkBytes) {
@@ -200,5 +204,30 @@ actor CampWorkspaceExport {
         // Even an uncertain create must be reconciled and cancelled before reset.
         guard let e = j.export, ["cancelled","expired","failed"].contains(e.state) else { throw CampError.message("Cancel this workspace export before starting another") }
         try await save(nil,discardingKey:j.key)
+    }
+
+    func installLocally(history: CampTransferHistory, transferID: String, destination: String,
+                        target: TransferInstallationTarget, reviewedSHA256: String,
+                        callLocal: @Sendable (String,Data) async throws -> Data = { try await Bridge.call($0,input:$1) }) async throws -> TransferInstallationResult {
+        guard !busy else { throw CampError.message("A workspace export is already being updated") }
+        busy=true; defer { busy=false }
+        guard let j=try await current(), !j.cancelling, let e=j.export,
+              let raw=try await readPayload(), let archive=try await history.archive(), archive.session==j.session else { throw CampCloudError.invalidResponse }
+        let review=try CampWire.decoder().decode(TransferCapture.self,from:await callLocal("transfer-review",raw))
+        guard review.valid, review.history==nil, review.reviewSha256==reviewedSHA256,
+              review.payloadSha256==e.resultSha256,
+              review.files.count+review.excluded.count==j.paths.count,
+              Set(review.files.map(\.path)+review.excluded.map(\.path))==Set(j.paths) else { throw CampCloudError.invalidResponse }
+        try await authority()
+        guard let before=try await current(), before.key==j.key, !before.cancelling else { throw CancellationError() }
+        let result=try await CampTransferInstallation.install(scope:scope,transferID:transferID,destination:destination,
+            target:target,export:e,payload:raw,review:review,history:archive,callLocal:callLocal)
+        // Installation can outlive an authorization change. Do not hand its
+        // receipt to the handoff caller after cancellation or scope erasure.
+        _ = try await fetchChunk(j,index:0)
+        try await history.verifySource(j.session)
+        try await authority()
+        guard let after=try await current(), after.key==j.key, !after.cancelling else { throw CancellationError() }
+        return result
     }
 }

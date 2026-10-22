@@ -292,17 +292,20 @@ Cloud runners also support owner-selected source exports: inspect changed paths,
 capture the selected files with credential exclusions, and resume encrypted chunk
 uploads after a restart. Each export expires after ten minutes and reserves the
 runner while capturing. This is a backend component of Cloud-to-Local migration;
-native reverse-transfer review and full history/attachment installation remain
+native reverse-transfer review and attachment installation remain
 unfinished. See the [export contract](docs/transfer-payload.md#cloud-source-exports).
 The local destination API now accepts an owner-Mac receipt and explicit context
 continuation approval. A fresh source stop proof then moves the same ticket to
 the selected local profile while preserving its shared parent/subagent history.
-Native checkout/history installation and the reverse-transfer review remain open;
+Native checkout preparation, continuation and the reverse-transfer review remain open;
 this backend path does not yet provide a complete Cloud-to-Local journey.
 The native history downloader preserves pinned parent and subagent messages in a
 resumable local cache, with integrity and permission checks before it returns an
-archive. Real local API tests cover both providers; installing that archive into
-the destination remains part of the unfinished transfer flow.
+archive. Real local API tests cover both providers. The bundled installer now
+preserves that archive privately alongside reviewed files in an existing isolated
+checkout, with restart recovery and a receipt bound to the selected profile.
+Checkout creation, attachments and connecting the native handoff to actual local
+continuation remain part of the unfinished transfer flow.
 The native publisher includes saved subagent histories with a shared or private
 Camp copy. Child transcripts stay under the parent's permissions and have their
 own message IDs and paged history. The sidebar refreshes after child updates,

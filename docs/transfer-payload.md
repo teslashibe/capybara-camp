@@ -679,7 +679,7 @@ summary without duplicating file contents. It does not read provider profiles,
 write files or change execution ownership.
 
 The native selection/review surface still needs to connect to this coordinator.
-Destination checkout preparation, history/attachments and the local ownership
+Destination checkout preparation, attachments and the local ownership
 handoff below need native integration and acceptance. Commits absent from the
 remote repository remain a separate migration requirement.
 
@@ -707,8 +707,8 @@ installer. The archive includes its server origin and source session identity.
 Downloads use 120-message pages, at most 512 children, 2,000 messages and 8 MiB of
 text per conversation, and 32 MiB of stored pages per transfer. Exceeding a limit
 fails explicitly without truncation. The downloader owns no timer or provider
-process. Destination history installation, attachments and native continuation
-still need integration; a complete downloaded archive does not grant execution.
+process. The installer below preserves this archive privately. Attachments and
+native continuation still need integration; a complete archive does not grant execution.
 
 Run the native downloader against disposable PostgreSQL and the real local API:
 
@@ -721,6 +721,34 @@ synthetic cloud assignments, then checks download recovery on a second device,
 private-history denial for another user and changed permissions. Git and provider
 accounts are synthetic; no model turn runs. Fixture credentials and caches are
 removed on exit.
+
+## Local destination installation
+
+The bundled Go `transfer-install` action composes the existing file stager with
+an app-owned history archive. Its native caller supplies the authenticated export,
+reviewed manifest, complete history archive, selected discovered local profile,
+new conversation UUID and isolated destination checkout. The helper checks that
+the export and archive refer to the same owner, Camp, source session, workspace,
+execution epoch, transcript and permission revisions. An expired export cannot
+prepare a new receipt. The profile and provider must match local discovery.
+
+The installer holds the checkout and staging-directory locks while it writes a
+private immutable intent, exact `history.json`, reviewed files and final
+`installation.json`. Writes use private temporary files, file synchronization,
+atomic rename and directory synchronization. The receipt binds the export ID,
+history and file hashes, checkout, target profile and continuation UUID. A lost
+response can replay the same request; changing that binding, corrupting history
+or editing staged files refuses the retry. A completed installation with a
+missing archive or intent fails instead of silently reconstructing it. Symlinks,
+hardlinks and public archive files are rejected.
+
+`CampWorkspaceExport.installLocally` obtains the authorized file bytes and pinned
+history, checks the reviewed digest, invokes the bundled installer, then rechecks
+source access and cancellation before returning the receipt. Preparing an
+installation writes no provider-native transcript or credentials, publishes no
+local session and starts no model. It is an approved context-continuation
+candidate, not native provider resume. The remaining native handoff integration
+must verify the receipt and committed assignment before executing it.
 
 ## Local destination receipts
 

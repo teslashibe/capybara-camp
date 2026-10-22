@@ -11,6 +11,9 @@ private actor ExportFixture: CampAccountTransport {
     var corruptChunk = false
     var loseCancel = false
     var delayChunk = false
+    var historySession: CloudSession?
+    func history(_ session:CloudSession) { historySession=session }
+    func revokeHistory() { historySession?.permissionRevision += 1 }
     init(_ value: CloudWorkspaceExport, payload: Data) { self.value = value; self.payload = payload }
     func configure(reject: Bool = false, owner: Bool = false, corrupt: Bool = false, cancel: Bool = false) {
         rejectBytes=reject; wrongOwner=owner; corruptChunk=corrupt; loseCancel=cancel
@@ -19,6 +22,16 @@ private actor ExportFixture: CampAccountTransport {
     func delay() { delayChunk = true }
     func data(_ method: String, path: String, body: Data?, key: String?, token: String?) async throws -> Data {
         precondition(token == "fixture")
+        if let session=historySession, !path.contains("/exports") {
+            if path.contains("/children?") {
+                return try CampWire.encoder().encode(CloudChildHistoryList(parentRevision:session.transcriptRevision,permissionRevision:session.permissionRevision,children:[]))
+            }
+            if path.contains("/transcript?") {
+                return try CampWire.encoder().encode(CloudTranscript(revision:session.transcriptRevision,messages:[CloudMessage(id:"history",ordinal:0,role:"user",text:"Original history",removed:false,revision:1)],before:0,hasMore:false))
+            }
+            return try CampWire.encoder().encode(session)
+        }
+
         if path.hasSuffix("/exports") {
             precondition(method == "POST" && key != nil)
             creates.insert(key!)
@@ -151,6 +164,44 @@ private actor ExportFixture: CampAccountTransport {
         await rejects("In-flight download survived account erasure") { _ = try await inFlight.value }
         let erased=try await cache.workspaceExportChunk(scope:scope,id:value.id,index:0)
         precondition(erased == nil,"In-flight response recreated private bytes")
-        print("PASS: cloud export lost-create recovery, chunk resume, authority, cancellation, scope erasure and integrity")
+        for changedAfterInstall in [false,true] {
+            try await cache.clear(scope)
+            let installationFixture=ExportFixture(value,payload:payload)
+            await installationFixture.history(session)
+            let installEpoch=try await cache.epoch(scope)
+            let files=try CampWorkspaceExport(cache:cache,scope:scope,credential:credential,transport:installationFixture,epoch:installEpoch)
+            let history=try CampTransferHistory(cache:cache,scope:scope,credential:credential,transport:installationFixture,epoch:installEpoch)
+            try await files.begin(session:session,kind:"capture",paths:["notes.txt"])
+            await rejects("Expected lost export create") { try await files.advance() }
+            try await files.advance();try await files.advance()
+            try await history.begin(session:session);try await history.advance()
+            let archive=try await history.archive()!
+            let target=TransferInstallationTarget(profileID:UUID().uuidString,sourceID:"fixture-source",provider:"Codex",root:"/fixture/profile",sessionID:UUID().uuidString,purpose:"planning")
+            let transferID=UUID().uuidString
+            let review=TransferCapture(payloadSha256:value.resultSha256,reviewSha256:String(repeating:"b",count:64),baseCommit:String(repeating:"c",count:40),branch:"main",files:[.init(path:"notes.txt",bytes:payload.count,deleted:false)],excluded:[])
+            let receipt=TransferInstallationReceipt(version:1,scope:scope.key,transferID:transferID,exportID:value.id,destination:"/fixture/checkout",target:target,payloadSHA256:value.resultSha256,historySHA256:PublishMessage.hash(try CampWire.encoder().encode(archive)),sourceID:session.id,transcriptRevision:session.transcriptRevision,files:.init(reviewSHA256:review.reviewSha256,baseCommit:review.baseCommit,branch:review.branch,files:1))
+            let result=TransferInstallationResult(receipt:receipt,receiptSHA256:String(repeating:"d",count:64))
+            let bridge: @Sendable (String,Data) async throws -> Data = { action,body in
+                if action=="transfer-review" { precondition(body==payload);return try CampWire.encoder().encode(review) }
+                precondition(action=="transfer-install")
+                let input=try JSONSerialization.jsonObject(with:body) as! [String:Any]
+                precondition(input["historySHA256"] as? String==receipt.historySHA256)
+                if changedAfterInstall { await installationFixture.revokeHistory() }
+                return try JSONEncoder().encode(result)
+            }
+            if changedAfterInstall {
+                await rejects("Installer returned a receipt after source permission changed") {
+                    _ = try await files.installLocally(history:history,transferID:transferID,destination:"/fixture/checkout",target:target,reviewedSHA256:review.reviewSha256,callLocal:bridge)
+                }
+            } else {
+                let installed=try await files.installLocally(history:history,transferID:transferID,destination:"/fixture/checkout",target:target,reviewedSHA256:review.reviewSha256,callLocal:bridge)
+                precondition(installed==result)
+                await rejects("Installer accepted a different reviewed digest") {
+                    _ = try await files.installLocally(history:history,transferID:transferID,destination:"/fixture/checkout",target:target,reviewedSHA256:String(repeating:"e",count:64),callLocal:bridge)
+                }
+            }
+        }
+        print("PASS: cloud export recovery, installation, changed permissions, cancellation, erasure and integrity")
+
     }
 }

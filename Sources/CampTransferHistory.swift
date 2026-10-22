@@ -182,6 +182,11 @@ actor CampTransferHistory {
         guard let current=try await current(), current.id==j.id, current.revision==j.revision else { throw CancellationError() }
         return result
     }
+    func verifySource(_ session: CloudSession) async throws {
+        guard let j=try await current(), j.complete, j.session==session else { throw CampCloudError.invalidResponse }
+        try await checkSource(session)
+        guard let after=try await current(), after.id==j.id, after.revision==j.revision else { throw CancellationError() }
+    }
     func discard() async throws {
         guard let j=try await current() else { return }
         try await cache.discardTransferHistory(scope:scope,id:j.id,expectedEpoch:epoch)
