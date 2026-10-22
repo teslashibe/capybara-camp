@@ -175,6 +175,20 @@ actor CampCache {
         guard values.count <= 1000, values.allSatisfy(\.valid), Set(values.map(\.id)).count == values.count else { throw CampCloudError.invalidResponse }
         try setMetadata("notifications:" + scope.key, CampWire.encoder().encode(values))
     }
+    func planning(_ scope: CloudScope) throws -> CampPlanningState {
+        guard let data = try metadata("planning:" + scope.key) else { return CampPlanningState() }
+        return try CampWire.decoder().decode(CampPlanningState.self, from: data)
+    }
+    func savePlanning(_ state: CampPlanningState, scope: CloudScope, expectedEpoch: Int64) throws {
+        try checkEpoch(scope, expectedEpoch)
+        guard state.drafts.count <= 50, state.tickets.count <= 100, state.details.count <= 100, state.operations.count <= 100,
+              state.tickets.allSatisfy(\.valid), state.details.values.allSatisfy({ $0.valid && $0.campId == scope.campId }) else { throw CampCloudError.invalidResponse }
+        let old = try planning(scope)
+        guard state.revision >= old.revision else { return }
+        let data = try CampWire.encoder().encode(state)
+        guard data.count <= 8 << 20 else { throw CampCloudError.responseTooLarge }
+        try setMetadata("planning:" + scope.key, data)
+    }
     func saveTranscript(_ transcript: CloudTranscript, scope: CloudScope, sessionId: String, before: Int64 = 0, expectedPermissionRevision: Int64? = nil, expectedEpoch: Int64? = nil) throws {
         guard transcript.revision >= 0, before >= 0, transcript.messages.count <= 200 else { throw CampCloudError.invalidResponse }
         let floor = transcript.hasMore ? transcript.before : 0
@@ -289,6 +303,7 @@ actor CampCache {
             try execute("DELETE FROM metadata WHERE key=?", [.text("cursor:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("snapshot:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("notifications:" + scope.key)])
+            try execute("DELETE FROM metadata WHERE key=?", [.text("planning:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("worker-claim:" + scope.key)])
             for var attempt in try attempts(scope) {
                 if ["completed", "failed", "cancelled"].contains(attempt.state) {

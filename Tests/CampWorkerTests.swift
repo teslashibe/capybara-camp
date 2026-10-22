@@ -12,6 +12,7 @@ actor WorkerFixture: CampPublishingTransport {
     var gate: CheckedContinuation<Void, Never>?
     var holdClaim = false
     var holdStartReply = false
+    var planningPaused = false
     var finalPayload: [String: String] = [:]
     func resultPayload() -> [String: String] { finalPayload }
     init(request: CloudRequest, session: CloudSession) { self.request = request; self.session = session }
@@ -19,6 +20,7 @@ actor WorkerFixture: CampPublishingTransport {
         loseClaim = claim; loseStart = start; loseFinish = finish; holdClaim = hold; holdStartReply = startReply
     }
     func state(_ state: String) { request.state = state }
+    func pausePlanning(_ paused: Bool) { planningPaused = paused }
     func deadline(_ seconds: TimeInterval) { request.leaseUntil = Date().addingTimeInterval(seconds) }
     func snapshot() -> (CloudRequest, [String: [String]], Bool) { (request, calls, held) }
     func release() { gate?.resume(); gate = nil }
@@ -36,6 +38,7 @@ actor WorkerFixture: CampPublishingTransport {
         let body = try JSONSerialization.jsonObject(with: operation.body) as! [String: Any]
         if operation.kind == "claim" {
             let ids = body["session_ids"] as! [String]
+            if request.isPlanning && planningPaused { return Data("null".utf8) }
             guard !request.isPlanning || body["include_planning"] as? Bool == true else { return Data("null".utf8) }
             guard request.state == "queued", ids.contains(request.sessionId) else { return Data("null".utf8) }
             request.state = "claimed"; request.leaseToken = UUID().uuidString; request.leaseUntil = Date().addingTimeInterval(60)
@@ -130,6 +133,26 @@ actor WorkerFixture: CampPublishingTransport {
         check(planningPayload["output"] == "Frozen planning output" && planningPayload["input_tokens"] == "73", "Planning output and usage did not reach the server")
         check(!planWorker.usesPlanningProvider("Codex") && planWorker.activePlanningCount == 0)
         planWorker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+
+        let resumeCache = try CampCache(directory: root.appendingPathComponent("planning-resume"))
+        let resumeAPI = WorkerFixture(request: planRequest, session: remote)
+        await resumeAPI.pausePlanning(true)
+        let resumeWorker = CampLocalWorker(cache: resumeCache, automatic: false)
+        resumeWorker.nativeSession = { _ in local }; resumeWorker.available = { _ in true }
+        var resumedStarts = 0
+        resumeWorker.execute = { native, _, prompt, _, _, _ in
+            resumedStarts += 1
+            return LocalConversation(session: native, history: [], prompt: prompt)
+        }
+        resumeWorker.attach(scope: scope, actor: actor, transport: resumeAPI, sessions: [remote])
+        await resumeWorker.poll(); await resumeWorker.poll()
+        let pausedCalls = await resumeAPI.snapshot().1["claim"]?.count
+        check(resumedStarts == 0 && pausedCalls == 1, "Paused planning should become idle")
+        await resumeAPI.pausePlanning(false)
+        resumeWorker.scan() // A planning.changed event must wake a worker even when its queued request did not change.
+        await resumeWorker.poll()
+        check(resumedStarts == 1, "Resumed planning did not wake an idle worker")
+        resumeWorker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
         var retained = durableResult!; retained.state = "uncertain"
         try await planCache.saveWorkerAttempt(retained, scope: scope, expectedEpoch: 0)
         try await planCache.clear(scope)

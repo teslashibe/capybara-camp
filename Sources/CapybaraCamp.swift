@@ -17,8 +17,9 @@ struct CampSession: Codable, Identifiable, Equatable, Sendable {
     let archived: Bool
     var model: String = ""
     var project: String { URL(fileURLWithPath: cwd).lastPathComponent }
-    var isCloud: Bool { id.hasPrefix("camp:") && root.isEmpty }
-    var isPlan: Bool { id.hasPrefix("plan:") }
+    var isSharedPlan: Bool { id.hasPrefix("camp-plan:") || id.hasPrefix("camp-plan-draft:") }
+    var isCloud: Bool { (id.hasPrefix("camp:") || isSharedPlan) && root.isEmpty }
+    var isPlan: Bool { id.hasPrefix("plan:") || isSharedPlan }
 }
 struct CampSource: Codable, Identifiable, Equatable {
     let id: String
@@ -212,11 +213,13 @@ final class TranscriptWatch {
     let mentions: SessionMentions
     let planning: LocalPlanning
     let notifications: CampNotifications
+    let sharedPlanning: CampPlanning
     @Published var notificationSheet = false
     @Published var notificationPlanVersion: Int?
     @Published var notificationMessageID: String?
     @Published var sharedPlanResult: CloudPlanningResult?
     var sharedPlanScope: CloudScope?
+    var openingNotification = false
     var cloudRestoreFinished = false
     var hasImportedSessions = false
     private var externalRuns: [String: String] = [:]
@@ -335,11 +338,12 @@ final class TranscriptWatch {
     private func stateSnapshot() -> SessionStateSnapshot {
         var running = Set(conversations.keys)
         running.formUnion(planning.tickets.filter { $0.stage == .progress }.map(\.id))
+        running.formUnion(sharedPlanning.tickets.filter { $0.stage == .progress }.map { "camp-plan:" + $0.id })
         var observed = activity
         for plan in planning.tickets { if let state = activityFor(plan.session) { observed[plan.id] = state } }
         for share in sharing.shares where running.contains(share.local.id) { running.insert("camp:" + share.id) }
         return SessionStateSnapshot(running: running, activity: observed, remote: cloudSessions,
-            requests: Set(cloud.requests.filter { ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId)), stages: stages)
+            requests: Set(cloud.requests.filter { !$0.isPlanning && ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId)), stages: stages)
     }
     func boardSessions(_ stage: Stage) -> [CampSession] {
         if cachedBoardRevision != filterRevision || cachedBoardSearch != search || cachedBoardSource != sourceFilter {
@@ -364,6 +368,12 @@ final class TranscriptWatch {
         cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"))
         #endif
         sharing = CampSharing(cache: cloud.cache)
+        sharedPlanning = CampPlanning(cache: cloud.cache)
+        sharedPlanning.changed = { [weak self] in self?.syncSharedPlans() }
+        sharedPlanning.created = { [weak self] draft, id in
+            guard let self, self.selectedID == "camp-plan-draft:" + draft else { return }
+            self.openSharedPlan(id)
+        }
         notifications.seedPlans(planning.tickets)
         notifications.openRequested = { [weak self] in Task { await self?.openPendingNotification() } }
         try? FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -413,12 +423,14 @@ final class TranscriptWatch {
             return self.conversations[local.id]
         }
         cloud.worker.requestUpdated = { [weak cloud] value in Task { await cloud?.acceptWorkerRequest(value) } }
-        cloud.requestChanged = { [weak cloud] value in cloud?.worker.changed(value) }
+        cloud.requestChanged = { [weak self] value in
+            self?.cloud.worker.changed(value)
+            if value.isPlanning { self?.sharedPlanning.refresh() }
+        }
         cloud.notificationsChanged = { [weak self] values, scope, live in self?.notifications.applyCloud(values, scope: scope, live: live) }
         cloud.planningChanged = { [weak self] id in
-            guard let self, self.sharedPlanResult?.id == id else { return }
-            self.sharedPlanResult = nil; self.view = "Board"
-            self.banner = "This plan changed. Open its current result from Notifications"
+            self?.cloud.worker.scan()
+            self?.sharedPlanning.refresh()
         }
         notifications.cloudAction = { [weak cloud] scope, ids, action in
             guard let cloud else { throw CampCloudError.cacheUnavailable }
@@ -441,9 +453,11 @@ final class TranscriptWatch {
                 let transport = AuthenticatedCampPublisher(client: client, token: token)
                 self.sharing.attach(scope: scope, actor: actor, transport: transport)
                 self.cloud.worker.attach(scope: scope, actor: actor, transport: transport, sessions: sessions)
+                self.sharedPlanning.attach(scope: scope, actor: actor, transport: transport, sessions: sessions)
             } else {
                 self.sharing.attach(scope: nil, actor: nil, transport: nil)
                 self.cloud.worker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+                self.sharedPlanning.attach(scope: nil, actor: nil, transport: nil, sessions: [])
             }
         }
         cloud.transcriptChanged = { [weak self] id in
@@ -481,7 +495,7 @@ final class TranscriptWatch {
     private func syncPlans() {
         guard !planning.tickets.isEmpty else { return }
         let plans = planning.tickets.map(\.session)
-        sessions = (plans + sessions.filter { !$0.isPlan }).sorted { $0.updated > $1.updated }
+        sessions = (plans + sessions.filter { !$0.isPlan || $0.isSharedPlan }).sorted { $0.updated > $1.updated }
         for plan in planning.tickets { stages[plan.id] = plan.stage }
     }
     var recentSessions: [CampSession] {
@@ -500,14 +514,14 @@ final class TranscriptWatch {
         let previous = cloudSessions
         let next = Dictionary(uniqueKeysWithValues: values.map { ("camp:" + $0.id, $0) })
         if cloudSessions != next { cloudSessions = next }
-        let active = Set(cloud.requests.filter { ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId))
+        let active = Set(cloud.requests.filter { !$0.isPlanning && ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId))
         if activeRequestSessions != active { activeRequestSessions = active; filterRevision += 1; objectWillChange.send() }
         let names = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.name) })
         let imported = values.map { value in
             CampSession(id: "camp:" + value.id, sessionID: value.localSessionId, provider: value.provider, sourceID: "camp-profile:" + value.profileId, sourceLabel: value.profileLabel, root: "", title: value.title, cwd: names[value.projectId] ?? "Shared project", updated: value.updatedAt.timeIntervalSince1970, path: "", accountID: value.ownerUserId, archived: value.stage == "Done", model: value.model)
         }
         for (id, value) in cloudSessions where value.revision > (previous[id]?.revision ?? 0) { stages[id] = Stage(rawValue: value.stage) ?? .ready }
-        let updatedSessions = (sessions.filter { !$0.isCloud } + imported).sorted { $0.updated > $1.updated }
+        let updatedSessions = (sessions.filter { !$0.isCloud || $0.isSharedPlan } + imported).sorted { $0.updated > $1.updated }
         if sessions != updatedSessions { sessions = updatedSessions }
         for run in conversations.values where run.references.contains(where: { reference in
             guard let source = reference.cloud else { return false }
@@ -772,6 +786,10 @@ final class TranscriptWatch {
             messages = []; historyTotal = 0; historyLimit = 120; banner = ""
         }
         selectedID = session.id; children = activityFor(session)?.children ?? []; view = "Chat"
+        if session.isSharedPlan {
+            sharedPlanning.open(String(session.id.dropFirst(session.id.hasPrefix("camp-plan-draft:") ? 16 : 10)))
+            transcriptWatch.stop(); return
+        }
         if let run = conversation(session) { messages = run.messages; banner = run.notice }
         observeHistory(); loadHistory()
     }
@@ -1087,6 +1105,7 @@ struct RootView: View {
                         .font(.system(size: 12)).padding(14).background(Color(hex: 0xF5E7D4))
                 }
                 if store.view == "Board" { BoardView(store: store) }
+                else if let selected = store.selected, selected.isSharedPlan { SharedPlanningWorkspace(store: store, planning: store.sharedPlanning, id: String(selected.id.dropFirst(selected.id.hasPrefix("camp-plan-draft:") ? 16 : 10))) }
                 else if let result = store.sharedPlanResult { SharedPlanningResultView(store: store, result: result) }
                 else if let id = store.selectedID, let plan = store.planning.ticket(id), plan.implementation == nil || store.reviewingPlan == id { PlanningWorkspace(store: store, planning: store.planning, id: id) }
                 else { ChatView(store: store) }
@@ -1096,7 +1115,7 @@ struct RootView: View {
         .onAppear {
             store.refresh(); store.startBackgroundObservation()
             AppDelegate.reopen = { openWindow(id: "camp") }
-            AppDelegate.prepareToQuit = { [weak store] in await store?.notifications.flush() }
+            AppDelegate.prepareToQuit = { [weak store] in await store?.notifications.flush(); await store?.sharedPlanning.flush() }
         }
         .sheet(isPresented: $store.notificationSheet) { CampNotificationsView(store: store, notices: store.notifications) }
         .overlay(alignment: .topTrailing) { CampNotificationToast(store: store, notices: store.notifications).padding(22) }
@@ -1149,7 +1168,10 @@ struct RootView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 5) { Text(store.view == "Board" ? "Your Camp for big ideas" : store.sharedPlanResult?.title ?? store.selected?.title ?? "Choose a session").font(.system(size: 23, weight: .semibold)).lineLimit(1); Text(store.view == "Board" ? "\(store.filtered.count.formatted()) \(store.filtered.count == 1 ? "session" : "sessions") · Pick up where you left off" : store.sharedPlanResult != nil ? "Planning · Shared Camp" : "\(store.selected?.provider ?? "") · \(store.selected?.project ?? "")").font(.system(size: 12)).foregroundStyle(campMuted) }
                 Spacer()
-                Button("Plan together") { store.newPlan() }
+                Menu {
+                    Button("On this Mac", systemImage: "desktopcomputer") { store.newPlan() }
+                    Button("In shared Camp", systemImage: "person.2") { store.newSharedPlan() }.disabled(!store.sharedPlanning.ready || store.cloud.projects.isEmpty)
+                } label: { Text("Plan together") } primaryAction: { store.newPlan() }
                 CampConnectionButton(cloud: store.cloud) { showCamp = true }
                 CampNotificationButton(notices: store.notifications) { store.notificationSheet = true }
             }
@@ -1184,7 +1206,8 @@ struct BoardColumn: View {
             ScrollView {
                 LazyVStack(spacing: 10) {
                     ForEach(items.prefix(count)) { s in
-                        if s.provider == "Planning" { PlanningCard(store: store, planning: store.planning, id: s.id) }
+                        if s.isSharedPlan { SharedPlanningCard(store: store, planning: store.sharedPlanning, session: s) }
+                        else if s.provider == "Planning" { PlanningCard(store: store, planning: store.planning, id: s.id) }
                         else { SessionCard(store: store, session: s) }
                     }
                     if items.count > count { Button("Show 50 more") { count += 50 }.font(.system(size: 11)).padding(8) }

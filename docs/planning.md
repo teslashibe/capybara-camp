@@ -3,8 +3,8 @@
 The V1 development server has a durable five-step planning queue. The Mac app
 also has a private local planning coordinator and paired-chat workspace. Local
 plans persist on the owning Mac and use isolated official CLI turns. The native
-workspace does not yet create or edit shared planning tickets. The owner-Mac
-worker can execute their queued steps, while cloud runners remain unfinished.
+workspace also creates and controls shared planning tickets. The owner-Mac
+worker executes their queued steps, while cloud runners remain unfinished.
 Local plans can continue into an approved implementation on the same ticket.
 
 The local workspace includes a saved board card, independently selected
@@ -59,6 +59,32 @@ non-persistent Claude session; it does not append planning turns to the anchor
 conversation. The request mode also refuses mid-turn steering of the frozen
 brief and bounds visible output to 8 KiB per step.
 
+## Shared planning in the native app
+
+Use the Plan together menu's In shared Camp action to create a saved draft.
+Choose two already-shared source sessions, their model/effort/speed settings,
+the combining provider and any pinned message ranges. Only the selected
+session owner's Mac runs its turns, using that owner's local profile. Plans
+are private by default; publishing a shared plan requires accessible shared
+sources. Camp does not upload private source sessions implicitly.
+
+Start atomically saves the version and queues its first two turns. The Mac
+persists commands before sending them and reuses their idempotency keys after
+a lost reply. A cancellation made while creation is pending binds to that
+created version. It cannot cancel a later version of the same ticket.
+
+The draft becomes one board card and opens both provider chats in the main
+workspace. Pause and resume control subsequent claims; an in-flight turn can
+finish after a pause. Planning events wake idle workers when a plan resumes.
+Start over retains the ticket, prior versions, pinned context and settings.
+History and source links remain accessible subject to current permissions.
+Revoked sources are excluded from board reads and receipt replays as well as
+detail reads. Drafts and pending commands use the existing scoped local cache.
+
+Shared results refresh when steps complete. Partial remote output and shared
+plan-to-implementation conversion remain unfinished; local plans already
+support both live output and approved implementation on the same ticket.
+
 At most one planning step per provider can be leased to a device, including
 across different tickets and profiles. The two providers may run concurrently.
 The five-step limit bounds durable planning-turn requests, not a provider's
@@ -87,11 +113,14 @@ respect the same plan visibility as reads.
 
 ## API
 
-- `POST /v1/camps/{camp}/planning` creates a draft with an idempotency key
+- `POST /v1/camps/{camp}/planning` creates a draft with an idempotency key;
+  `start: true` also queues the first turns in that transaction
 - `GET /v1/camps/{camp}/planning` returns bounded board summaries
 - `GET /v1/camps/{camp}/planning/{plan}?version=N` reads one saved version
 - `POST /v1/camps/{camp}/planning/{plan}/actions` accepts start, pause, resume,
-  cancel or restart with an expected ticket revision
+  cancel or restart with an expected ticket revision; cancellation can include
+  `expected_version` to tolerate progress within that version, and restart can
+  set `input.start: true` to start the new version atomically
 - `POST /v1/camps/{camp}/planning-requests/claim` claims work only for the device's
   offered, available sessions
 - Existing request actions acknowledge start, heartbeat, finish and reconciliation
@@ -108,11 +137,12 @@ Native tests exercise isolated mode, five-step ordering, independent settings,
 pause/resume, preserved restart history, unknown-outcome recovery, bounded
 outputs and usage parsing. Computer-use checks use a clearly synthetic provider
 fixture in a disposable development app; they do not prove actual provider
-execution. Local implementation tests cover independent executor selection,
+execution. Shared workspace tests cover durable creation, lost acknowledgements,
+pending cancellation, model settings, same-ticket restart, cache isolation and
+idle-worker wake-up after resume. Local implementation tests cover independent executor selection,
 project binding, approval invalidation, queued continuation, terminal transcript
 updates, duplicate-card suppression and restart recovery. Real two-provider
-execution, shared planning creation/editing in the native workspace and cloud
-runners remain release work. Shared worker results persist before reporting
+execution and cloud runners remain release work. Shared worker results persist before reporting
 completion and retain their output and usage through a lost acknowledgement;
 recovery never repeats the provider turn automatically.
 
@@ -120,6 +150,7 @@ The native worker walkthrough shares two synthetic local sessions, starts a
 plan through the real Go API, and verifies five isolated subprocess turns,
 saved outputs and usage, the completion notification, and both result panes.
 An active cancellation stops the current fixture process and prevents the next
-step. Creating and controlling shared plans from the native planning workspace
-remains unfinished. Snapshot reads retry a concurrent database update at most
+step. The shared workspace walkthrough also creates a plan, pins a message,
+selects model settings, restarts on the same ticket and pauses/resumes it.
+Snapshot reads retry a concurrent database update at most
 three times; those retries never repeat provider work or mutation commands.

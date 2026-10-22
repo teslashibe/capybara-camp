@@ -39,6 +39,7 @@ type PlanningInput struct {
 	Sources      []SourceRef    `json:"sources"`
 	BudgetPolicy string         `json:"budget_policy"`
 	MergeSlot    int            `json:"merge_slot"`
+	Start        bool           `json:"start,omitempty"`
 }
 type Planner struct {
 	PlannerInput
@@ -86,6 +87,7 @@ type PlanningTicket struct {
 type PlanningAction struct {
 	Action           string         `json:"action"`
 	ExpectedRevision int64          `json:"expected_revision"`
+	ExpectedVersion  int64          `json:"expected_version,omitempty"`
 	Input            *PlanningInput `json:"input,omitempty"`
 }
 type planningStepLink struct {
@@ -203,13 +205,23 @@ func (s *Store) CreatePlanning(ctx context.Context, a auth.Actor, campID, key st
 	if hit, err := s.beginCommand(ctx, tx, a, key, "planning.create:"+campID, input, &saved); err != nil {
 		return saved, err
 	} else if hit {
-		return s.loadPlanning(ctx, tx, a, campID, saved.ID, 0)
+		result, err := s.loadPlanning(ctx, tx, a, campID, saved.ID, 0)
+		if err == nil {
+			err = s.checkPlanningSources(ctx, tx, a, result)
+		}
+		return result, err
 	}
 	version, err := s.preparePlanning(ctx, tx, a, campID, input)
 	if err != nil {
 		return saved, err
 	}
 	version.Version = 1
+	if input.Start {
+		if version.BudgetPolicy != "calls" {
+			return saved, ErrPlanningBudget
+		}
+		version.State = "running"
+	}
 	id := uuid.NewString()
 	if _, err = tx.Exec(ctx, `INSERT INTO planning_tickets(id,camp_id,project_id,creator_user_id,title,shared) VALUES($1,$2,$3,$4,$5,$6)`, id, campID, input.ProjectID, a.UserID, input.Title, input.Shared); err != nil {
 		return saved, err
@@ -217,7 +229,12 @@ func (s *Store) CreatePlanning(ctx context.Context, a auth.Actor, campID, key st
 	if err = insertPlanningVersion(ctx, tx, id, version); err != nil {
 		return saved, err
 	}
-	if err = emitPlanning(ctx, tx, a, campID, id, 1, "draft"); err != nil {
+	if input.Start {
+		if err = s.advancePlanning(ctx, tx, PlanningTicket{ID: id, CampID: campID, ProjectID: input.ProjectID, CreatorUserID: a.UserID, ActiveVersion: 1, Version: version}); err != nil {
+			return saved, err
+		}
+	}
+	if err = emitPlanning(ctx, tx, a, campID, id, 1, version.State); err != nil {
 		return saved, err
 	}
 	saved, err = s.loadPlanning(ctx, tx, a, campID, id, 0)
@@ -308,6 +325,19 @@ func (s *Store) loadPlanning(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 func (s *Store) Planning(ctx context.Context, a auth.Actor, campID, id string, version int64) (PlanningTicket, error) {
 	return retryRead(ctx, func() (PlanningTicket, error) { return s.planningOnce(ctx, a, campID, id, version) })
 }
+func (s *Store) checkPlanningSources(ctx context.Context, tx pgx.Tx, a auth.Actor, p PlanningTicket) error {
+	for _, planner := range p.Version.Planners {
+		if _, err := s.readSession(ctx, tx, a, p.CampID, planner.SessionID); err != nil {
+			return err
+		}
+	}
+	for _, source := range p.Version.Sources {
+		if _, err := s.readSession(ctx, tx, a, p.CampID, source.SessionID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func (s *Store) planningOnce(ctx context.Context, a auth.Actor, campID, id string, version int64) (PlanningTicket, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
@@ -323,15 +353,8 @@ func (s *Store) planningOnce(ctx context.Context, a auth.Actor, campID, id strin
 	}
 	// A saved output may contain excerpts from any pinned source. Recheck access
 	// when it is opened, including older versions after a source is unshared.
-	for _, planner := range p.Version.Planners {
-		if _, err = s.readSession(ctx, tx, a, campID, planner.SessionID); err != nil {
-			return PlanningTicket{}, err
-		}
-	}
-	for _, source := range p.Version.Sources {
-		if _, err = s.readSession(ctx, tx, a, campID, source.SessionID); err != nil {
-			return PlanningTicket{}, err
-		}
+	if err = s.checkPlanningSources(ctx, tx, a, p); err != nil {
+		return PlanningTicket{}, err
 	}
 	return p, tx.Commit(ctx)
 }
@@ -347,6 +370,7 @@ type PlanningSummary struct {
 	State         string    `json:"state"`
 	Planners      []Planner `json:"planners"`
 	UpdatedAt     time.Time `json:"updated_at"`
+	Completed     int       `json:"completed"`
 }
 
 func (s *Store) ListPlanning(ctx context.Context, a auth.Actor, campID string) ([]PlanningSummary, error) {
@@ -362,9 +386,12 @@ func (s *Store) listPlanningOnce(ctx context.Context, a auth.Actor, campID strin
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `SELECT p.id,p.project_id,p.creator_user_id,p.title,p.shared,p.revision,p.active_version,p.updated_at,
-      CASE WHEN v.state IN ('running','paused') AND EXISTS(SELECT 1 FROM prompt_requests r WHERE r.plan_id=p.id AND r.plan_version=p.active_version AND r.state='outcome_unknown') THEN 'needs_review' ELSE v.state END
+      CASE WHEN v.state IN ('running','paused') AND EXISTS(SELECT 1 FROM prompt_requests r WHERE r.plan_id=p.id AND r.plan_version=p.active_version AND r.state='outcome_unknown') THEN 'needs_review' ELSE v.state END,
+      (SELECT count(*) FROM planning_steps x JOIN prompt_requests r ON r.id=x.request_id WHERE x.plan_id=p.id AND x.version=p.active_version AND r.state='completed')
       FROM planning_tickets p JOIN planning_versions v ON v.plan_id=p.id AND v.version=p.active_version
       WHERE p.camp_id=$1 AND (p.creator_user_id=$2 OR p.shared OR EXISTS(SELECT 1 FROM planning_participants x WHERE x.plan_id=p.id AND x.version=p.active_version AND x.owner_user_id=$2))
+      AND NOT EXISTS(SELECT 1 FROM planning_participants x JOIN sessions z ON z.id=x.session_id WHERE x.plan_id=p.id AND x.version=p.active_version AND NOT(z.shared OR z.owner_user_id=$2))
+      AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(v.sources) source WHERE NOT EXISTS(SELECT 1 FROM sessions z WHERE z.id=(source->>'session_id')::uuid AND z.camp_id=p.camp_id AND (z.shared OR z.owner_user_id=$2)))
       ORDER BY p.updated_at DESC,p.id LIMIT 100`, campID, a.UserID)
 	if err != nil {
 		return nil, err
@@ -375,7 +402,7 @@ func (s *Store) listPlanningOnce(ctx context.Context, a auth.Actor, campID strin
 	for rows.Next() {
 		var p PlanningSummary
 		p.Planners = []Planner{}
-		if err = rows.Scan(&p.ID, &p.ProjectID, &p.CreatorUserID, &p.Title, &p.Shared, &p.Revision, &p.ActiveVersion, &p.UpdatedAt, &p.State); err != nil {
+		if err = rows.Scan(&p.ID, &p.ProjectID, &p.CreatorUserID, &p.Title, &p.Shared, &p.Revision, &p.ActiveVersion, &p.UpdatedAt, &p.State, &p.Completed); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -567,10 +594,22 @@ func (s *Store) ActOnPlanning(ctx context.Context, a auth.Actor, campID, id, key
 	if hit, err := s.beginCommand(ctx, tx, a, key, "planning.action:"+id, input, &saved); err != nil {
 		return p, err
 	} else if hit {
-		return s.loadPlanning(ctx, tx, a, campID, id, 0)
+		result, err := s.loadPlanning(ctx, tx, a, campID, id, 0)
+		if err == nil {
+			err = s.checkPlanningSources(ctx, tx, a, result)
+		}
+		return result, err
 	}
-	if p.Revision != input.ExpectedRevision {
+	if input.ExpectedVersion != 0 && input.ExpectedVersion != p.ActiveVersion {
 		return p, ErrRevision
+	}
+	if p.Revision != input.ExpectedRevision && !(input.Action == "cancel" && input.ExpectedVersion == p.ActiveVersion) {
+		return p, ErrRevision
+	}
+	if input.Action != "restart" {
+		if err = s.checkPlanningSources(ctx, tx, a, p); err != nil {
+			return p, err
+		}
 	}
 	switch input.Action {
 	case "start":
@@ -605,6 +644,12 @@ func (s *Store) ActOnPlanning(ctx context.Context, a auth.Actor, campID, id, key
 		v, err := s.preparePlanning(ctx, tx, a, campID, definition)
 		if err != nil {
 			return p, err
+		}
+		if definition.Start {
+			if v.BudgetPolicy != "calls" {
+				return p, ErrPlanningBudget
+			}
+			v.State = "running"
 		}
 		if err = s.cancelPlanningRequests(ctx, tx, a, p); err != nil {
 			return p, err

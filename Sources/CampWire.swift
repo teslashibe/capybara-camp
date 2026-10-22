@@ -105,14 +105,17 @@ struct CloudNotification: Codable, Equatable, Identifiable, Sendable {
 }
 struct CloudNotificationPage: Codable, Sendable { var notifications: [CloudNotification]; var next: String; var unread: Int }
 struct CloudNotificationAction: Codable, Sendable { var ids: [String]; var action: String }
-struct CloudPlanningResult: Codable, Sendable {
-    struct Planner: Codable, Sendable { var slot: Int; var sessionId: String; var provider: String; var model: String; var effort: String; var speed: String }
-    struct Step: Codable, Identifiable, Sendable { var ordinal: Int; var slot: Int; var phase: String; var state: String; var output: String; var id: Int { ordinal } }
-    struct Version: Codable, Sendable { var version: Int; var state: String; var brief: String; var planners: [Planner]; var steps: [Step]; var sources: [CloudSourceRef] }
+struct CloudPlanningResult: Codable, Equatable, Sendable {
+    struct Planner: Codable, Equatable, Sendable { var slot: Int; var sessionId: String; var provider: String; var model: String; var effort: String; var speed: String }
+    struct Step: Codable, Identifiable, Equatable, Sendable { var ordinal: Int; var slot: Int; var phase: String; var state: String; var output: String; var usage: ConversationUsage? = nil; var id: Int { ordinal } }
+    struct Version: Codable, Equatable, Sendable { var version: Int; var state: String; var brief: String; var planners: [Planner]; var steps: [Step]; var sources: [CloudSourceRef]; var mergeSlot: Int = 0; var budgetPolicy: String = "calls" }
     var id: String; var title: String; var projectId: String; var version: Version
+    var campId: String? = nil; var creatorUserId: String? = nil; var shared: Bool? = nil; var revision: Int64? = nil; var activeVersion: Int? = nil; var updatedAt: Date? = nil
     var referencedSessions: Set<String> { Set(version.planners.map(\.sessionId) + version.sources.map(\.sessionId)) }
     var valid: Bool {
         UUID(uuidString: id) != nil && UUID(uuidString: projectId) != nil && title.utf8.count <= 2000 &&
+        (campId == nil || UUID(uuidString: campId!) != nil) && (creatorUserId == nil || UUID(uuidString: creatorUserId!) != nil) &&
+        (revision == nil || revision! > 0) && (activeVersion == nil || activeVersion! >= version.version) &&
         version.version > 0 && version.brief.utf8.count <= 8192 && version.planners.count == 2 &&
         Set(version.planners.map(\.provider)) == ["Codex", "Claude"] && Set(version.planners.map(\.slot)) == [0, 1] &&
         version.planners.allSatisfy { $0.model.utf8.count <= 200 && UUID(uuidString: $0.sessionId) != nil } &&
@@ -120,6 +123,33 @@ struct CloudPlanningResult: Codable, Sendable {
         Set(version.steps.map(\.id)).count == version.steps.count && version.steps.allSatisfy {
             $0.output.utf8.count <= 8192 && (0...1).contains($0.slot) && (0..<5).contains($0.ordinal) && ["draft", "review", "merge"].contains($0.phase)
         }
+    }
+}
+struct CloudPlannerInput: Codable, Equatable, Sendable {
+    var sessionId: String; var model: String; var effort: String; var speed: String
+}
+struct CloudPlanningInput: Codable, Equatable, Sendable {
+    var title: String; var projectId: String; var brief: String; var shared: Bool
+    var planners: [CloudPlannerInput]; var sources: [CloudSourceRef] = []
+    var budgetPolicy = "strict_tokens"; var mergeSlot = 0; var start = true
+}
+struct CloudPlanDraft: Codable, Equatable, Identifiable, Sendable {
+    var id = UUID().uuidString.lowercased(); var input: CloudPlanningInput
+    var updatedAt = Date(); var cancelRequested = false
+    var restartPlanID: String? = nil; var baseRevision: Int64? = nil
+    var tuningHistory: [String: ModelTuning] = [:]
+}
+struct CloudPlanSummary: Codable, Equatable, Identifiable, Sendable {
+    var id: String; var projectId: String; var creatorUserId: String; var title: String; var shared: Bool
+    var revision: Int64; var activeVersion: Int; var state: String; var planners: [CloudPlanningResult.Planner]; var updatedAt: Date; var completed: Int
+    var valid: Bool { UUID(uuidString: id) != nil && UUID(uuidString: projectId) != nil && UUID(uuidString: creatorUserId) != nil && revision > 0 && activeVersion > 0 && title.utf8.count <= 2000 && planners.count == 2 && Set(planners.map(\.provider)) == ["Codex", "Claude"] && Set(planners.map(\.slot)) == [0, 1] && planners.allSatisfy { UUID(uuidString: $0.sessionId) != nil } && (0...5).contains(completed) }
+    var stage: Stage { state == "running" ? .progress : ["ready", "failed", "needs_review"].contains(state) ? .attention : .ready }
+    init(_ result: CloudPlanningResult) throws {
+        guard result.valid, let owner = result.creatorUserId, let revision = result.revision, let activeVersion = result.activeVersion, let date = result.updatedAt, let shared = result.shared else { throw CampCloudError.invalidResponse }
+        id = result.id; projectId = result.projectId; creatorUserId = owner; title = result.title; self.shared = shared
+        self.revision = revision; self.activeVersion = activeVersion; state = result.version.state; planners = result.version.planners; updatedAt = date
+        completed = result.version.steps.filter { $0.state == "completed" }.count
+        guard valid else { throw CampCloudError.invalidResponse }
     }
 }
 struct CloudInvitation: Codable, Sendable { var id: String; var token: String; var expiresAt: Date }

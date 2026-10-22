@@ -381,13 +381,15 @@ extension CampStore {
         await openPendingNotification()
     }
     func openPendingNotification() async {
-        guard let id = notifications.pendingOpen else { return }
+        guard !openingNotification, let id = notifications.pendingOpen else { return }
+        openingNotification = true; defer { openingNotification = false }
         guard let notice = notifications.entries.first(where: { $0.id == id }) else { notifications.pendingOpen = nil; return }
         if let scope = notice.scope {
             guard scope == cloud.scope else {
                 if !cloudRestoreFinished { return }
                 notifications.pendingOpen = nil; banner = "Connect to the Camp that owns this notification"; return
             }
+            if notice.cloudPlanID != nil && !sharedPlanning.ready { return }
             guard let client = cloud.client, let credential = cloud.credential else { return }
             do {
                 if let remoteID = notice.cloudID {
@@ -400,7 +402,8 @@ extension CampStore {
                     if let planID = current.planId, let version = current.planVersion {
                         let result = try await client.get(CloudPlanningResult.self, path: "/v1/camps/\(scope.campId)/planning/\(planID)?version=\(version)", token: credential.token)
                         guard result.valid, result.id == planID, result.version.version == version, cloud.scope == scope, notifications.pendingOpen == id else { return }
-                        notificationSheet = false; sharedPlanScope = scope; sharedPlanResult = result; view = "Chat"
+                        try await sharedPlanning.install(result)
+                        notificationSheet = false; sharedPlanScope = scope; openSharedPlan(planID, version: version); notificationPlanVersion = version
                         await notifications.markRead(id); notifications.pendingOpen = nil
                         AppDelegate.reopen?(); NSApp?.activate(ignoringOtherApps: true)
                         return

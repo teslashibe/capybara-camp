@@ -399,3 +399,99 @@ func TestOptInWorkerClaimsPlanningWithoutChangingLegacyClaims(t *testing.T) {
 		t.Fatal("plan completion", result, err)
 	}
 }
+
+func TestCreateAndRestartPlanningAtomicallyStart(t *testing.T) {
+	s, actors, c, input := planningFixture(t)
+	ctx := context.Background()
+	a := actors[0]
+	input.Start = true
+	key := uuid.NewString()
+	p, err := s.CreatePlanning(ctx, a, c.ID, key, input)
+	if err != nil || p.Version.State != "running" || len(p.Version.Steps) != 2 {
+		t.Fatal("atomic create/start", p, err)
+	}
+	replay, err := s.CreatePlanning(ctx, a, c.ID, key, input)
+	if err != nil || replay.ID != p.ID || len(replay.Version.Steps) != 2 {
+		t.Fatal("create replay duplicated work", replay, err)
+	}
+	bad := input
+	bad.BudgetPolicy = "strict_tokens"
+	if _, err = s.CreatePlanning(ctx, a, c.ID, uuid.NewString(), bad); !errors.Is(err, ErrPlanningBudget) {
+		t.Fatal("strict budget started", err)
+	}
+	before, err := s.ListPlanning(ctx, a, c.ID)
+	if err != nil || len(before) != 1 {
+		t.Fatal("failed admission created a card", before, err)
+	}
+	p, err = s.ActOnPlanning(ctx, a, c.ID, p.ID, uuid.NewString(), PlanningAction{Action: "restart", ExpectedRevision: p.Revision, Input: &input})
+	if err != nil || p.ActiveVersion != 2 || p.Version.State != "running" || len(p.Version.Steps) != 2 {
+		t.Fatal("atomic restart/start", p, err)
+	}
+	old, err := s.Planning(ctx, a, c.ID, p.ID, 1)
+	if err != nil || old.Version.State != "cancelled" {
+		t.Fatal("restart lost old history", old, err)
+	}
+}
+
+func TestCancelPlanningPinsVersionWhileStepsAdvance(t *testing.T) {
+	s, actors, c, input := planningFixture(t)
+	ctx := context.Background()
+	a := actors[0]
+	p := createAndStartPlanning(t, s, a, c, input)
+	initial := p.Revision
+	r := claimPlanning(t, s, a, c, input)
+	if _, err := s.ActOnRequest(ctx, a, c.ID, r.ID, uuid.NewString(), RequestAction{Action: "start", LeaseToken: r.LeaseToken}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ActOnRequest(ctx, a, c.ID, r.ID, uuid.NewString(), RequestAction{Action: "finish", LeaseToken: r.LeaseToken, Outcome: "completed", Evidence: "Synthetic", Output: "A draft"}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.ActOnPlanning(ctx, a, c.ID, p.ID, uuid.NewString(), PlanningAction{Action: "cancel", ExpectedRevision: initial, ExpectedVersion: 1})
+	if err != nil || p.Version.State != "cancelled" {
+		t.Fatal("progress prevented cancellation", p, err)
+	}
+	p, err = s.ActOnPlanning(ctx, a, c.ID, p.ID, uuid.NewString(), PlanningAction{Action: "restart", ExpectedRevision: p.Revision, Input: &input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ActOnPlanning(ctx, a, c.ID, p.ID, uuid.NewString(), PlanningAction{Action: "cancel", ExpectedRevision: p.Revision, ExpectedVersion: 1}); !errors.Is(err, ErrRevision) {
+		t.Fatal("old cancellation affected new version", err)
+	}
+}
+
+func TestPlanningReceiptsDoNotBypassRevokedSourceAccess(t *testing.T) {
+	s, actors, c, input := planningFixture(t)
+	ctx := context.Background()
+	creator, owner := actors[1], actors[0]
+	input.Shared = true
+	createKey, startKey := uuid.NewString(), uuid.NewString()
+	p, err := s.CreatePlanning(ctx, creator, c.ID, createKey, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := PlanningAction{Action: "start", ExpectedRevision: p.Revision}
+	if _, err = s.ActOnPlanning(ctx, creator, c.ID, p.ID, startKey, start); err != nil {
+		t.Fatal(err)
+	}
+	source, err := s.Session(ctx, owner, c.ID, input.Planners[0].SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	update := SessionInput{ID: source.ID, ProjectID: source.ProjectID, ProfileID: source.ProfileID, LocalSessionID: source.LocalSessionID, Title: source.Title, Model: source.Model, State: source.State, Stage: source.Stage, Shared: false, AllowRequests: false, ExpectedRevision: source.Revision}
+	if _, err = s.PublishSession(ctx, owner, c.ID, uuid.NewString(), update); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.CreatePlanning(ctx, creator, c.ID, createKey, input); !errors.Is(err, ErrDenied) {
+		t.Fatal("create receipt disclosed revoked source", err)
+	}
+	if _, err = s.ActOnPlanning(ctx, creator, c.ID, p.ID, startKey, start); !errors.Is(err, ErrDenied) {
+		t.Fatal("action receipt disclosed revoked source", err)
+	}
+	if _, err = s.Planning(ctx, creator, c.ID, p.ID, 1); !errors.Is(err, ErrDenied) {
+		t.Fatal("version disclosed revoked source", err)
+	}
+	list, err := s.ListPlanning(ctx, creator, c.ID)
+	if err != nil || len(list) != 0 {
+		t.Fatal("board disclosed revoked source", list, err)
+	}
+}

@@ -1,5 +1,6 @@
 """Synthetic native-UI fixture; copied only into a disposable development app."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import select
@@ -39,6 +40,10 @@ elif action == 'transcript':
     request = json.load(sys.stdin)
     messages = [dict(id='fixture-context', role='assistant', text='Synthetic context: preserve the same ticket and show both provider plans')] if request['session']['sessionID'] in ('Codex', 'Claude') else []
     emit(dict(messages=messages, total=len(messages)))
+elif action == 'export-page':
+    request = json.load(sys.stdin)
+    messages = [] if request.get('after', -1) >= 0 else [dict(id='fixture-context', ordinal=0, role='assistant', text='Synthetic context: preserve the same ticket and show both provider plans', removed=False)]
+    emit(dict(messages=messages, after=0, hasMore=False, fingerprint=hashlib.sha256(b'synthetic-context').hexdigest()))
 elif action == 'children':
     sys.stdin.read()
     emit(dict(children=[]))

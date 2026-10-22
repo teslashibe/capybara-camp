@@ -252,6 +252,7 @@ struct SessionContextPicker: View {
         var found: [CampSession] = []
         let members = Dictionary(uniqueKeysWithValues: store.cloud.members.map { ($0.userId, $0.name) })
         for source in store.visibleSessions {
+            if source.provider == "Planning" { continue }
             if destination.isCloud && !source.isCloud { continue }
             let remote = store.cloudSessions[source.id]
             let person = remote.flatMap { members[$0.ownerUserId] } ?? ""
