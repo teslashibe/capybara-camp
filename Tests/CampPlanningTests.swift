@@ -164,6 +164,51 @@ actor SharedPlanFixture: CampPublishingTransport {
         check(invalid.valid, "Historical plans with unrecorded locations must remain readable")
         reviewManager.attach(scope: nil, actor: nil, transport: nil, sessions: [])
 
+        let destinationCache = try CampCache(directory: root.appendingPathComponent("destinations"))
+        let destinationAPI = SharedPlanFixture(scope: scope)
+        let destinations = CampPlanning(cache: destinationCache)
+        var localSources = sessions
+        localSources[1].projectId = localSources[0].projectId
+        var cloudSource = localSources[0]
+        cloudSource.id = UUID().uuidString
+        cloudSource.executionLocation = "cloud"; cloudSource.executionEpoch = 3; cloudSource.executionWorkspaceId = UUID().uuidString
+        destinations.attach(scope: scope, actor: actor, transport: destinationAPI, sessions: localSources + [cloudSource])
+        try await eventually("Destination test did not open") { destinations.ready }
+        let destinationID = try await destinations.newDraft(input: input)
+        let before = destinations.draft(destinationID)!.input
+        let expected = before.planners[0]
+        check(destinations.selectDestination(destinationID, slot: 0, expected: expected, provider: "Codex", source: cloudSource, scope: scope))
+        let changed = destinations.draft(destinationID)!.input
+        check(changed.planners[0].sessionId == cloudSource.id && changed.planners[0].execution?.location == "cloud")
+        check(changed.planners[1] == before.planners[1] && changed.brief == before.brief && changed.sources == before.sources)
+        check(changed.planners[0].model == expected.model && changed.planners[0].effort == expected.effort && changed.planners[0].speed == expected.speed,
+              "Location selection overwrote model settings")
+        check(!destinations.selectDestination(destinationID, slot: 0, expected: expected, provider: "Codex", source: localSources[0], scope: scope),
+              "A stale open location form overwrote a newer selection")
+        let current = changed.planners[0]
+        check(!destinations.selectDestination(destinationID, slot: 0, expected: current, provider: "Claude", source: localSources[1], scope: scope),
+              "A location control changed the planner's provider")
+        var foreign = cloudSource; foreign.ownerUserId = UUID().uuidString
+        var anotherMac = localSources[0]; anotherMac.id = UUID().uuidString; anotherMac.ownerDeviceId = UUID().uuidString
+        var anotherProject = cloudSource; anotherProject.id = UUID().uuidString; anotherProject.projectId = UUID().uuidString
+        destinations.attach(scope: scope, actor: actor, transport: destinationAPI, sessions: localSources + [cloudSource, foreign, anotherMac, anotherProject])
+        for source in [foreign, anotherMac, anotherProject] {
+            check(!destinations.selectDestination(destinationID, slot: 0, expected: current, provider: "Codex", source: source, scope: scope),
+                  "An invalid owner, Mac or project was accepted")
+        }
+        var renewed = cloudSource; renewed.executionEpoch = 4
+        destinations.attach(scope: scope, actor: actor, transport: destinationAPI, sessions: localSources + [renewed])
+        check(!destinations.selectDestination(destinationID, slot: 0, expected: current, provider: "Codex", source: cloudSource, scope: scope),
+              "An old execution assignment passed a fresh destination review")
+        check(destinations.selectDestination(destinationID, slot: 0, expected: current, provider: "Codex", source: localSources[0], scope: scope),
+              "A cloud planner could not return to a selected local source")
+        await destinations.flush()
+        let savedDestinations = try await destinationCache.planning(scope)
+        check(savedDestinations.drafts.first?.input.planners[0].execution?.location == "local", "Selected destination was not saved")
+        destinations.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+        check(!destinations.selectDestination(destinationID, slot: 0, expected: expected, provider: "Codex", source: cloudSource, scope: scope),
+              "A late location form wrote after sign-out")
+
         manager.attach(scope: nil, actor: nil, transport: nil, sessions: [])
         try await cache.clear(scope)
         check(try await cache.planning(scope).tickets.isEmpty, "Sign-out retained shared planning data")

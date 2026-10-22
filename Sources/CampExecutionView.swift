@@ -31,6 +31,7 @@ struct RunLocationView: View {
     @ObservedObject var git: CampGitConnections
     @ObservedObject var sharing: CampSharing
     let session: CampSession
+    let requestedLocation: String?
     @Environment(\.dismiss) private var dismiss
     @State private var location = "Cloud"
     @State private var accountID = ""
@@ -47,8 +48,8 @@ struct RunLocationView: View {
     @State private var manageGit = false
     @State private var connectCamp = false
     @State private var permissions = PermissionSettings()
-    init(store: CampStore, session: CampSession) {
-        self.store = store; self.session = session; cloud = store.cloud; execution = store.cloud.execution
+    init(store: CampStore, session: CampSession, requestedLocation: String? = nil) {
+        self.store = store; self.session = session; self.requestedLocation = requestedLocation; cloud = store.cloud; execution = store.cloud.execution
         accounts = store.cloud.providerAccounts; git = store.cloud.gitConnections; sharing = store.sharing
     }
     var remote: CloudSession? { store.executionSession(session) }
@@ -108,7 +109,7 @@ struct RunLocationView: View {
             }.frame(maxHeight: 480)
         }.padding(24).frame(width: 540).background(campCream).foregroundStyle(campInk).tint(campGreen)
             .onAppear {
-                location = currentLocation == "Cloud" ? "Cloud" : "Local"
+                location = requestedLocation ?? (currentLocation == "Cloud" ? "Cloud" : "Local")
                 projectID = sharing.binding(for: session)?.projectId ?? cloud.projects.first(where: { !$0.isArchived })?.id ?? ""
                 permissions = session.provider == "Codex" ? PermissionSettings(sandbox: "workspace-write", approval: "on-request", reviewer: "user") : PermissionSettings(claudeMode: "manual")
             }

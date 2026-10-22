@@ -38,6 +38,33 @@ setup sheet prefers the configured account for new preparation, preserves a
 selected account if it becomes unavailable, and requires a replacement to be
 chosen explicitly.
 
+## Per-planner destinations
+
+Shared planning drafts have a **Run on** control below each planner's model,
+effort and speed settings. Choose This Mac or Cloud, then review an execution
+source from the same provider and Camp project. This Mac lists sessions owned
+by the current user on this Mac. Cloud lists the user's prepared workspaces;
+an account filter narrows the list. An unavailable selection stays unavailable
+until the user chooses a replacement.
+
+Use selection changes only that planner's source and pinned assignment. It
+keeps the brief, context, other planner and model settings. It does not start
+work, move the source session or reassign an existing running ticket. If the
+draft or destination changes while the chooser is open, apply requires a
+fresh review. Started versions remain immutable; restart before selecting
+different destinations.
+
+Set up Cloud for selected session opens the existing Run on setup and review
+flow. Assigning a workspace there changes that source session's future
+execution, as described below. Returning to the chooser refreshes available
+workspaces, and Use selection then pins the reviewed assignment to the plan.
+This setup operation and selecting a planner are separate actions.
+
+Standalone local plans still use the local coordinator. Promoting one of
+those tickets into the shared coordinator with its full history remains part
+of the unfinished transfer flow. A shared planning draft can already combine
+one local source and one cloud source.
+
 ## Moving into the cloud
 
 1. Copy a local transcript into a private Camp project, if it is not already
@@ -95,8 +122,8 @@ the app explains the requirement and the server blocks the move.
 
 ## Remaining acceptance
 
-The complete history/base/ref/patch transfer flow and per-planner destination
-selection remain unfinished parts of V1. Defaults currently select existing
+The complete history/base/ref/patch transfer flow and promotion of standalone
+local plans remain unfinished parts of V1. Defaults currently select existing
 prepared cloud sources; creating a new workspace directly from a planning
 draft still needs implementation. Native [cloud steering](cloud-controls.md) now
 uses the chat composer. A plain repository

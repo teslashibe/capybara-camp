@@ -36,15 +36,17 @@ struct CampPlanningState: Codable, Sendable {
     private var dirty = false
     private var visibleSessions: Set<String> = []
     @Published private var executionTargets: [String: CloudPlanningExecution] = [:]
+    private var sourceProviders: [String: String] = [:]
     private var accessRevision: UInt64 = 0
     init(cache: CampCache?) { self.cache = cache }
     deinit { task?.cancel(); saveTask?.cancel() }
 
     func attach(scope: CloudScope?, actor: CloudActor?, transport: (any CampPublishingTransport)?, sessions: [CloudSession]) {
         guard let scope, let actor, let transport, let cache else {
-            context = nil; task?.cancel(); task = nil; saveTask?.cancel(); ready = false; state = CampPlanningState(); executionTargets = [:]; selectedID = nil; selectedVersion = 0; error = ""; publish(); return
+            context = nil; task?.cancel(); task = nil; saveTask?.cancel(); ready = false; state = CampPlanningState(); executionTargets = [:]; sourceProviders = [:]; selectedID = nil; selectedVersion = 0; error = ""; publish(); return
         }
         let visible = Set(sessions.map(\.id))
+        sourceProviders = sessions.reduce(into: [:]) { $0[$1.id] = $1.provider }
         let targets = sessions.reduce(into: [String: CloudPlanningExecution]()) { values, session in
             if session.campId == scope.campId, let target = CloudPlanningExecution(session: session) { values[session.id] = target }
         }
@@ -128,6 +130,27 @@ struct CampPlanningState: Codable, Sendable {
         edit(id) { input in
             for slot in input.planners.indices { input.planners[slot].execution = self.executionTargets[input.planners[slot].sessionId] }
         }
+    }
+    @discardableResult func selectDestination(_ id: String, slot: Int, expected: CloudPlannerInput, provider: String, source: CloudSession, scope: CloudScope) -> Bool {
+        guard let c = context, c.scope == scope, ready, !pending(id), let draft = draft(id),
+              draft.input.planners.indices.contains(slot), draft.input.planners[slot] == expected,
+              source.campId == scope.campId, source.projectId == draft.input.projectId,
+              source.ownerUserId == c.actor.userId, visibleSessions.contains(source.id),
+              (!draft.input.shared || source.shared), ["Codex", "Claude"].contains(provider), source.provider == provider,
+              sourceProviders[source.id] == source.provider,
+              (expected.sessionId.isEmpty || sourceProviders[expected.sessionId] == source.provider),
+              let execution = CloudPlanningExecution(session: source), executionTargets[source.id] == execution,
+              execution.location == "cloud" || source.ownerDeviceId == c.actor.deviceId else {
+            error = "The planner or destination changed. Review its current settings before applying"; return false
+        }
+        error = ""
+        edit(id) { input in
+            // An execution choice does not overwrite the user's model, effort
+            // or speed, and does not change any running source session.
+            input.planners[slot].sessionId = source.id
+            input.planners[slot].execution = execution
+        }
+        return true
     }
     func restartDraft(_ ticket: CloudPlanningResult) async throws {
         let activeState = state.tickets.first { $0.id == ticket.id }?.state ?? ticket.version.state

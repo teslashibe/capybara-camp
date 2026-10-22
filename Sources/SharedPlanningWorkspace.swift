@@ -160,6 +160,7 @@ struct SharedPlanningWorkspace: View {
     let id: String
     @State private var section = "Plans"
     @State private var focusedSlot: Int?
+    @State private var destination: PlanningDestinationRequest?
     var body: some View {
         if let draft = planning.draft(id) {
             HStack(spacing: 0) {
@@ -200,8 +201,14 @@ struct SharedPlanningWorkspace: View {
                                     Text("Choose a shared session").tag("")
                                     ForEach(store.cloud.sessions.filter { (draft.input.workflow == .single || $0.provider == provider) && ($0.ownerUserId == store.cloud.scope?.userId || $0.allowRequests) }) { source in Text(source.provider + " · " + source.title).tag(source.id) }
                                 }.disabled(planning.pending(id))
-                                PlanningLocationLabel(execution: draft.input.planners[slot].execution)
                                 SharedPlanningModelMenu(store: store, planning: planning, id: id, slot: slot, expanded: true)
+                                PlanningRunOnMenu(provider: provider, execution: draft.input.planners[slot].execution,
+                                    localLabel: store.cloud.sessions.first { $0.id == draft.input.planners[slot].sessionId }?.ownerDeviceId == store.cloud.credential?.actor.deviceId ? "This Mac" : "Owner’s Mac") { location in
+                                    if let scope = store.cloud.scope {
+                                        destination = PlanningDestinationRequest(draftID: id, slot: slot, provider: provider,
+                                            original: draft.input.planners[slot], location: location, projectID: draft.input.projectId, scope: scope)
+                                    }
+                                }.disabled(planning.pending(id))
                                 Spacer()
                             }.padding(14).frame(maxWidth: .infinity, maxHeight: .infinity).background(.white.opacity(0.55)).clipShape(RoundedRectangle(cornerRadius: 10))
                     }
@@ -227,6 +234,7 @@ struct SharedPlanningWorkspace: View {
                 }.padding(22).disabled(planning.pending(id) && draft.cancelRequested)
             }.disabled(!planning.ready).onChange(of: draft.input.workflow) { _, _ in focusedSlot = nil }
                 .onAppear { applyCardNavigation() }.onChange(of: store.planNavigation) { _, _ in applyCardNavigation() }
+                .sheet(item: $destination) { value in PlanningDestinationView(store: store, request: value).campWindowBehavior() }
         } else if let result = planning.detail(id, version: planning.selectedVersion) {
             SharedPlanningResultView(store: store, result: result)
         } else {

@@ -75,9 +75,9 @@ struct CloudPlanningSource: Codable, Equatable, Sendable {
     var session: CloudSession
     var accountId: String
     var repositoryName: String
-    func valid(scope: CloudScope, projectID: String, accountID: String) -> Bool {
+    func valid(scope: CloudScope, projectID: String, accountID: String? = nil) -> Bool {
         session.campId == scope.campId && session.ownerUserId == scope.userId && session.projectId == projectID &&
-        accountId == accountID && UUID(uuidString: accountId) != nil && UUID(uuidString: session.id) != nil &&
+        (accountID == nil || accountId == accountID) && UUID(uuidString: accountId) != nil && UUID(uuidString: session.id) != nil &&
         ["Codex", "Claude"].contains(session.provider) && CloudPlanningExecution(session: session)?.location == "cloud" &&
         repositoryName.utf8.count <= 140 && !repositoryName.isEmpty &&
         !repositoryName.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
@@ -85,11 +85,11 @@ struct CloudPlanningSource: Codable, Equatable, Sendable {
 }
 
 extension CampConnection {
-    func planningSources(projectID: String, accountID: String) async throws -> [CloudPlanningSource] {
-        guard UUID(uuidString: projectID) != nil, UUID(uuidString: accountID) != nil,
+    func planningSources(projectID: String, accountID: String? = nil) async throws -> [CloudPlanningSource] {
+        guard UUID(uuidString: projectID) != nil, accountID == nil || UUID(uuidString: accountID!) != nil,
               let scope, let credential, let client else { throw CampCloudError.invalidResponse }
         let values = try await client.get([CloudPlanningSource].self,
-            path: "/v1/camps/\(scope.campId)/planning-sources?project_id=\(projectID)&account_id=\(accountID)", token: credential.token)
+            path: "/v1/camps/\(scope.campId)/planning-sources?project_id=\(projectID)" + (accountID.map { "&account_id=\($0)" } ?? ""), token: credential.token)
         guard self.scope == scope, self.credential?.token == credential.token, !Task.isCancelled else { throw CancellationError() }
         guard values.count <= 100, Set(values.map { $0.session.id }).count == values.count,
               values.allSatisfy({ $0.valid(scope: scope, projectID: projectID, accountID: accountID) }) else { throw CampCloudError.invalidResponse }

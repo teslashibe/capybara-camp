@@ -121,6 +121,11 @@ Shared planning records each planner's Mac or Cloud assignment. A moved session
 requires review before Start. Once queued, a plan keeps those assignments; a
 changed or unavailable destination stops the next phase and preserves completed
 drafts. Start over creates a new revision with reviewed locations.
+In a shared draft, **Run on** below each planner's model settings selects its
+Local or Cloud source separately. Choose a prepared cloud workspace or a
+session on this Mac, then apply the selection. Other planner settings and
+attached context stay unchanged. Existing standalone local plans still need
+the planned transfer flow to move into the shared coordinator.
 
 ### Default execution settings
 

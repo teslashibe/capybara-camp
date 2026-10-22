@@ -1874,13 +1874,7 @@ struct ModelSettingsMenu: View {
         }
     }
     private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.system(size: 10)).foregroundStyle(campMuted)
-            content().menuStyle(.borderlessButton).menuIndicator(.visible).font(.system(size: 11)).controlSize(.small)
-                .padding(.horizontal, 8).frame(maxWidth: .infinity).frame(height: 28).background(.white.opacity(locked ? 0.45 : 1))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(campInk.opacity(0.10))).disabled(locked)
-        }
+        CampSettingsField(label, locked: locked) { content() }
     }
     private var modelLabelView: some View {
         HStack(spacing: 5) {

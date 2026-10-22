@@ -131,6 +131,22 @@ old plans unchanged and signed-out Cloud intent. Screenshots are in
 `execution-defaults-comparison.png` and `execution-defaults-unavailable.png`. These are development evidence, not
 the website's release recording.
 
+## Per-planner destination review
+
+The planner destination pass added Run on below Model, Effort and Speed in
+shared drafts. All four fields reuse one native styling component. Computer
+use verified changing only Codex to a prepared Cloud source, retaining its
+model, then choosing a saved session on this Mac while Claude stayed in Cloud.
+The mixed plan completed all five synthetic turns. The workspace setup sheet
+opened from that chooser and closed normally. Cancelling a restart preserved
+the completed version and both transcripts.
+
+Captures: `build/ui-audit/reference-planning-run-on.png`,
+`planner-run-on-mixed.png` and `planner-run-on-mixed-complete.png`. The test
+uses disposable Go/PostgreSQL state and synthetic CLI output. It does not
+establish live provider, minimum-window or full design acceptance. Standalone
+local-plan promotion remains open.
+
 ## Full inventory still to pass
 
 - Board: each provider, single/comparison plans, implementation cards, all stages,

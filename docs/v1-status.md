@@ -9,16 +9,16 @@ and acceptance are separate milestones.
 | Area | Implemented locally | Still required for V1 |
 | --- | --- | --- |
 | Local sessions | Automatic multi-profile import, board/chat, model/effort/speed controls, sub-agents, streaming, dictation, steering and queues | Finish live provider/recovery and performance validation after the Go migration; complete the final design comparison below |
-| Planning and projects | Single-model plan, provider comparison, saved versions, per-Camp execution defaults, pinned per-planner execution assignments, same-ticket local implementation, project assignment across repositories | Per-planner destination selection, shared implementation and owner-routed approval completion; cross-device validation |
+| Planning and projects | Single-model plan, provider comparison, saved versions, per-Camp execution defaults, shared-draft per-planner destination selection, pinned execution assignments, same-ticket local implementation, project assignment across repositories | Standalone local-plan promotion, shared implementation and owner-routed approval completion; cross-device validation |
 | Shared Camps | Go/PostgreSQL auth, membership, sessions, events, requests, native cache/outbox and owner-Mac worker | Real independent users on two Macs, remaining permission/recovery cases, production deployment |
 | Onboarding | Automatic profile discovery before full import, optional Camp sign-in, owner-only cloud account setup, GitHub connections, projects, execution defaults, notifications, skip/resume | Final onboarding validation after remaining services land |
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
-| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments and new-plan defaults, native Run on controls and private transcript copy, multi-ticket per-account scheduling, native steering/queue/stop controls, durable approval/control delivery, a shared request queue, provider subprocess consumption, event streaming and credential revision fencing, mandatory Linux child-process isolation | Per-planner destination controls, remaining signed-in recovery states, target-runtime isolation validation, reviewed transfers, complete reported runtime settings and usage states, live sandbox/network/login/control validation and disconnected-Mac execution |
+| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments and new-plan defaults, native Run on controls and private transcript copy, multi-ticket per-account scheduling, native steering/queue/stop controls, durable approval/control delivery, a shared request queue, provider subprocess consumption, event streaming and credential revision fencing, mandatory Linux child-process isolation | Standalone local-plan promotion, remaining signed-in recovery states, target-runtime isolation validation, reviewed transfers, complete reported runtime settings and usage states, live sandbox/network/login/control validation and disconnected-Mac execution |
 | Git | Project repository links, local CLI project execution, owner-bound GitHub App authorization, native repository browsing, encrypted tokens, signed revocation, exact-commit and scoped read-token adapters, workspace records, exclusive claims and isolated runner checkouts with restart/cancellation recovery | Execution grants, Git actor attribution in execution, branch/push/PR recovery and live two-user GitHub validation |
 | Memory and skills | Approved Cortex/shared Markdown design | Actual native and Go integrations, provider/model consolidation, memory inspection, skill editing/version rollout and permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: finish per-planner destination selection and reviewed transfers, then memory/skills
+Next: finish local-plan promotion and reviewed transfers, then memory/skills
 and shared execution. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
@@ -124,7 +124,7 @@ recorded implementation and acceptance evidence, not just an updated spec.
    and the claim/token protocol, checkout worker, assignments, provider turns,
    streaming, approval transport, Linux child isolation and native location
    controls and durable cloud steering are implemented; remaining signed-in setup validation,
-   recovery, per-planner destination selection and reviewed session transfers remain.
+   recovery, standalone local-plan promotion and reviewed session transfers remain.
 3. **Pending — shared project capabilities**: Cortex consolidation and memory
    inspection, shared Markdown skills, Git publication and actor attribution,
    owner-routed shared implementation and permissions.
