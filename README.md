@@ -294,6 +294,11 @@ uploads after a restart. Each export expires after ten minutes and reserves the
 runner while capturing. This is a backend component of Cloud-to-Local migration;
 native reverse-transfer review and full history/attachment installation remain
 unfinished. See the [export contract](docs/transfer-payload.md#cloud-source-exports).
+The local destination API now accepts an owner-Mac receipt and explicit context
+continuation approval. A fresh source stop proof then moves the same ticket to
+the selected local profile while preserving its shared parent/subagent history.
+Native checkout/history installation and the reverse-transfer review remain open;
+this backend path does not yet provide a complete Cloud-to-Local journey.
 The native publisher includes saved subagent histories with a shared or private
 Camp copy. Child transcripts stay under the parent's permissions and have their
 own message IDs and paged history. The sidebar refreshes after child updates,

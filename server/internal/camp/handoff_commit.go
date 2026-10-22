@@ -12,9 +12,10 @@ import (
 )
 
 type HandoffCommitInput struct {
-	ExpectedHandoffRevision int64                       `json:"expected_handoff_revision"`
-	ExecutionApproved       bool                        `json:"execution_approved"`
-	Permissions             localcli.PermissionSettings `json:"permissions"`
+	ExpectedHandoffRevision     int64                       `json:"expected_handoff_revision"`
+	ExecutionApproved           bool                        `json:"execution_approved"`
+	Permissions                 localcli.PermissionSettings `json:"permissions"`
+	ContextContinuationApproved bool                        `json:"context_continuation_approved,omitempty"`
 }
 type HandoffFinishInput struct {
 	HandoffAck
@@ -55,17 +56,23 @@ func (s *Store) RequestHandoffCommit(ctx context.Context, a auth.Actor, campID, 
 	if h.State != "acknowledged" || h.CommitNonce != "" {
 		return h, ErrTransition
 	}
+	if h.TargetLocation == "local" && (a.DeviceID != h.TargetDeviceID || !in.ContextContinuationApproved) {
+		return h, ErrDenied
+	}
+	if h.TargetLocation != "local" && in.ContextContinuationApproved {
+		return h, ErrInput
+	}
 	if h.Revision != in.ExpectedHandoffRevision {
 		return h, ErrRevision
 	}
 	if _, err = s.validateHandoff(ctx, tx, a, h); err != nil {
 		return h, err
 	}
-	w, err := readWorkspace(ctx, tx, a, campID, h.WorkspaceID)
+	purpose, err := s.handoffPurpose(ctx, tx, a, h)
 	if err != nil {
 		return h, err
 	}
-	permissions, err := workspacePermissions(session.Provider, w.Purpose, in.Permissions, in.ExecutionApproved)
+	permissions, err := workspacePermissions(session.Provider, purpose, in.Permissions, in.ExecutionApproved)
 	if err != nil {
 		return h, err
 	}
@@ -127,11 +134,11 @@ func (s *Store) FinishHandoff(ctx context.Context, a auth.Actor, token, id strin
 	if err != nil {
 		return h, err
 	}
-	w, err := readWorkspace(ctx, tx, owner, h.CampID, h.WorkspaceID)
+	purpose, err := s.handoffPurpose(ctx, tx, owner, h)
 	if err != nil {
 		return h, err
 	}
-	permissions, err := workspacePermissions(session.Provider, w.Purpose, h.commitPermissions, h.commitApproved)
+	permissions, err := workspacePermissions(session.Provider, purpose, h.commitPermissions, h.commitApproved)
 	if err != nil {
 		return h, err
 	}
@@ -140,7 +147,7 @@ func (s *Store) FinishHandoff(ctx context.Context, a auth.Actor, token, id strin
 		if err != nil {
 			return h, err
 		}
-		if old.ID == w.ID {
+		if old.ID == h.WorkspaceID {
 			return h, ErrTransition
 		}
 		if err = retireWorkspaceToken(ctx, tx, old.ID); err != nil {
@@ -155,10 +162,26 @@ func (s *Store) FinishHandoff(ctx context.Context, a auth.Actor, token, id strin
 		}
 	}
 	encoded, _ := json.Marshal(permissions)
-	if err = tx.QueryRow(ctx, `UPDATE sessions SET execution_location='cloud',execution_workspace_id=$2,execution_permissions=$3,execution_epoch=execution_epoch+1,activity_revision=activity_revision+1,updated_at=now() WHERE id=$1 RETURNING execution_epoch,activity_revision`, session.ID, w.ID, encoded).Scan(&session.ExecutionEpoch, &session.ActivityRevision); err != nil {
+	if h.TargetLocation == "local" {
+		// Local permissions remain in the immutable approved handoff receipt.
+		// The session column continues to describe cloud workspace permissions.
+		encoded = []byte("{}")
+		d := h.LocalDestination
+		if d == nil {
+			return h, ErrInput
+		}
+		err = tx.QueryRow(ctx, `UPDATE sessions SET execution_location='local',execution_workspace_id=NULL,execution_permissions=$2,
+ profile_id=$3,owner_device_id=$4,local_session_id=$5,revision=revision+1,permission_revision=permission_revision+1,
+ execution_epoch=execution_epoch+1,activity_revision=activity_revision+1,updated_at=now()
+ WHERE id=$1 RETURNING execution_epoch,activity_revision,revision,permission_revision`, session.ID, encoded, d.ProfileID, h.TargetDeviceID, d.SessionID).Scan(&session.ExecutionEpoch, &session.ActivityRevision, &session.Revision, &session.PermissionRevision)
+		session.ProfileID, session.OwnerDeviceID, session.LocalSessionID = d.ProfileID, h.TargetDeviceID, d.SessionID
+	} else {
+		err = tx.QueryRow(ctx, `UPDATE sessions SET execution_location='cloud',execution_workspace_id=$2,execution_permissions=$3,execution_epoch=execution_epoch+1,activity_revision=activity_revision+1,updated_at=now() WHERE id=$1 RETURNING execution_epoch,activity_revision`, session.ID, h.WorkspaceID, encoded).Scan(&session.ExecutionEpoch, &session.ActivityRevision)
+	}
+	if err != nil {
 		return h, err
 	}
-	session.ExecutionLocation, session.ExecutionWorkspaceID = "cloud", w.ID
+	session.ExecutionLocation, session.ExecutionWorkspaceID = h.TargetLocation, h.WorkspaceID
 	if _, err = tx.Exec(ctx, `UPDATE transfer_handoffs SET state='committed',commit_hash=$2,execution_epoch=$3,revision=revision+1 WHERE id=$1`, h.ID, digest[:], session.ExecutionEpoch); err != nil {
 		return h, err
 	}

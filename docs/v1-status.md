@@ -22,9 +22,10 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: complete native executor-setup visual acceptance, then finish the remaining transfer cases,
-full-history migration and shared skills. Continue the native design audit as those surfaces are
-implemented. Validate the full workflow locally before the owner provisions
+Next: connect native destination checkout/history/attachment installation and
+review to the local handoff protocol, then finish the remaining transfer cases,
+shared skills and Git publication. Continue executor-setup acceptance and the
+native design audit as those surfaces are implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
 the two-Mac acceptance run follow that deployment. Hardware has not been bought
 or provisioned for this goal. The owner reconfirmed that provisioning happens
@@ -43,6 +44,30 @@ passes strict deep signature verification. Capture:
 `build/ui-audit/implementation-card-effort-oct22.png`. The full design comparison
 and pointer-edge checks remain open because browser control is disabled and
 coordinate input reports no available window.
+
+Schema 35 now supports an owner-Mac destination receipt through the existing
+handoff protocol. Explicit context-continuation approval and a fresh source stop
+proof precede the atomic owner/profile/conversation change. The original ticket
+and parent/subagent history remain intact. Concurrent confirmations change the
+execution epoch once; revoked devices and destination conversation collisions,
+including another Camp, refuse the move. Implementation permissions stay attached
+to the approved local epoch. Downgrade refuses to discard retained local receipts.
+
+Focused PostgreSQL race and migration tests pass
+(`build/local-handoff-final-focused.log`). Both synthetic provider runners pass
+real API/Git tests for lost replies, source-stop verification and selected-Mac
+claiming (`build/local-handoff-runner.log`). These fixtures install real files
+but only attest a history revision. Native checkout/history/attachment installation,
+review integration and live continuation remain unfinished. This does not complete
+the Cloud-to-Local acceptance gate.
+
+The complete Go race suite passes (`build/local-handoff-full-suite.log`), including
+the extended runner test for files changed after owner confirmation. Focused
+Camp/migration race tests pass after adding the cross-Camp conversation index
+(`build/local-handoff-index-focused.log`), and the next local implementation request
+retains its approved sandbox/approval settings (`build/local-handoff-permissions.log`).
+Vet, Linux command builds and the staged secret scan pass. No native UI or live
+provider acceptance is implied by these backend checks.
 
 Cloud source inspection and selected-file capture are now implemented at schema
 34. The owner creates a bounded export; only its assigned runner can claim it.

@@ -124,6 +124,13 @@ can roll back; any retained export record blocks downgrade. Export access expire
 after ten minutes, with expired chunks cleaned on the next owner export operation.
 This backend path does not yet provide a complete native Cloud-to-Local transfer.
 
+Schema 35 adds local destination receipts to the source-handoff protocol. Deploy
+the matching API before clients submit local destinations; readiness requires
+the exact schema. Any retained local receipt blocks downgrade to schema 34,
+including cancelled receipts. Keep a compatible binary or restore a complete
+backup. An empty local-receipt set can roll back without removing cloud handoffs.
+This migration does not install a destination checkout or provider history on a Mac.
+
 The example uses one 20 GiB persistent volume. Size it for your retained shared
 history, monitor free space, and configure encrypted base backups plus WAL
 archiving to an off-host destination. A local volume or mirrored disks do not

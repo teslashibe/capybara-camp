@@ -20,7 +20,7 @@ import (
 	"github.com/teslashibe/capybara-camp/server/internal/transfer"
 )
 
-func prepareSourceHandoff(t *testing.T, f fixture, g *camp.GitStore, source camp.Workspace) (camp.Handoff, camp.Session) {
+func prepareSourceHandoff(t *testing.T, f fixture, g *camp.GitStore, source camp.Workspace, local ...bool) (camp.Handoff, camp.Session) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(f.worker.checkout.workdir(source), "README.md"), []byte("reviewed source contents\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -38,7 +38,11 @@ func prepareSourceHandoff(t *testing.T, f fixture, g *camp.GitStore, source camp
 	if err != nil {
 		t.Fatal(err)
 	}
-	upload, err := f.store.CreateTransfer(t.Context(), f.owner, source.CampID, source.SessionID, uuid.NewString(), camp.TransferInput{TargetLocation: "cloud", TargetAccountID: source.ProviderAccountID, ExpectedEpoch: session.ExecutionEpoch, ExpectedRevision: session.Revision, ExpectedTranscriptRevision: session.TranscriptRevision, ExpectedPermissionRevision: session.PermissionRevision, PayloadSHA256: payloadHash(raw), ReviewSHA256: review, PayloadBytes: len(raw)})
+	input := camp.TransferInput{TargetLocation: "cloud", TargetAccountID: source.ProviderAccountID, ExpectedEpoch: session.ExecutionEpoch, ExpectedRevision: session.Revision, ExpectedTranscriptRevision: session.TranscriptRevision, ExpectedPermissionRevision: session.PermissionRevision, PayloadSHA256: payloadHash(raw), ReviewSHA256: review, PayloadBytes: len(raw)}
+	if len(local) > 0 && local[0] {
+		input.TargetLocation, input.TargetAccountID = "local", ""
+	}
+	upload, err := f.store.CreateTransfer(t.Context(), f.owner, source.CampID, source.SessionID, uuid.NewString(), input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,6 +52,42 @@ func prepareSourceHandoff(t *testing.T, f fixture, g *camp.GitStore, source camp
 	upload, err = f.store.CompleteTransfer(t.Context(), f.owner, source.CampID, source.SessionID, upload.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if input.TargetLocation == "local" {
+		destination, state := t.TempDir(), t.TempDir()
+		fixtureCommand(t, destination, "clone", "--no-local", "--no-hardlinks", "--", f.worker.checkout.workdir(source), ".")
+		if err := os.Chmod(destination, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(state, 0700); err != nil {
+			t.Fatal(err)
+		}
+		stager, err := transfer.OpenStager(destination, state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer stager.Close()
+		receipt, err := stager.Apply(t.Context(), manifest, review, source.Branch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// This fixture installs real files but only attests a history revision.
+		// Native history installation is a separate acceptance requirement.
+		rawReceipt, err := json.Marshal(receipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, err := f.store.BeginHandoff(t.Context(), f.owner, source.CampID, source.SessionID, upload.ID, uuid.NewString(), camp.HandoffInput{ExpectedTransferRevision: upload.Revision, LocalDestination: &camp.LocalHandoffDestination{ProfileID: session.ProfileID, SessionID: uuid.NewString(), Purpose: source.Purpose, ReceiptSHA256: payloadHash(rawReceipt), TranscriptRevision: session.TranscriptRevision}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			data, err := os.ReadFile(filepath.Join(destination, "README.md"))
+			if err != nil || string(data) != "reviewed source contents\n" {
+				t.Error("local destination lost reviewed files", err)
+			}
+		})
+		return h, session
 	}
 	target, err := g.CreateTransferWorkspace(t.Context(), f.owner, source.CampID, source.SessionID, upload.ID, uuid.NewString(), camp.WorkspaceInput{ProviderAccountID: source.ProviderAccountID, GitConnectionID: source.GitConnectionID, GitHubInstallationID: source.GitHubInstallationID, RepositoryID: source.RepositoryID, InstallationPage: 1, RepositoryPage: 1, Purpose: source.Purpose, ExpectedSessionRevision: session.Revision, ExpectedProjectRevision: source.ProjectRevision})
 	if err != nil {
@@ -104,8 +144,12 @@ func TestRunnerHandoffVerifiesStoppedSourceAndRecoversReceipts(t *testing.T) {
 	for _, tc := range []struct {
 		provider string
 		change   bool
-	}{{"Codex", false}, {"Claude", false}, {"Codex", true}} {
+		local    bool
+	}{{"Codex", false, false}, {"Claude", false, false}, {"Codex", true, false}, {"Codex", false, true}, {"Claude", false, true}, {"Codex", true, true}} {
 		name := tc.provider
+		if tc.local {
+			name += " local destination"
+		}
 		if tc.change {
 			name += " changed source"
 		}
@@ -163,7 +207,7 @@ func TestRunnerHandoffVerifiesStoppedSourceAndRecoversReceipts(t *testing.T) {
 				t.Fatal("source was not terminal", err)
 			}
 			assertProviderExited(t, record)
-			h, session := prepareSourceHandoff(t, f, g, source)
+			h, session := prepareSourceHandoff(t, f, g, source, tc.local)
 			if tc.change {
 				if err = os.WriteFile(filepath.Join(f.worker.checkout.workdir(source), "README.md"), []byte("changed after review\n"), 0600); err != nil {
 					t.Fatal(err)
@@ -204,7 +248,7 @@ func TestRunnerHandoffVerifiesStoppedSourceAndRecoversReceipts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = f.store.RequestHandoffCommit(t.Context(), f.owner, source.CampID, source.SessionID, h.ID, uuid.NewString(), camp.HandoffCommitInput{ExpectedHandoffRevision: h.Revision}); err != nil {
+			if _, err = f.store.RequestHandoffCommit(t.Context(), f.owner, source.CampID, source.SessionID, h.ID, uuid.NewString(), camp.HandoffCommitInput{ExpectedHandoffRevision: h.Revision, ContextContinuationApproved: tc.local}); err != nil {
 				t.Fatal(err)
 			}
 			cancel, done = startWorker(t, f.worker)
@@ -221,6 +265,20 @@ func TestRunnerHandoffVerifiesStoppedSourceAndRecoversReceipts(t *testing.T) {
 			request, err = f.store.CreateRequest(t.Context(), f.owner, source.CampID, source.SessionID, uuid.NewString(), camp.RequestInput{Prompt: "Continue after transfer"})
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.local {
+				if current.ExecutionLocation != "local" || current.LocalSessionID != h.LocalDestination.SessionID || request.ExecutionLocation != "local" || request.OwnerDeviceID != f.owner.DeviceID {
+					t.Fatal("new local conversation not assigned")
+				}
+				if _, err = g.ClaimRunnerRequest(t.Context(), f.grant.Token, source.ID, uuid.NewString()); err == nil {
+					t.Fatal("retired runner claimed local work")
+				}
+				claimed, err := f.store.ClaimAvailableWork(t.Context(), f.owner, source.CampID, uuid.NewString(), []string{source.SessionID})
+				if err != nil || claimed == nil || claimed.ID != request.ID {
+					t.Fatal("selected Mac could not claim continuation", err)
+				}
+				assertProviderExited(t, record)
+				return
 			}
 			cancel, done = startWorker(t, f.worker)
 			eventually(t, func() bool {
@@ -243,35 +301,39 @@ func TestRunnerHandoffVerifiesStoppedSourceAndRecoversReceipts(t *testing.T) {
 }
 
 func TestRunnerHandoffRejectsSourceChangedAfterAcknowledgement(t *testing.T) {
-	f, g, source, record := turnFixture(t, "Codex", "complete")
-	h, session := prepareSourceHandoff(t, f, g, source)
-	cancel, done := startWorker(t, f.worker)
-	eventually(t, func() bool {
-		value, err := f.store.Handoff(t.Context(), f.owner, source.CampID, source.SessionID, h.ID)
-		return err == nil && value.State == "acknowledged"
-	})
-	stopWorker(t, cancel, done)
-	h, err := f.store.Handoff(t.Context(), f.owner, source.CampID, source.SessionID, h.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = f.store.RequestHandoffCommit(t.Context(), f.owner, source.CampID, source.SessionID, h.ID, uuid.NewString(), camp.HandoffCommitInput{ExpectedHandoffRevision: h.Revision}); err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(filepath.Join(f.worker.checkout.workdir(source), "README.md"), []byte("changed during review\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	cancel, done = startWorker(t, f.worker)
-	eventually(t, func() bool {
-		value, err := f.store.Handoff(t.Context(), f.owner, source.CampID, source.SessionID, h.ID)
-		return err == nil && value.State == "invalidated"
-	})
-	stopWorker(t, cancel, done)
-	current, err := f.store.Session(t.Context(), f.owner, source.CampID, source.SessionID)
-	if err != nil || current.ExecutionEpoch != session.ExecutionEpoch || current.ExecutionWorkspaceID != source.ID {
-		t.Fatal("Changed source moved", err)
-	}
-	if _, err = os.Stat(record); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("Verification started a provider", err)
+	for _, local := range []bool{false, true} {
+		t.Run("local="+strconv.FormatBool(local), func(t *testing.T) {
+			f, g, source, record := turnFixture(t, "Codex", "complete")
+			h, session := prepareSourceHandoff(t, f, g, source, local)
+			cancel, done := startWorker(t, f.worker)
+			eventually(t, func() bool {
+				value, err := f.store.Handoff(t.Context(), f.owner, source.CampID, source.SessionID, h.ID)
+				return err == nil && value.State == "acknowledged"
+			})
+			stopWorker(t, cancel, done)
+			h, err := f.store.Handoff(t.Context(), f.owner, source.CampID, source.SessionID, h.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = f.store.RequestHandoffCommit(t.Context(), f.owner, source.CampID, source.SessionID, h.ID, uuid.NewString(), camp.HandoffCommitInput{ExpectedHandoffRevision: h.Revision, ContextContinuationApproved: local}); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(filepath.Join(f.worker.checkout.workdir(source), "README.md"), []byte("changed during review\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cancel, done = startWorker(t, f.worker)
+			eventually(t, func() bool {
+				value, err := f.store.Handoff(t.Context(), f.owner, source.CampID, source.SessionID, h.ID)
+				return err == nil && value.State == "invalidated"
+			})
+			stopWorker(t, cancel, done)
+			current, err := f.store.Session(t.Context(), f.owner, source.CampID, source.SessionID)
+			if err != nil || current.ExecutionEpoch != session.ExecutionEpoch || current.ExecutionWorkspaceID != source.ID {
+				t.Fatal("Changed source moved", err)
+			}
+			if _, err = os.Stat(record); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("Verification started a provider", err)
+			}
+		})
 	}
 }

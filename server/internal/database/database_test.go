@@ -203,6 +203,30 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 		t.Fatal(err)
 	}
 	exportID := uuid.NewString()
+	localHandoff := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO transfer_handoffs(id,transfer_id,camp_id,session_id,owner_user_id,source_device_id,local_profile_id,local_session_id,local_purpose,local_receipt_sha256,local_transcript_revision)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,'planning',$9,0)`, localHandoff, transfer, camp, session, id, device, profile, uuid.NewString(), strings.Repeat("f", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 34); err == nil {
+		t.Fatal("Downgrade discarded local destination receipt")
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal("Refused local destination downgrade changed readiness", err)
+	}
+	var receipt string
+	if err = pool.QueryRow(ctx, `SELECT local_receipt_sha256 FROM transfer_handoffs WHERE id=$1`, localHandoff).Scan(&receipt); err != nil || receipt != strings.Repeat("f", 64) {
+		t.Fatal("Local receipt lost", err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM transfer_handoffs WHERE id=$1`, localHandoff); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 34); err != nil {
+		t.Fatal("Empty local handoff downgrade", err)
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal("Local handoff reapply", err)
+	}
 	if _, err = pool.Exec(ctx, `INSERT INTO workspace_exports(id,camp_id,session_id,owner_user_id,device_id,workspace_id,workspace_revision,source_epoch,source_revision,transcript_revision,permission_revision,kind,paths) VALUES($1,$2,$3,$4,$5,$6,1,1,1,0,1,'inspect','[]')`, exportID, camp, session, id, device, workspace); err != nil {
 		t.Fatal(err)
 	}
@@ -212,6 +236,11 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	var exportState string
 	if err = pool.QueryRow(ctx, `SELECT state FROM workspace_exports WHERE id=$1`, exportID).Scan(&exportState); err != nil || exportState != "pending" {
 		t.Fatal("Export changed on refused downgrade", err)
+	}
+	// Newer empty migrations may have rolled back before the retained export
+	// blocked schema 34. Reapply them before checking this binary's readiness.
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
 	}
 	if err = Ready(ctx, pool); err != nil {
 		t.Fatal("Rejected export downgrade changed readiness", err)

@@ -427,7 +427,7 @@ not delete them. Account erasure remains a separate explicit lifecycle action.
 
 The owner can reserve a ready destination with
 `POST /v1/camps/{camp}/sessions/{session}/transfers/{transfer}/handoffs`.
-The request supplies `workspace_id`, `expected_workspace_revision` and
+For a cloud destination, the request supplies `workspace_id`, `expected_workspace_revision` and
 `expected_transfer_revision`, plus an `Idempotency-Key`. The server rechecks
 the source snapshot, destination receipt state, project, Git connection and
 provider account before creating one five-minute hold for that source session.
@@ -512,6 +512,9 @@ After the source acknowledges, the owner posts to
 destination uses empty permissions and `execution_approved: false`. An
 implementation destination requires `execution_approved: true` and explicit
 provider permission settings, using the same validation as ordinary Run on.
+Local destinations additionally require `context_continuation_approved: true`
+from the selected destination Mac. This approves continuing the reviewed context
+in a new provider conversation; it does not claim native provider-session resume.
 
 The response is HTTP 202 with a fresh `commit_nonce`. The session still belongs
 to the source. The original source client checks the files and stopped provider
@@ -676,9 +679,58 @@ summary without duplicating file contents. It does not read provider profiles,
 write files or change execution ownership.
 
 The native selection/review surface still needs to connect to this coordinator.
-Destination checkout preparation, history/attachments and ownership handoff also
-need integration and acceptance. Commits absent from the remote repository remain
-a separate migration requirement.
+Destination checkout preparation, history/attachments and the local ownership
+handoff below need native integration and acceptance. Commits absent from the
+remote repository remain a separate migration requirement.
+
+## Local destination receipts
+
+Schema 35 extends the existing source-hold protocol to a local destination.
+The selected Mac begins the handoff with `expected_transfer_revision` and a
+`local_destination` object instead of cloud workspace fields:
+
+```json
+{
+  "expected_transfer_revision": 3,
+  "local_destination": {
+    "profile_id": "<registered destination profile UUID>",
+    "session_id": "<new local conversation UUID>",
+    "purpose": "planning",
+    "receipt_sha256": "<SHA-256 of the durable destination receipt>",
+    "transcript_revision": 12
+  }
+}
+```
+
+The profile must belong to the same owner and selected device and match the
+source provider. The device must remain active. The new local conversation ID
+must not already be published in any Camp, and the history revision must match
+the reviewed transfer. Publication and the final handoff collision check share
+an owner transaction lock. A changed history, revoked destination or occupied
+conversation invalidates the hold without changing the execution owner.
+
+The receipt is the destination client's attestation. The API cannot inspect the
+Mac's disk. The native installer must persist and verify the checkout, history
+and attachments before beginning this protocol, recheck them before confirmation,
+and verify the committed assignment before starting a provider. The backend
+does not yet have that complete native installer connected to it.
+
+Owner confirmation leaves execution on the source until its runner checks the
+stopped provider and reviewed files again. Final proof updates the existing
+ticket's profile, device, local conversation ID and execution epoch atomically;
+its parent and child transcripts retain their IDs and revision. The old cloud
+checkout is cancelled and its Git token retired. Implementation permissions
+remain in the approved handoff receipt and apply to the new local epoch.
+Replayed or concurrent identical proofs observe one committed move. A lost
+response never authorizes starting a second provider process.
+
+Real PostgreSQL tests cover parent/child history and recorded settings, concurrent
+confirmation, explicit continuation/implementation consent, destination revocation,
+cross-Camp collisions and migration rollback. Runner tests use the real API and
+Git staging with synthetic Codex/Claude processes. They cover lost finish, source
+acknowledgement and final commit responses, plus changed source files. Their local
+destination installs files and attests a history revision; it does not test native
+history restoration or a live local model turn.
 
 ## Validation
 

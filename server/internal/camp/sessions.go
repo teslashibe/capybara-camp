@@ -177,6 +177,11 @@ func (s *Store) PublishSession(ctx context.Context, a auth.Actor, campID, reques
 	if _, err = s.lock(ctx, tx, a, campID, true); err != nil {
 		return Session{}, err
 	}
+	// Handoffs reserve a fresh provider conversation across Camps. Serialize
+	// publication with their final collision check, using the same owner lock.
+	if _, err = tx.Exec(ctx, `SELECT id FROM users WHERE id=$1 FOR UPDATE`, a.UserID); err != nil {
+		return Session{}, err
+	}
 	var owned bool
 	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM profiles WHERE id=$1 AND owner_user_id=$2 AND owner_device_id=$3) AND EXISTS(SELECT 1 FROM projects WHERE id=$4 AND camp_id=$5 AND (NOT archived OR EXISTS(SELECT 1 FROM sessions WHERE id=$6 AND camp_id=$5 AND project_id=$4)))`, input.ProfileID, a.UserID, a.DeviceID, input.ProjectID, campID, input.ID).Scan(&owned)
 	if err != nil {

@@ -17,29 +17,43 @@ import (
 var ErrTransferHeld = errors.New("session is held for a reviewed transfer")
 
 type HandoffInput struct {
-	WorkspaceID               string `json:"workspace_id"`
-	ExpectedWorkspaceRevision int64  `json:"expected_workspace_revision"`
-	ExpectedTransferRevision  int64  `json:"expected_transfer_revision"`
+	WorkspaceID               string                   `json:"workspace_id"`
+	ExpectedWorkspaceRevision int64                    `json:"expected_workspace_revision"`
+	ExpectedTransferRevision  int64                    `json:"expected_transfer_revision"`
+	LocalDestination          *LocalHandoffDestination `json:"local_destination,omitempty"`
+}
+
+// The destination Mac attests to its durable checkout and history installation.
+// A receipt does not grant execution; the source must answer a fresh stop proof.
+type LocalHandoffDestination struct {
+	ProfileID          string `json:"profile_id"`
+	SessionID          string `json:"session_id"`
+	Purpose            string `json:"purpose"`
+	ReceiptSHA256      string `json:"receipt_sha256"`
+	TranscriptRevision int64  `json:"transcript_revision"`
 }
 
 type Handoff struct {
-	ID                string    `json:"id"`
-	TransferID        string    `json:"transfer_id"`
-	CampID            string    `json:"camp_id"`
-	SessionID         string    `json:"session_id"`
-	OwnerUserID       string    `json:"owner_user_id"`
-	SourceDeviceID    string    `json:"source_device_id"`
-	SourceLocation    string    `json:"source_location"`
-	SourceWorkspaceID string    `json:"source_workspace_id,omitempty"`
-	SourceEpoch       int64     `json:"source_epoch"`
-	WorkspaceID       string    `json:"workspace_id"`
-	WorkspaceRevision int64     `json:"workspace_revision"`
-	State             string    `json:"state"`
-	ClaimID           string    `json:"claim_id,omitempty"`
-	Revision          int64     `json:"revision"`
-	ExpiresAt         time.Time `json:"expires_at"`
-	CommitNonce       string    `json:"commit_nonce,omitempty"`
-	ExecutionEpoch    int64     `json:"execution_epoch,omitempty"`
+	ID                string                   `json:"id"`
+	TransferID        string                   `json:"transfer_id"`
+	CampID            string                   `json:"camp_id"`
+	SessionID         string                   `json:"session_id"`
+	OwnerUserID       string                   `json:"owner_user_id"`
+	SourceDeviceID    string                   `json:"source_device_id"`
+	SourceLocation    string                   `json:"source_location"`
+	SourceWorkspaceID string                   `json:"source_workspace_id,omitempty"`
+	SourceEpoch       int64                    `json:"source_epoch"`
+	WorkspaceID       string                   `json:"workspace_id"`
+	WorkspaceRevision int64                    `json:"workspace_revision"`
+	TargetLocation    string                   `json:"target_location"`
+	TargetDeviceID    string                   `json:"target_device_id,omitempty"`
+	LocalDestination  *LocalHandoffDestination `json:"local_destination,omitempty"`
+	State             string                   `json:"state"`
+	ClaimID           string                   `json:"claim_id,omitempty"`
+	Revision          int64                    `json:"revision"`
+	ExpiresAt         time.Time                `json:"expires_at"`
+	CommitNonce       string                   `json:"commit_nonce,omitempty"`
+	ExecutionEpoch    int64                    `json:"execution_epoch,omitempty"`
 	claimDevice       string
 	claimGrant        string
 	ackHash           []byte
@@ -69,11 +83,17 @@ const liveHandoffSQL = `h.state IN ('pending','claimed','acknowledged') AND h.ex
  AND t.source_workspace_id IS NOT DISTINCT FROM s.execution_workspace_id
  AND t.source_revision=s.revision AND t.source_transcript_revision=s.transcript_revision
  AND t.source_permission_revision=s.permission_revision
- AND w.state='ready' AND w.revision=h.workspace_revision AND w.transfer_id=t.id`
+ AND ((t.target_location='cloud' AND w.state='ready' AND w.revision=h.workspace_revision AND w.transfer_id=t.id)
+ OR (t.target_location='local' AND t.source_location='cloud' AND h.local_transcript_revision=t.source_transcript_revision
+ AND EXISTS(SELECT 1 FROM profiles p JOIN devices d ON d.id=p.owner_device_id
+ WHERE p.id=h.local_profile_id AND p.owner_user_id=h.owner_user_id AND p.owner_device_id=t.target_device_id
+ AND p.provider=(SELECT provider FROM profiles WHERE id=s.profile_id) AND d.user_id=h.owner_user_id
+ AND d.revoked_at IS NULL AND d.expires_at>clock_timestamp())
+ AND NOT EXISTS(SELECT 1 FROM sessions occupied WHERE occupied.profile_id=h.local_profile_id AND occupied.local_session_id=h.local_session_id)))`
 
 func sessionTransferHeld(ctx context.Context, tx pgx.Tx, sessionID string) (bool, error) {
 	var held bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM transfer_handoffs h JOIN session_transfers t ON t.id=h.transfer_id JOIN sessions s ON s.id=h.session_id JOIN ticket_workspaces w ON w.id=h.workspace_id WHERE h.session_id=$1 AND `+liveHandoffSQL+`)`, sessionID).Scan(&held)
+	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM transfer_handoffs h JOIN session_transfers t ON t.id=h.transfer_id JOIN sessions s ON s.id=h.session_id LEFT JOIN ticket_workspaces w ON w.id=h.workspace_id WHERE h.session_id=$1 AND `+liveHandoffSQL+`)`, sessionID).Scan(&held)
 	return held, err
 }
 
@@ -94,12 +114,16 @@ func readHandoff(ctx context.Context, tx pgx.Tx, id, owner string) (Handoff, err
 		return h, ErrDenied
 	}
 	var permissions []byte
-	err := tx.QueryRow(ctx, `SELECT h.id,h.transfer_id,h.camp_id,h.session_id,h.owner_user_id,h.source_device_id,t.source_location,COALESCE(t.source_workspace_id::text,''),t.source_epoch,h.workspace_id,h.workspace_revision,h.state,COALESCE(h.claim_id::text,''),COALESCE(h.claim_device_id::text,''),COALESCE(h.claim_grant_id::text,''),h.ack_hash,h.revision,h.expires_at,COALESCE(h.commit_nonce::text,''),COALESCE(h.execution_epoch,0),h.commit_hash,COALESCE(h.commit_permissions,'{}'::jsonb),COALESCE(h.commit_approved,false) FROM transfer_handoffs h JOIN session_transfers t ON t.id=h.transfer_id WHERE h.id=$1 AND h.owner_user_id=$2 FOR UPDATE OF h`, id, owner).Scan(&h.ID, &h.TransferID, &h.CampID, &h.SessionID, &h.OwnerUserID, &h.SourceDeviceID, &h.SourceLocation, &h.SourceWorkspaceID, &h.SourceEpoch, &h.WorkspaceID, &h.WorkspaceRevision, &h.State, &h.ClaimID, &h.claimDevice, &h.claimGrant, &h.ackHash, &h.Revision, &h.ExpiresAt, &h.CommitNonce, &h.ExecutionEpoch, &h.commitHash, &permissions, &h.commitApproved)
+	var local LocalHandoffDestination
+	err := tx.QueryRow(ctx, `SELECT h.id,h.transfer_id,h.camp_id,h.session_id,h.owner_user_id,h.source_device_id,t.source_location,COALESCE(t.source_workspace_id::text,''),t.source_epoch,COALESCE(h.workspace_id::text,''),COALESCE(h.workspace_revision,0),h.state,COALESCE(h.claim_id::text,''),COALESCE(h.claim_device_id::text,''),COALESCE(h.claim_grant_id::text,''),h.ack_hash,h.revision,h.expires_at,COALESCE(h.commit_nonce::text,''),COALESCE(h.execution_epoch,0),h.commit_hash,COALESCE(h.commit_permissions,'{}'::jsonb),COALESCE(h.commit_approved,false),t.target_location,COALESCE(t.target_device_id::text,''),COALESCE(h.local_profile_id::text,''),COALESCE(h.local_session_id,''),COALESCE(h.local_purpose,''),COALESCE(h.local_receipt_sha256,''),COALESCE(h.local_transcript_revision,0) FROM transfer_handoffs h JOIN session_transfers t ON t.id=h.transfer_id WHERE h.id=$1 AND h.owner_user_id=$2 FOR UPDATE OF h`, id, owner).Scan(&h.ID, &h.TransferID, &h.CampID, &h.SessionID, &h.OwnerUserID, &h.SourceDeviceID, &h.SourceLocation, &h.SourceWorkspaceID, &h.SourceEpoch, &h.WorkspaceID, &h.WorkspaceRevision, &h.State, &h.ClaimID, &h.claimDevice, &h.claimGrant, &h.ackHash, &h.Revision, &h.ExpiresAt, &h.CommitNonce, &h.ExecutionEpoch, &h.commitHash, &permissions, &h.commitApproved, &h.TargetLocation, &h.TargetDeviceID, &local.ProfileID, &local.SessionID, &local.Purpose, &local.ReceiptSHA256, &local.TranscriptRevision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return h, ErrDenied
 	}
 	if err == nil {
 		err = json.Unmarshal(permissions, &h.commitPermissions)
+		if local.ProfileID != "" {
+			h.LocalDestination = &local
+		}
 	}
 	return h, err
 }
@@ -133,6 +157,9 @@ func (s *Store) validateHandoff(ctx context.Context, tx pgx.Tx, a auth.Actor, h 
 	if err = transferSource(ctx, tx, session, t); err != nil {
 		return t, err
 	}
+	if t.TargetLocation == "local" {
+		return t, s.validateLocalHandoff(ctx, tx, session, t, h)
+	}
 	if _, err = s.transferTarget(ctx, tx, a, session, t); err != nil {
 		return t, err
 	}
@@ -154,7 +181,8 @@ func (s *Store) validateHandoff(ctx context.Context, tx pgx.Tx, a auth.Actor, h 
 }
 
 func (s *Store) BeginHandoff(ctx context.Context, a auth.Actor, campID, sessionID, transferID, key string, in HandoffInput) (Handoff, error) {
-	if !validID(in.WorkspaceID) || in.ExpectedTransferRevision < 1 || in.ExpectedWorkspaceRevision < 1 {
+	if in.ExpectedTransferRevision < 1 || (in.LocalDestination == nil && (!validID(in.WorkspaceID) || in.ExpectedWorkspaceRevision < 1)) ||
+		(in.LocalDestination != nil && (in.WorkspaceID != "" || in.ExpectedWorkspaceRevision != 0 || !validLocalDestination(*in.LocalDestination))) {
 		return Handoff{}, ErrInput
 	}
 	tx, err := s.pool.Begin(ctx)
@@ -183,20 +211,28 @@ func (s *Store) BeginHandoff(ctx context.Context, a auth.Actor, campID, sessionI
 	if t.Revision != in.ExpectedTransferRevision {
 		return h, ErrRevision
 	}
-	if t.TargetLocation != "cloud" {
+	if (t.TargetLocation == "cloud") != (in.LocalDestination == nil) {
 		return h, ErrTransition
 	}
-	if _, err = tx.Exec(ctx, `UPDATE transfer_handoffs h SET state=CASE WHEN h.expires_at<=clock_timestamp() THEN 'expired' ELSE 'invalidated' END,revision=revision+1 WHERE h.session_id=$1 AND h.state IN ('pending','claimed','acknowledged') AND NOT EXISTS(SELECT 1 FROM session_transfers t JOIN sessions s ON s.id=h.session_id JOIN ticket_workspaces w ON w.id=h.workspace_id WHERE t.id=h.transfer_id AND `+liveHandoffSQL+`)`, sessionID); err != nil {
+	if t.TargetLocation == "local" && (t.SourceLocation != "cloud" || t.TargetDeviceID != a.DeviceID) {
+		return h, ErrDenied
+	}
+	if _, err = tx.Exec(ctx, `UPDATE transfer_handoffs h SET state=CASE WHEN h.expires_at<=clock_timestamp() THEN 'expired' ELSE 'invalidated' END,revision=revision+1 WHERE h.session_id=$1 AND h.state IN ('pending','claimed','acknowledged') AND NOT EXISTS(SELECT 1 FROM session_transfers t JOIN sessions s ON s.id=h.session_id LEFT JOIN ticket_workspaces w ON w.id=h.workspace_id WHERE t.id=h.transfer_id AND `+liveHandoffSQL+`)`, sessionID); err != nil {
 		return h, err
 	}
 	if err = requireUnheldSession(ctx, tx, sessionID); err != nil {
 		return h, err
 	}
 	h = Handoff{ID: uuid.NewString(), TransferID: t.ID, CampID: campID, SessionID: sessionID, OwnerUserID: a.UserID, SourceDeviceID: session.OwnerDeviceID, SourceLocation: t.SourceLocation, SourceWorkspaceID: t.SourceWorkspaceID, SourceEpoch: t.SourceEpoch, WorkspaceID: in.WorkspaceID, WorkspaceRevision: in.ExpectedWorkspaceRevision, State: "pending", ExpiresAt: time.Now().Add(5 * time.Minute)}
+	h.TargetLocation, h.TargetDeviceID, h.LocalDestination = t.TargetLocation, t.TargetDeviceID, in.LocalDestination
 	if _, err = s.validateHandoff(ctx, tx, a, h); err != nil {
 		return h, err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO transfer_handoffs(id,transfer_id,camp_id,session_id,owner_user_id,source_device_id,workspace_id,workspace_revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, h.ID, h.TransferID, campID, sessionID, a.UserID, h.SourceDeviceID, h.WorkspaceID, h.WorkspaceRevision)
+	local := LocalHandoffDestination{}
+	if h.LocalDestination != nil {
+		local = *h.LocalDestination
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO transfer_handoffs(id,transfer_id,camp_id,session_id,owner_user_id,source_device_id,workspace_id,workspace_revision,local_profile_id,local_session_id,local_purpose,local_receipt_sha256,local_transcript_revision) VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')::uuid,NULLIF($8,0),NULLIF($9,'')::uuid,NULLIF($10,''),NULLIF($11,''),NULLIF($12,''),CASE WHEN $9='' THEN NULL ELSE $13::bigint END)`, h.ID, h.TransferID, campID, sessionID, a.UserID, h.SourceDeviceID, h.WorkspaceID, h.WorkspaceRevision, local.ProfileID, local.SessionID, local.Purpose, local.ReceiptSHA256, local.TranscriptRevision)
 	if err != nil {
 		return h, err
 	}
@@ -241,7 +277,7 @@ func (s *Store) refreshHandoff(ctx context.Context, tx pgx.Tx, a auth.Actor, h H
 	var err error
 	if oneOf(h.State, "pending", "claimed", "acknowledged") {
 		var alive bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM transfer_handoffs h JOIN session_transfers t ON t.id=h.transfer_id JOIN sessions s ON s.id=h.session_id JOIN ticket_workspaces w ON w.id=h.workspace_id WHERE h.id=$1 AND `+liveHandoffSQL+`)`, id).Scan(&alive); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM transfer_handoffs h JOIN session_transfers t ON t.id=h.transfer_id JOIN sessions s ON s.id=h.session_id LEFT JOIN ticket_workspaces w ON w.id=h.workspace_id WHERE h.id=$1 AND `+liveHandoffSQL+`)`, id).Scan(&alive); err != nil {
 			return h, err
 		}
 		if !alive {
@@ -540,7 +576,7 @@ func (s *Store) NextLocalHandoff(ctx context.Context, a auth.Actor, campID strin
 		return "", err
 	}
 	var id string
-	err = tx.QueryRow(ctx, `SELECT h.id FROM transfer_handoffs h JOIN session_transfers t ON t.id=h.transfer_id JOIN sessions s ON s.id=h.session_id JOIN ticket_workspaces w ON w.id=h.workspace_id WHERE h.camp_id=$1 AND h.owner_user_id=$2 AND h.source_device_id=$3 AND t.source_location='local' AND h.state IN ('pending','claimed') AND (h.claim_device_id IS NULL OR h.claim_device_id=$3) AND `+liveHandoffSQL+` ORDER BY h.created_at,h.id LIMIT 1`, campID, a.UserID, a.DeviceID).Scan(&id)
+	err = tx.QueryRow(ctx, `SELECT h.id FROM transfer_handoffs h JOIN session_transfers t ON t.id=h.transfer_id JOIN sessions s ON s.id=h.session_id LEFT JOIN ticket_workspaces w ON w.id=h.workspace_id WHERE h.camp_id=$1 AND h.owner_user_id=$2 AND h.source_device_id=$3 AND t.source_location='local' AND h.state IN ('pending','claimed') AND (h.claim_device_id IS NULL OR h.claim_device_id=$3) AND `+liveHandoffSQL+` ORDER BY h.created_at,h.id LIMIT 1`, campID, a.UserID, a.DeviceID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
@@ -559,7 +595,7 @@ func (s *Store) NextRunnerHandoff(ctx context.Context, token string) (string, er
 		return "", nil
 	}
 	var id string
-	err = s.pool.QueryRow(ctx, `SELECT h.id FROM transfer_handoffs h JOIN session_transfers t ON t.id=h.transfer_id JOIN sessions s ON s.id=h.session_id JOIN ticket_workspaces w ON w.id=h.workspace_id JOIN ticket_workspaces source ON source.id=t.source_workspace_id JOIN runner_grants g ON g.installation_id=source.provider_installation_id JOIN memberships m ON m.camp_id=h.camp_id AND m.user_id=h.owner_user_id WHERE source.provider_installation_id=$1 AND source.provider_epoch=$2 AND g.token_hash=$3 AND g.epoch=$2 AND g.revoked_at IS NULL AND g.expires_at>clock_timestamp() AND NOT g.cleanup_only AND m.role<>'viewer' AND t.source_location='cloud' AND h.state IN ('pending','claimed') AND (h.claim_grant_id IS NULL OR h.claim_grant_id=g.id) AND `+liveHandoffSQL+` ORDER BY h.created_at,h.id LIMIT 1`, state.InstallationID, state.Epoch, auth.HashToken(token)).Scan(&id)
+	err = s.pool.QueryRow(ctx, `SELECT h.id FROM transfer_handoffs h JOIN session_transfers t ON t.id=h.transfer_id JOIN sessions s ON s.id=h.session_id LEFT JOIN ticket_workspaces w ON w.id=h.workspace_id JOIN ticket_workspaces source ON source.id=t.source_workspace_id JOIN runner_grants g ON g.installation_id=source.provider_installation_id JOIN memberships m ON m.camp_id=h.camp_id AND m.user_id=h.owner_user_id WHERE source.provider_installation_id=$1 AND source.provider_epoch=$2 AND g.token_hash=$3 AND g.epoch=$2 AND g.revoked_at IS NULL AND g.expires_at>clock_timestamp() AND NOT g.cleanup_only AND m.role<>'viewer' AND t.source_location='cloud' AND h.state IN ('pending','claimed') AND (h.claim_grant_id IS NULL OR h.claim_grant_id=g.id) AND `+liveHandoffSQL+` ORDER BY h.created_at,h.id LIMIT 1`, state.InstallationID, state.Epoch, auth.HashToken(token)).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}

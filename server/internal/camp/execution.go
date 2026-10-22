@@ -39,6 +39,28 @@ func (s *Store) executionTarget(ctx context.Context, tx pgx.Tx, session Session)
 	}
 	out := ExecutionTarget{Location: session.ExecutionLocation, Epoch: session.ExecutionEpoch, WorkspaceID: session.ExecutionWorkspaceID, Mode: "chat", Permissions: localcli.PermissionSettings{}, Available: true}
 	if out.Location == "local" {
+		var raw []byte
+		var purpose, profile, device, localID string
+		err := tx.QueryRow(ctx, `SELECT h.commit_permissions,h.local_purpose,h.local_profile_id,t.target_device_id,h.local_session_id
+ FROM sessions s JOIN transfer_handoffs h ON h.session_id=s.id AND h.execution_epoch=s.execution_epoch
+ JOIN session_transfers t ON t.id=h.transfer_id
+ WHERE s.id=$1 AND h.state='committed' AND t.target_location='local' AND h.owner_user_id=s.owner_user_id`, session.ID).Scan(&raw, &purpose, &profile, &device, &localID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return out, nil
+		}
+		if err != nil {
+			return out, err
+		}
+		if profile != session.ProfileID || device != session.OwnerDeviceID || localID != session.LocalSessionID {
+			out.Available = false
+			return out, ErrTransition
+		}
+		if json.Unmarshal(raw, &out.Permissions) != nil {
+			return out, ErrInput
+		}
+		if purpose == "implementation" {
+			out.Mode = "implementation"
+		}
 		return out, nil
 	}
 	var raw []byte
@@ -146,6 +168,9 @@ func (s *Store) Execution(ctx context.Context, a auth.Actor, campID, id string) 
 		out.RequiresTransfer = required
 	}
 	if errors.Is(err, ErrTransition) {
+		if out.Location == "local" {
+			return out, nil
+		}
 		var raw []byte
 		var purpose string
 		if err = tx.QueryRow(ctx, `SELECT s.execution_permissions,w.purpose FROM sessions s JOIN ticket_workspaces w ON w.id=s.execution_workspace_id WHERE s.id=$1`, session.ID).Scan(&raw, &purpose); err != nil {
