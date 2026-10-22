@@ -11,6 +11,8 @@ struct PublishMessage: Codable, Sendable, Equatable {
 }
 struct TranscriptExport: Decodable, Sendable {
     var messages: [PublishMessage]; var after: Int64; var hasMore: Bool; var fingerprint: String
+    var contentRevision:String? = nil
+    var snapshotRevision:String {contentRevision ?? fingerprint}
     // The local bridge uses camel case; the Camp API uses snake case.
 }
 struct PublishedDigest: Codable, Sendable { var id: String; var digest: String }

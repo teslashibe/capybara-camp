@@ -129,6 +129,18 @@ that the imported main and child histories match the source at handoff. The
 fix must preserve independent activity in other conversations on the same
 profile and reject edits between publication, review and commit.
 
+The local exporter now provides a content revision for the selected
+conversation, separate from the shared profile-file fingerprint. The native
+publisher checks this revision across pages and after child synchronization
+before reporting the copy complete. This is groundwork for the final handoff
+history check, not completion of it. Targeted Go tests cover selected-message
+edits and unrelated Codex database writes. The full local-CLI and transfer Go
+race suites, vet and Linux helper/runner builds pass. Native publication tests
+reject changed pages, recover with the latest complete copy, and retain the
+existing parent/child and privacy checks. The packaged bridge and transfer
+suites also pass. The staged secret scan passes. The final source handoff
+binding remains open.
+
 The transfer work includes a read-only Go capture layer for selected Git
 changes and owner-bound, encrypted, resumable upload storage. Completion checks
 payload and review hashes against the pinned source revisions. The staging

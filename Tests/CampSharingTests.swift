@@ -90,6 +90,19 @@ actor ChildSourceFixture {
     }
 }
 
+actor ChangingHistoryFixture {
+    var stable=false
+    var reads=0
+    func settle(){stable=true}
+    func count()->Int{reads}
+    func page(_ after:Int64)->TranscriptExport {
+        reads += 1
+        let newer=stable || after>=0
+        let message=PublishMessage(id:after<0 ? "first" : "second",ordinal:after<0 ? 0 : 1,role:"assistant",text:after<0 ? (newer ? "Updated first" : "Original first") : "Second",removed:false)
+        return TranscriptExport(messages:[message],after:message.ordinal,hasMore:after<0,fingerprint:"shared-profile-file",contentRevision:String(repeating:newer ? "b" : "a",count:64))
+    }
+}
+
 @main struct CampSharingTests {
     @MainActor static func eventually(_ label: String, _ condition: @MainActor () async -> Bool) async {
         for _ in 0..<150 {
@@ -105,6 +118,19 @@ actor ChildSourceFixture {
         let actor = CloudActor(userId: scope.userId, deviceId: UUID().uuidString, email: "fixture@example.com", name: "Fixture")
         let cache = try CampCache(directory: root)
         let native = CampSession(id: "Claude:/local:fixture", sessionID: UUID().uuidString, provider: "Claude", sourceID: "Claude:/local", sourceLabel: "Fixture account", root: "/local", title: "  A synthetic session  ", cwd: "/local/project", updated: 1, path: "/local/session.jsonl", accountID: "", archived: false, model: "fixture-model")
+        let changingSource=ChangingHistoryFixture(),changingServer=PublishingFixture(scope:scope,actor:actor)
+        let changing=CampSharing(cache:try CampCache(directory:root.appendingPathComponent("changing-history")),export:{_,after in await changingSource.page(after)})
+        changing.localSession={_ in native}
+        changing.childCatalog={_ in LocalChildHistoryCatalog(parentID:String(repeating:"a",count:64),revision:String(repeating:"b",count:64),sources:[])}
+        changing.attach(scope:scope,actor:actor,transport:changingServer)
+        try await changing.configure(local:native,projectId:UUID().uuidString,shared:true,allowRequests:false)
+        await eventually("Changed pages were not rejected") {await changingSource.count()>1 && changing.shares.first?.state=="Waiting to sync"}
+        precondition(changing.shares.first?.state != "Shared","Mixed history was reported as fully shared")
+        await changingSource.settle();changing.retry()
+        await eventually("Stable history did not recover after retry"){changing.shares.first?.state=="Shared"}
+        let settled=await changingServer.snapshot()
+        precondition(settled.3["first"]?.text=="Updated first" && settled.3["second"]?.text=="Second","Retry did not replace the incomplete snapshot")
+        changing.attach(scope:nil,actor:nil,transport:nil)
         let server = PublishingFixture(scope: scope, actor: actor)
         let export: @Sendable (CampSession, Int64) async throws -> TranscriptExport = { _, after in
             let message = PublishMessage(id: after < 0 ? "first" : "second", ordinal: after < 0 ? 0 : 1, role: "assistant", text: after < 0 ? "First message" : "Second message", removed: false)

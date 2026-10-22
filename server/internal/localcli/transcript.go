@@ -212,10 +212,11 @@ type ExportMessage struct {
 	Speed   string `json:"speed,omitempty"`
 }
 type ExportPage struct {
-	Messages    []ExportMessage `json:"messages"`
-	After       int64           `json:"after"`
-	HasMore     bool            `json:"hasMore"`
-	Fingerprint string          `json:"fingerprint"`
+	Messages        []ExportMessage `json:"messages"`
+	After           int64           `json:"after"`
+	HasMore         bool            `json:"hasMore"`
+	Fingerprint     string          `json:"fingerprint"`
+	ContentRevision string          `json:"contentRevision"`
 }
 
 func (a *App) ExportPage(ctx context.Context, s Session, after int64, limit int) (ExportPage, error) {
@@ -261,17 +262,30 @@ CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY,ordinal INTEGER NOT NULL
 		return result, err
 	}
 	result.Fingerprint = stamp
-	var cached string
+	var cached, contentRevision string
 	err = db.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key='fingerprint'").Scan(&cached)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return result, err
 	}
-	if cached != stamp {
+	if err = db.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key='content_revision'").Scan(&contentRevision); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return result, err
+	}
+	if cached != stamp || len(contentRevision) != 64 {
 		if err := syncIndex(ctx, db, s, stamp); err != nil {
 			return result, err
 		}
 	}
-	rows, err := db.QueryContext(ctx, "SELECT body,removed FROM messages WHERE ordinal>? ORDER BY ordinal LIMIT ?", after, limit+1)
+	// Read the revision and page from one SQLite snapshot. Another importer may
+	// reconcile this index while a different page is being published.
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return result, err
+	}
+	defer tx.Rollback()
+	if err = tx.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key='content_revision'").Scan(&result.ContentRevision); err != nil {
+		return result, err
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT body,removed FROM messages WHERE ordinal>? ORDER BY ordinal LIMIT ?", after, limit+1)
 	if err != nil {
 		return result, err
 	}
@@ -355,6 +369,13 @@ func syncIndex(ctx context.Context, db *sql.DB, s Session, stamp string) error {
 	if _, err = conn.ExecContext(ctx, "UPDATE messages SET removed=1 WHERE seen=0"); err != nil {
 		return err
 	}
+	contentRevision, err := indexedContentRevision(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if _, err = conn.ExecContext(ctx, "INSERT INTO metadata VALUES('content_revision',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", contentRevision); err != nil {
+		return err
+	}
 	current, err := fingerprint(s)
 	if err != nil {
 		return err
@@ -370,4 +391,47 @@ func syncIndex(ctx context.Context, db *sql.DB, s Session, stamp string) error {
 	}
 	committed = true
 	return nil
+}
+
+func indexedContentRevision(ctx context.Context, conn *sql.Conn) (string, error) {
+	rows, err := conn.QueryContext(ctx, "SELECT substr(body,1,1049600),removed FROM messages ORDER BY ordinal")
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	digest := sha256.New()
+	_, _ = digest.Write([]byte("capybara-transcript-content-v1\n"))
+	encoder := json.NewEncoder(digest)
+	for count := 0; rows.Next(); count++ {
+		if count >= 200000 {
+			return "", errors.New("Transcript exceeds 200,000 messages")
+		}
+		var raw string
+		var removed bool
+		if err = rows.Scan(&raw, &removed); err != nil {
+			return "", err
+		}
+		if len(raw) >= 1049600 {
+			return "", errors.New("This transcript contains a message larger than the 1 MiB sharing limit")
+		}
+		var message ExportMessage
+		if err = json.Unmarshal([]byte(raw), &message); err != nil {
+			return "", errors.New("Invalid cached transcript message")
+		}
+		if removed {
+			message.Removed = true
+			message.Text = ""
+		}
+		data, err := json.Marshal(message)
+		if err != nil || len(data) > 1<<20 {
+			return "", errors.New("This transcript contains a message larger than the 1 MiB sharing limit")
+		}
+		if err = encoder.Encode(message); err != nil {
+			return "", err
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
 }

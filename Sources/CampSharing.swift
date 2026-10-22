@@ -249,10 +249,13 @@ struct LocalShareStatus {
         guard value.shared || value.syncToCloud == true else { await state(id, "Private", generation: token); return }
         await state(id, "Syncing transcript", generation: token)
         var after: Int64 = -1
+        var snapshotRevision:String?
         for _ in 0..<1000 {
             let page = try await export(local, after)
             try check(token)
             guard page.messages.count <= 200, !page.hasMore || page.after > after else { throw CampCloudError.invalidResponse }
+            guard snapshotRevision==nil || snapshotRevision==page.snapshotRevision else {throw CampError.message("The conversation changed while syncing. Retrying the latest history")}
+            snapshotRevision=page.snapshotRevision
             let messages = try await cache.unpublished(page.messages, scope: scope, sessionId: id)
             if !messages.isEmpty {
                 guard let remote = value.remote else { throw CampCloudError.invalidResponse }
@@ -264,6 +267,8 @@ struct LocalShareStatus {
             }
             if !page.hasMore {
                 try await synchronizeChildren(&value,local:local,generation:token)
+                let verified=try await export(local,-1);try check(token)
+                guard verified.snapshotRevision==snapshotRevision else {throw CampError.message("The conversation changed while syncing. Retrying the latest history")}
                 await state(id, value.shared ? "Shared" : "Saved to Camp", generation: token); return
             }
             after = page.after

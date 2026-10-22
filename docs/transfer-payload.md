@@ -246,6 +246,21 @@ a changed source fingerprint. File fingerprints detect ordinary local changes;
 they are not attestations against an adversary who can alter local provider
 files and their metadata.
 
+Local export pages also return `contentRevision`, a SHA-256 revision of the
+selected conversation's indexed messages, order, removals and recorded model
+settings. It is distinct from the filesystem `fingerprint` used to refresh the
+index and from the cloud's integer transcript revision. An unrelated Codex
+conversation can change the shared database fingerprint without changing this
+content revision. The revision and returned page come from one SQLite read
+snapshot; an index refresh computes the revision before committing.
+
+The native publisher requires the same main-conversation content revision
+across all exported pages and checks it again after copying children. A changed
+copy retries before being marked synchronized. Already accepted upload batches
+remain on the server and are reconciled by that retry; this is not an atomic
+multi-page upload. The final source handoff still needs the history binding
+described below.
+
 The native publisher sends these pages through the cloud storage contract
 below. Child navigation uses the same sidebar and transcript component as local
 children. The runner reads these histories through the context tool described

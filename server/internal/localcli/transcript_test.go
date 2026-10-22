@@ -22,10 +22,16 @@ func TestExportAmendmentsTombstonesAndReappearance(t *testing.T) {
 	if err != nil || len(second.Messages) != 1 || second.Messages[0].ID != "b" || second.HasMore {
 		t.Fatal(second, err)
 	}
+	if len(first.ContentRevision) != 64 || first.ContentRevision != second.ContentRevision {
+		t.Fatal("Pages did not share one content revision")
+	}
 	write(t, path, record("b", "Second amended"))
 	changed, err := a.ExportPage(context.Background(), s, -1, 200)
 	if err != nil || len(changed.Messages) != 2 || changed.Messages[0].Ordinal != 0 || !changed.Messages[0].Removed || changed.Messages[0].Text != "" || changed.Messages[1].Removed {
 		t.Fatal(changed, err)
+	}
+	if changed.ContentRevision == first.ContentRevision {
+		t.Fatal("Amendment and removal kept the old content revision")
 	}
 	write(t, path, record("b", "Second amended")+record("a", "First returns")+record("c", "Third"))
 	changed, err = a.ExportPage(context.Background(), s, -1, 200)
@@ -41,6 +47,36 @@ func TestExportAmendmentsTombstonesAndReappearance(t *testing.T) {
 	info, err := os.Stat(files[0])
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatal(info, err)
+	}
+}
+
+func TestExportContentRevisionIgnoresOtherCodexConversations(t *testing.T) {
+	a := fixture(t)
+	db := makeDB(t, filepath.Join(a.Config.Home, "thread_history_1.sqlite"), `CREATE TABLE thread_items(thread_id,item_id,item_json,item_type,rollout_ordinal)`)
+	if _, err := db.Exec(`INSERT INTO thread_items VALUES('target','one','{"type":"agentMessage","text":"Selected answer","model":"fixture-model","effort":"high"}','agentMessage',0); INSERT INTO thread_items VALUES('other','other-message','{"type":"agentMessage","text":"Other answer"}','agentMessage',0)`); err != nil {
+		t.Fatal(err)
+	}
+	s := Session{Provider: "Codex", Root: a.Config.Home, SessionID: "target"}
+	first, err := a.ExportPage(t.Context(), s, -1, 200)
+	if err != nil || len(first.ContentRevision) != 64 {
+		t.Fatal(first, err)
+	}
+	if _, err = db.Exec(`UPDATE thread_items SET item_json='{"type":"agentMessage","text":"A much longer answer from a different active conversation"}' WHERE thread_id='other'`); err != nil {
+		t.Fatal(err)
+	}
+	second, err := a.ExportPage(t.Context(), s, -1, 200)
+	if err != nil || second.ContentRevision != first.ContentRevision {
+		t.Fatal("Other conversation invalidated selected contents", err)
+	}
+	if second.Fingerprint == first.Fingerprint {
+		t.Fatal("Fixture did not change the shared database fingerprint")
+	}
+	if _, err = db.Exec(`UPDATE thread_items SET item_json='{"type":"agentMessage","text":"Selected answer","model":"fixture-model","effort":"low"}' WHERE thread_id='target'`); err != nil {
+		t.Fatal(err)
+	}
+	third, err := a.ExportPage(t.Context(), s, -1, 200)
+	if err != nil || third.ContentRevision == first.ContentRevision {
+		t.Fatal("Selected model settings change retained its old revision", err)
 	}
 }
 
