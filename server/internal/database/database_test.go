@@ -203,6 +203,25 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 		t.Fatal(err)
 	}
 	// An empty import table can roll back without affecting prior histories.
+	space, observation := uuid.NewString(), uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO memory_spaces(id,camp_id,project_id,owner_user_id) VALUES($1,$2,$3,$4)`, space, camp, project, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO memory_observations(id,camp_id,space_id,creator_user_id,source_session_id,transcript_revision,permission_revision,message_ids,title,content,content_hash) VALUES($1,$2,$3,$4,$5,1,1,ARRAY['fixture'],'Saved memory','Retained content',$6)`, observation, camp, space, id, session, strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.Down(ctx); err == nil {
+		t.Fatal("Downgrade discarded memory observations")
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal("Rejected memory downgrade changed schema readiness", err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM memory_observations WHERE id=$1`, observation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM memory_spaces WHERE id=$1`, space); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = provider.DownTo(ctx, 25); err != nil {
 		t.Fatal("Empty planning-import downgrade failed", err)
 	}
@@ -242,8 +261,11 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = pool.Exec(ctx, `UPDATE sessions SET history_only=true,state='idle',allow_requests=false,external_owner=false WHERE id=$1`, session); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = provider.Down(ctx); err == nil {
+	if _, err = provider.DownTo(ctx, 28); err == nil {
 		t.Fatal("Downgrade discarded read-only history protections")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
 	}
 	if err = Ready(ctx, pool); err != nil {
 		t.Fatal("Rejected history downgrade changed schema readiness", err)

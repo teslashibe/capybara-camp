@@ -1,9 +1,38 @@
 # Project memory
 
-Memory remains in development. The native memory interface and Camp adapter
-are not implemented yet. [Cortex PR #1](https://github.com/teslashibe/cortex/pull/1)
-adds the exact-selection and permission-guard API needed by
+Memory remains in development. The Camp observation API and embedded Cortex
+adapter are implemented; consolidation job routing and the native memory
+interface are not. [Cortex PR #1](https://github.com/teslashibe/cortex/pull/1)
+is merged and supplies the exact-selection and permission-guard API needed by
 [the memory issue](https://github.com/teslashibe/capybara-camp/issues/5).
+
+## Current observation API
+
+- `POST /v1/camps/{camp}/memory/observations` saves `{project_id, visibility,
+  title, source}` with an `Idempotency-Key`. Visibility is `private` or `project`;
+  `source` is the existing session/revision/permission/message-ID reference
+- `GET /v1/camps/{camp}/memory/observations?project_id=…&visibility=private&limit=50`
+  returns metadata and a `next` cursor, with at most 100 entries per page
+- `GET /v1/camps/{camp}/memory/observations/{id}` returns the selected content and
+  full source reference after checking current permissions
+
+Members with write permission can save observations. Viewers can read permitted
+project observations. Private observations belong to their creator. A project
+save requires a shared source; saving into a project does not share a private
+session. Each observation contains up to 120 messages, at most 48 KiB per
+message and 256 KiB total serialized content. A namespace holds at most 10,000
+observations. Lists contain metadata; full text loads only when opened.
+
+Identical source snapshots converge to one observation within their scope.
+Changed content with a reused request key conflicts. Camp persists the selected
+snapshot before copying it into Cortex. `stored: false` retains a pending copy;
+retrying the same save reconciles it without another observation. This operation
+does not call a model. Completion emits a permission-filtered update event.
+
+Revoking a source hides project observations from reads, lists and event replay.
+Sharing that source again does not revive observations made under the older
+grant; explicitly save a new snapshot. Owners retain their own private copies
+when they stop sharing a source.
 
 ## Storage and access
 
@@ -74,6 +103,9 @@ their revisions and source links. Keep private and project scopes explicit.
 
 The Cortex dependency has Go tests for exact selection, private namespaces,
 foreign inputs, changed sources, malformed output, cancellation and a
-revocation racing the commit. Camp still needs its adapter and routing tests,
-the native interface, real CLI consolidation, offline/recovery checks and the
-two-Mac source-revocation walkthrough. Those remain V1 release gates.
+revocation racing the commit. Camp's observation tests cover cross-user and
+cross-Camp access, duplicate saves, pending-copy recovery, bounded pagination
+and revocation during copying. The copy releases Camp's policy lock before
+entering Cortex and checks permissions again before announcing completion.
+Routing tests, the native interface, real CLI consolidation, job recovery and
+the two-Mac source-revocation walkthrough remain V1 release gates.

@@ -39,7 +39,7 @@ not written or exposed through its activity interface.
 - macOS 14 or newer, on Apple silicon or Intel
 - [Codex CLI](https://learn.chatgpt.com/docs/cli) and/or [Claude Code](https://code.claude.com/docs/en/setup), installed and signed in
 - Xcode Command Line Tools for building from source (`xcode-select --install`)
-- Go 1.25.7 or newer for building from source
+- Go 1.26.10 or newer for building from source
 
 Provider subscriptions, login and model availability remain with the provider. You only need the CLI for the provider you want to use.
 
@@ -130,10 +130,11 @@ model settings. Reopening the plan replays its saved stream; access changes
 hide the affected output. Native visual and live cloud validation are still
 required before V1 release.
 
-Memory consolidation is still being integrated. The
-[project memory contract](docs/memory.md) describes the embedded Cortex
-dependency, private/project scopes and selected CLI execution. Its native
-screen and authenticated job routing are not available yet.
+Memory consolidation is still being integrated. The Go API now saves and
+reads source-bound observations in private or project scopes, using an
+embedded Cortex store. The [project memory contract](docs/memory.md) covers
+those endpoints and the remaining selected-CLI consolidation work. Its native
+screen and consolidation job routing are not available yet.
 
 In the development build, choose **Save to Camp** from a local planning or
 implementation card's menu, or the cloud icon in the plan window. Review the
