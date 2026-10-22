@@ -71,7 +71,8 @@ struct SharedPlanningResultView: View {
                 HStack {
                     Text("\(result.version.steps.filter { $0.state == "completed" }.count) of \(result.version.workflow.turnLimit) · \(result.version.state.replacingOccurrences(of: "_", with: " "))").font(.system(size: 11)).foregroundStyle(campMuted)
                     Spacer()
-                    if result.creatorUserId == store.cloud.scope?.userId {
+                    if result.creatorUserId == store.cloud.scope?.userId,
+                       result.version.imported == nil, result.activeVersion == result.version.version {
                         if result.version.state == "running" { Button("Pause") { Task { await store.sharedPlanning.act("pause", on: result) } } }
                         if result.version.state == "paused" { Button("Resume") { Task { await store.sharedPlanning.act("resume", on: result) } } }
                         if result.version.state == "draft" { Button("Start") { Task { await store.sharedPlanning.act("start", on: result) } } }
@@ -93,6 +94,7 @@ struct SharedPlanningResultView: View {
             }
             .onChange(of: store.planNavigation) { _, _ in applyCardNavigation() }
             .onChange(of: result.version.workflow) { _, _ in section = "Plans"; focusedSlot = nil }
+            .onChange(of: result.version.version) { _, _ in section = "Plans"; focusedSlot = nil }
             .onChange(of: result.id) { _, _ in
                 section = store.notificationPlanVersion != nil && result.version.workflow == .comparison ? "Combined plan" : "Plans"
                 focusedSlot = nil
@@ -134,6 +136,10 @@ struct SharedPlanningResultView: View {
         for (section, phase) in [("Plans", "draft"), ("Reviews", "review"), ("Combined plan", "merge")] {
             let steps = self.result.version.steps.filter { $0.phase == phase }
             if !steps.isEmpty && steps.allSatisfy({ $0.state == "completed" }) { result.insert(section) }
+        }
+        if implementationHistory.implementationNext == 0,
+           implementationHistory.implementations.max(by: { $0.ordinal < $1.ordinal })?.state == "complete" {
+            result.insert("Implementation")
         }
         return result
     }

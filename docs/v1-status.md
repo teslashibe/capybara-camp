@@ -18,12 +18,24 @@ and acceptance are separate milestones.
 | Memory and skills | Merged Cortex exact-selection and transactional guard API; embedded store, private/project observation API, saved job metadata, derived-memory source checks, replay and migration protection; isolated CLI inference and Cortex model adapter | Job dispatch, native provider/model selection and memory inspection, skill editing/version rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: finish the native plan-import review and remaining transfer cases, finish full-history migration, then memory/skills
+Next: finish the remaining transfer cases and full-history migration, then memory/skills
 and shared execution. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
 the two-Mac acceptance run follow that deployment. Hardware has not been bought
 or provisioned for this goal.
+
+October 22 native Save to Camp review now passes its focused local API
+walkthrough. The actual Go/PostgreSQL API received three synthetic planning
+revisions, quoted context and six implementation messages with two saved
+attempts, all private. The rebuilt reader opens a single implementation directly,
+uses shared controls and formatted settings, marks completed implementation and
+returns to provider plans when changing revisions. Read-only imported history
+no longer offers execution actions. Native regressions and strict bundle
+signature verification pass. Pointer edge checks remain incomplete because
+computer use intermittently reports no windows. Republishing newer local work
+after a saved copy, live migration, multi-device acceptance and the complete
+design audit remain open; no cloud deployment or release was made.
 
 The October 22 transfer review now keeps checking the source hold while the
 user reviews permissions. Computer use reproduced the stale Source verified

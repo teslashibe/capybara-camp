@@ -4,6 +4,40 @@ Reference: the approved [interactive design](http://127.0.0.1:8770/capybara-camp
 The native app has **not passed the full design audit**. This is the working
 discrepancy list, not a release approval.
 
+## Saved planning history
+
+The October 22 native walkthrough signed in to the actual Go API backed by a
+disposable local PostgreSQL database. Save to Camp imported a synthetic private
+ticket into Inbox: three planning revisions, one quoted context source and one
+implementation with six messages and two attempts. API readback confirmed those
+counts and `shared: false`. No personal sessions or provider credentials were
+uploaded, and the import did not invoke a provider.
+
+The walkthrough found and corrected an extra navigation step to reach the only
+implementation, a separate system-styled Chat/Attempts control, raw effort/speed
+labels in attempts, a missing completed Implementation stage and a Cancel action
+on read-only imported history. Changing versions from Implementation also left
+an empty pane; the rebuilt app now opens the selected revision's provider plans.
+The import sheet uses the shared close-button target and singular count labels.
+
+Computer use verified direct implementation opening, both attempt records and
+their saved permissions, bottom-visible chat text, revision switching, preserved
+unknown outcomes and the two-message source snapshot. Escape closed the snapshot.
+The final build exposes no execution action on imported revision 1. Captures:
+`build/ui-audit/native-imported-implementation-oct22.png`,
+`native-imported-attempts-oct22.png` and `native-imported-revision-oct22.png`.
+The native promotion, imported-planning and implementation suites pass; the
+final navigation rebuild reran the latter two. The bundle passes strict deep
+signature verification with the existing development identity.
+
+Pointer input reported no available windows at the Attempts edge test, while
+accessibility selection and screenshots worked. Edge clicks and the remaining
+keyboard inventory therefore remain open. This is a local synthetic-data import
+walkthrough, not two-Mac acceptance, live cloud execution or the final design
+audit. Updating an already saved copy after newer local work also remains to be
+resolved: the current link preserves that local work but offers only the earlier
+saved copy.
+
 ## Transfer review
 
 `tools/transfer-ui-audit.sh` builds a separate native window using the production
@@ -142,6 +176,7 @@ remain unverified by pointer; this retry does not close the whole-app audit.
 | UI-25 | Chat model fields stretched across the header, centered their values and put visible padding outside the menu label | Model, effort and speed share left-aligned outlined fields with a trailing chevron and a 30-point clickable label. Chat caps the group at 396 points and moves it below the heading at narrow widths. The native walkthrough verified wide and minimum-width layouts, model/effort/speed menus, a persisted effort change and Claude's restricted speed choices. Pointer clicks in the model field's lower-left padding and the effort field's lower-right padding opened the correct menus. Final accessibility inspection exposes one menu per field, including the Recent sessions filter. Native state, permission and planning suites pass. Capture: `native-chat-controls-narrow-oct22.png` |
 | UI-26 | Plain buttons left empty row space and small icon padding outside their hit areas | Explicit label hit areas cover recent sessions, main/child chats, provider/profile/project rows, planning navigation, segmented controls, context attachment and the 28-point action icons. The card model/logo layout is preserved. The full pointer/keyboard inventory remains a release gate; intermittent computer-use window errors prevented completing every edge-click case in this pass |
 | UI-27 | Transfer review kept Source verified after the source hold ended while permissions were open | The confirmation phase keeps following the source hold. Native checks using the real local guard rejected a changed project file and a changed child transcript; unchanged history completed. Invalidated/expired/released hold regressions pass. Real cloud and two-Mac transfer acceptance remain open |
+| UI-28 | Imported implementations required an extra history detour, used inconsistent controls and could leave an empty pane after revision changes | The native API walkthrough verified direct opening, shared Chat/Attempts controls, formatted saved settings, complete-stage indication and revision navigation. Read-only imports hide execution actions. Pointer edges and the final whole-app audit remain open |
 
 Local captures are in `build/ui-audit/`: `reference-chat.png`,
 `reference-board.png`, `reference-planning.png`, `native-chat-before.png`, and

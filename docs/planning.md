@@ -380,12 +380,16 @@ plan; repeating an import returns the same records without creating work.
 Implementation and attempt pages return a `next` cursor of zero at the end.
 Transcript pages retain the ordinary `before`/`has_more` contract. Schema 28
 stores the links and attempt records and refuses a downgrade that would erase
-them. The native planning workspace lists saved implementations under History.
-Selecting one opens its chat and attempt records in the same workspace, with
+them. The native planning workspace lists saved implementations under History
+and Implementation. A revision with one saved implementation opens it directly.
+Selecting a record opens its chat and attempt records in the same workspace, with
 the existing provider marks, model controls and transcript component. Earlier
 messages and further attempts load in bounded pages. Switching records cancels
 the previous read; sign-out or observed permission changes clear its contents.
 Save to Camp publishes these histories through the native import review.
+The saved copy is read-only; it does not expose Start, Pause, Resume or Cancel.
+Changing the planning revision returns to its provider plans. Completed saved
+implementations mark the Implementation stage complete.
 Continuing an imported implementation and live migration acceptance remain
 release work.
 

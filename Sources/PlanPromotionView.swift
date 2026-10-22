@@ -20,7 +20,7 @@ struct PlanPromotionView: View {
             HStack {
                 Text("Save to Camp").font(.title2)
                 Spacer()
-                Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }
+                Button { dismiss() } label: { CampIconLabel(symbol: "xmark") }
                     .buttonStyle(.plain).keyboardShortcut(.cancelAction).help("Close").accessibilityLabel("Close import review")
             }
             if let plan {
@@ -28,8 +28,9 @@ struct PlanPromotionView: View {
                 Text("Save the complete planning history privately. The original ticket stays on this Mac, and saving does not start an agent.")
                     .font(.system(size: 12)).foregroundStyle(campMuted).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 18) {
-                    Label("\(plan.versions.count) revisions", systemImage: "clock.arrow.circlepath")
-                    Label("\(plan.implementations?.count ?? 0) implementation chats", systemImage: "bubble.left.and.bubble.right")
+                    Label("\(plan.versions.count) \(plan.versions.count == 1 ? "revision" : "revisions")", systemImage: "clock.arrow.circlepath")
+                    let count = plan.implementations?.count ?? 0
+                    Label("\(count) implementation \(count == 1 ? "chat" : "chats")", systemImage: "bubble.left.and.bubble.right")
                 }.font(.system(size: 11)).foregroundStyle(campMuted)
                 if linked != nil {
                     Label(promotion.replaces(plan) ? "Saved to Camp" : "An earlier copy is saved to Camp", systemImage: "checkmark.circle").foregroundStyle(campGreen)

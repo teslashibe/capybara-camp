@@ -37,8 +37,8 @@ struct ImportedImplementationView: View {
         if let record = history.selected {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
-                    Button(action: back) { Image(systemName: "chevron.left").frame(width: 28, height: 28) }
-                        .buttonStyle(.plain).help("Back to planning history")
+                    Button(action: back) { CampIconLabel(symbol: "chevron.left") }
+                        .buttonStyle(.plain).help("Back to planning history").accessibilityLabel("Back to planning history")
                     ProviderMark(provider: record.provider, size: 18)
                     Text("Implementation · Version \(record.planVersion)").font(.system(size: 13, weight: .medium))
                     Spacer()
@@ -48,8 +48,8 @@ struct ImportedImplementationView: View {
                 ModelSettingsMenu(provider: record.provider, title: "Saved request settings", sessionModel: record.model,
                     modelLabel: record.model.isEmpty ? "Not recorded" : record.model, models: [], caps: ModelOption(id: record.model, label: record.model),
                     choice: ModelTuning(effort: record.effort, speed: record.speed), locked: true, expanded: true, selectModel: { _ in }, tune: { _, _ in })
-                Picker("Implementation history", selection: $section) { Text("Chat").tag("Chat"); Text("Attempts").tag("Attempts") }
-                    .pickerStyle(.segmented).frame(maxWidth: 280)
+                CampSegmentedControl(options: [("Chat", "Chat"), ("Attempts", "Attempts")], selection: $section)
+                    .frame(width: 200).accessibilityLabel("Implementation history")
                 if !history.error.isEmpty { Text(history.error).font(.caption).foregroundStyle(campMuted) }
                 if section == "Chat" {
                     ScrollViewReader { proxy in
@@ -74,7 +74,9 @@ struct ImportedImplementationView: View {
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text("Attempt \(attempt.ordinal) · \(attempt.state)").font(.system(size: 12, weight: .medium))
                                     MessageView(message: Message(id: attempt.id, role: "user", text: attempt.prompt), provider: record.provider)
-                                    Text([attempt.model, attempt.effort, attempt.speed].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(campMuted)
+                                    Text([attempt.model, attempt.effort.isEmpty ? "" : ModelMenu.effortName(attempt.effort) + " effort",
+                                          attempt.speed.isEmpty ? "" : ModelMenu.speedName(attempt.speed)].filter { !$0.isEmpty }.joined(separator: " · "))
+                                        .font(.caption).foregroundStyle(campMuted)
                                     if !attempt.error.isEmpty { Text(attempt.error).font(.caption).foregroundStyle(campMuted).textSelection(.enabled) }
                                     if let usage = attempt.usage {
                                         Text([usage.inputTokens.map { "\($0) input tokens" }, usage.outputTokens.map { "\($0) output tokens" }].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(campMuted)
@@ -91,10 +93,18 @@ struct ImportedImplementationView: View {
                 .onChange(of: history.loading) { _, loading in if !loading && section == "Attempts" && history.attempts.isEmpty && record.attemptCount > 0 && history.error.isEmpty { history.loadAttempts() } }
         } else {
             VStack(alignment: .leading, spacing: 12) {
-                if !history.error.isEmpty { Text(history.error).font(.caption).foregroundStyle(campMuted) }
-                Text("Choose an implementation from planning history").foregroundStyle(campMuted)
-                Button("Planning history", action: back)
-            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                ImportedImplementationList(history: history) { history.select($0) }
+                if history.implementations.isEmpty && !history.loading && history.error.isEmpty {
+                    Text("No saved implementations for this revision").foregroundStyle(campMuted)
+                }
+            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .onAppear { openOnlyImplementation() }
+                .onChange(of: history.loading) { _, loading in if !loading { openOnlyImplementation() } }
         }
+    }
+    private func openOnlyImplementation() {
+        guard !history.loading, history.selected == nil, history.implementationNext == 0,
+              history.implementations.count == 1, let record = history.implementations.first else { return }
+        history.select(record)
     }
 }
