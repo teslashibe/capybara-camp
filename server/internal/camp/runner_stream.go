@@ -56,19 +56,26 @@ func (s *Store) SessionStream(ctx context.Context, a auth.Actor, campID, id stri
 		return nil, err
 	}
 	var out StreamHead
-	err = tx.QueryRow(ctx, `SELECT id,state,stream_seq,model,effort,speed FROM prompt_requests WHERE session_id=$1 AND execution_location='cloud' AND (stream_seq>0 OR state IN ('claimed','started','cancel_requested','outcome_unknown')) ORDER BY (state IN ('claimed','started','cancel_requested','outcome_unknown')) DESC,created_at DESC,id DESC LIMIT 1`, id).Scan(&out.ID, &out.State, &out.Seq, &out.Model, &out.Effort, &out.Speed)
+	err = tx.QueryRow(ctx, `SELECT id,state,stream_seq,model,effort,speed FROM prompt_requests WHERE session_id=$1 AND kind='chat' AND execution_location='cloud' AND (stream_seq>0 OR state IN ('claimed','started','cancel_requested','outcome_unknown')) ORDER BY (state IN ('claimed','started','cancel_requested','outcome_unknown')) DESC,created_at DESC,id DESC LIMIT 1`, id).Scan(&out.ID, &out.State, &out.Seq, &out.Model, &out.Effort, &out.Speed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	if err = readStreamSettings(ctx, tx, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func readStreamSettings(ctx context.Context, tx pgx.Tx, out *StreamHead) error {
 	var settings []byte
-	err = tx.QueryRow(ctx, `SELECT payload FROM request_stream_events WHERE request_id=$1 AND payload->>'type'='settings' ORDER BY seq DESC LIMIT 1`, out.ID).Scan(&settings)
+	err := tx.QueryRow(ctx, `SELECT payload FROM request_stream_events WHERE request_id=$1 AND payload->>'type'='settings' ORDER BY seq DESC LIMIT 1`, out.ID).Scan(&settings)
 	if err == nil {
 		var value map[string]any
 		if json.Unmarshal(settings, &value) != nil {
-			return nil, ErrInput
+			return ErrInput
 		}
 		if model := strEvent(value, "model"); model != "" {
 			out.Model = model
@@ -80,9 +87,9 @@ func (s *Store) SessionStream(ctx context.Context, a auth.Actor, campID, id stri
 			out.Speed = speed
 		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return nil, err
+		return err
 	}
-	return &out, nil
+	return nil
 }
 
 func (g *GitStore) RunnerRequestStatus(ctx context.Context, token, workspaceID, id string) (Request, error) {
@@ -140,7 +147,7 @@ func (g *GitStore) runnerTurn(ctx context.Context, token, workspaceID, id string
 	if err != nil {
 		return RunnerTurn{}, err
 	}
-	live, err := hasLiveLease(ctx, tx, id)
+	live, err := hasLiveLease(ctx, tx, r.ID)
 	if err != nil {
 		return RunnerTurn{}, err
 	}
@@ -323,10 +330,24 @@ func (g *GitStore) AppendRunnerEvent(ctx context.Context, token, workspaceID, id
 	if err != nil {
 		return 0, err
 	}
+	seq, err := g.store.appendRequestEvent(ctx, tx, r, input, event, raw, workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return seq, tx.Commit(ctx)
+}
+
+// Both official CLI workers persist through the same ordered, bounded event log.
+// Ownership/lease authentication is performed by their separate entry points.
+func (s *Store) appendRequestEvent(ctx context.Context, tx pgx.Tx, r Request, input StreamEvent, event map[string]any, raw []byte, workspaceID string) (int64, error) {
+	if _, err := s.requestAccess(ctx, tx, r); err != nil {
+		return 0, err
+	}
+	var err error
 	hash := sha256.Sum256(raw)
 	if input.Seq <= r.StreamSeq {
 		var stored []byte
-		if err = tx.QueryRow(ctx, `SELECT payload_hash FROM request_stream_events WHERE request_id=$1 AND seq=$2`, id, input.Seq).Scan(&stored); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT payload_hash FROM request_stream_events WHERE request_id=$1 AND seq=$2`, r.ID, input.Seq).Scan(&stored); err != nil {
 			return 0, err
 		}
 		if subtle.ConstantTimeCompare(stored, hash[:]) != 1 {
@@ -334,18 +355,15 @@ func (g *GitStore) AppendRunnerEvent(ctx context.Context, token, workspaceID, id
 		}
 		return r.StreamSeq, nil
 	}
-	live, err := hasLiveLease(ctx, tx, id)
+	live, err := hasLiveLease(ctx, tx, r.ID)
 	if err != nil {
 		return 0, err
 	}
 	if !live || !oneOf(r.State, "started", "cancel_requested") || input.Seq != r.StreamSeq+1 {
 		return 0, ErrTransition
 	}
-	if _, err = g.store.requestAccess(ctx, tx, r); err != nil {
-		return 0, err
-	}
 	var total, textBytes int64
-	if err = tx.QueryRow(ctx, `SELECT stream_bytes,stream_text_bytes FROM prompt_requests WHERE id=$1`, id).Scan(&total, &textBytes); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT stream_bytes,stream_text_bytes FROM prompt_requests WHERE id=$1`, r.ID).Scan(&total, &textBytes); err != nil {
 		return 0, err
 	}
 	kind, _ := event["type"].(string)
@@ -361,7 +379,7 @@ func (g *GitStore) AppendRunnerEvent(ctx context.Context, token, workspaceID, id
 	if input.Seq > 32768 || total+int64(len(raw)) > 16<<20 || textBytes > 2<<20 {
 		return 0, ErrInput
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO request_stream_events(request_id,seq,payload,payload_hash) VALUES($1,$2,$3,$4)`, id, input.Seq, raw, hash[:]); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO request_stream_events(request_id,seq,payload,payload_hash) VALUES($1,$2,$3,$4)`, r.ID, input.Seq, raw, hash[:]); err != nil {
 		return 0, err
 	}
 	if kind == "session" && r.Mode != "planning" {
@@ -373,22 +391,22 @@ func (g *GitStore) AppendRunnerEvent(ctx context.Context, token, workspaceID, id
 			return 0, err
 		}
 	}
-	if err = tx.QueryRow(ctx, `UPDATE prompt_requests SET stream_seq=$2,stream_bytes=stream_bytes+$3,stream_text_bytes=$4,revision=revision+1 WHERE id=$1 RETURNING revision`, id, input.Seq, len(raw), textBytes).Scan(&r.Revision); err != nil {
+	if err = tx.QueryRow(ctx, `UPDATE prompt_requests SET stream_seq=$2,stream_bytes=stream_bytes+$3,stream_text_bytes=$4,revision=revision+1 WHERE id=$1 RETURNING revision`, r.ID, input.Seq, len(raw), textBytes).Scan(&r.Revision); err != nil {
 		return 0, err
 	}
 	r.StreamSeq = input.Seq
-	if err = g.store.settleControl(ctx, tx, r, event); err != nil {
+	if err = s.settleControl(ctx, tx, r, event); err != nil {
 		return 0, err
 	}
 	if oneOf(kind, "approval", "approvalResolved", "approvalRejected") {
-		if err = g.store.cloudActivity(ctx, tx, r); err != nil {
+		if err = s.cloudActivity(ctx, tx, r); err != nil {
 			return 0, err
 		}
 	}
-	if err = g.store.emitCloudRequest(ctx, tx, r, "request.stream"); err != nil {
+	if err = s.emitCloudRequest(ctx, tx, r, "request.stream"); err != nil {
 		return 0, err
 	}
-	return input.Seq, tx.Commit(ctx)
+	return input.Seq, nil
 }
 
 func (s *Store) RequestStream(ctx context.Context, a auth.Actor, campID, id string, after int64) (StreamPage, error) {
@@ -410,6 +428,15 @@ func (s *Store) RequestStream(ctx context.Context, a auth.Actor, campID, id stri
 	}
 	if _, err = s.readSession(ctx, tx, a, campID, r.SessionID); err != nil {
 		return out, err
+	}
+	if r.Kind == "planning" {
+		p, err := s.loadPlanning(ctx, tx, a, campID, r.PlanID, r.PlanVersion)
+		if err != nil {
+			return out, err
+		}
+		if err = s.checkPlanningSources(ctx, tx, a, p); err != nil {
+			return out, err
+		}
 	}
 	rows, err := tx.Query(ctx, `SELECT seq,payload FROM request_stream_events WHERE request_id=$1 AND seq>$2 ORDER BY seq LIMIT 100`, id, after)
 	if err != nil {
@@ -433,7 +460,7 @@ func (s *Store) RequestStream(ctx context.Context, a auth.Actor, campID, id stri
 }
 
 func (s *Store) publishRunnerTranscript(ctx context.Context, tx pgx.Tx, r Request) error {
-	if r.StreamSeq == 0 {
+	if r.Kind == "planning" || r.StreamSeq == 0 {
 		return nil
 	}
 	var published bool

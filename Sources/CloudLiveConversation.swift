@@ -47,7 +47,7 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
     @Published private(set) var revision: Int64 = 0
     private(set) var sessionID: String?
     private var binding: String?
-    private var client: CampHTTP?
+    private var client: (any CampAccountTransport)?
     private var credential: CloudCredential?
     private var scope: CloudScope?
     private var generation = UUID()
@@ -58,18 +58,31 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
     private var text = ""
     private var completed: [Message] = []
     private var committed: Set<String> = []
+    private var headPath = ""
+    private var textLimit = 16 << 20
     var changed: (() -> Void)?
     deinit { task?.cancel(); retryTask?.cancel() }
 
-    func watch(session: CloudSession, scope: CloudScope, client: CampHTTP, credential: CloudCredential) {
+    func watch(session: CloudSession, scope: CloudScope, client: any CampAccountTransport, credential: CloudCredential) {
         let key = scope.key + ":" + session.id
         if binding != key { stop(); binding = key; sessionID = session.id; self.scope = scope }
         self.client = client; self.credential = credential
+        headPath = "/v1/camps/\(scope.campId)/sessions/\(session.id)/stream"
+        textLimit = 16 << 20
         invalidate(session.id)
+    }
+    func watchPlanning(planID: String, version: Int, ordinal: Int, sessionID: String, scope: CloudScope, client: any CampAccountTransport, credential: CloudCredential) {
+        let key = "\(scope.key):plan:\(planID):\(version):\(ordinal)"
+        if binding != key { stop(); binding = key; self.sessionID = sessionID; self.scope = scope }
+        self.client = client; self.credential = credential
+        headPath = "/v1/camps/\(scope.campId)/planning/\(planID)/steps/\(ordinal)/stream?version=\(version)"
+        textLimit = 8192
+        invalidate(sessionID)
     }
     func stop() {
         generation = UUID(); task?.cancel(); task = nil; retryTask?.cancel(); retryTask = nil; dirty = false
         binding = nil; sessionID = nil; scope = nil; client = nil; credential = nil
+        headPath = ""; textLimit = 16 << 20
         reset(); committed = []
     }
     private func reset() {
@@ -95,17 +108,24 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
             while self.dirty && self.generation == token && !Task.isCancelled {
                 self.dirty = false
                 do {
-                    let result = try await client.get(CloudStreamHead?.self, path: "/v1/camps/\(scope.campId)/sessions/\(id)/stream", token: credential.token)
+                    let data = try await client.data("GET", path: self.headPath, body: nil, key: nil, token: credential.token)
                     guard self.generation == token, !Task.isCancelled else { return }
+                    let decoded: CloudStreamHead?
+                    do { decoded = try CampWire.decoder().decode(CloudStreamHead?.self, from: data) }
+                    catch { throw CampCloudError.invalidResponse }
+                    guard let result = decoded else { self.reset(); return }
                     if self.notice == "Live output disconnected · Reconnecting" { self.notice = "" }
-                    guard let result else { self.reset(); return }
                     guard UUID(uuidString: result.id) != nil, result.seq >= 0, result.seq <= 32768 else { throw CampCloudError.invalidResponse }
                     if self.head?.id != result.id { self.reset() }
+                    guard result.seq >= self.cursor else { throw CampCloudError.invalidResponse }
                     self.head = result
                     if self.committed.contains(result.id) { self.publish(); continue }
                     while self.cursor < result.seq {
-                        let page = try await client.get(CloudStreamPage.self, path: "/v1/camps/\(scope.campId)/requests/\(result.id)/events?after=\(self.cursor)", token: credential.token)
+                        let bytes = try await client.data("GET", path: "/v1/camps/\(scope.campId)/requests/\(result.id)/events?after=\(self.cursor)", body: nil, key: nil, token: credential.token)
                         guard self.generation == token, !Task.isCancelled else { return }
+                        let page: CloudStreamPage
+                        do { page = try CampWire.decoder().decode(CloudStreamPage.self, from: bytes) }
+                        catch { throw CampCloudError.invalidResponse }
                         try self.apply(page)
                         // Yield between bounded pages during reconnect replay.
                         await Task.yield()
@@ -157,7 +177,7 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
             case "notice", "error": notice = event.message ?? ""
             default: break
             }
-            guard text.utf8.count + completed.reduce(0, { $0 + $1.text.utf8.count }) <= 16 << 20,
+            guard text.utf8.count + completed.reduce(0, { $0 + $1.text.utf8.count }) <= textLimit,
                   completed.count <= 128, approvals.count <= 64 else { throw CampCloudError.responseTooLarge }
             cursor = value.seq
         }

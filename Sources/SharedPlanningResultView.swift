@@ -45,7 +45,7 @@ struct SharedPlanningResultView: View {
                 if section == "Implementation" {
                     ImportedImplementationView(history: implementationHistory) { section = "History" }
                 } else if section == "History" || section == "Combined plan" {
-                    ScrollView {
+                    ScrollViewReader { proxy in ScrollView {
                         VStack(alignment: .leading, spacing: 16) {
                             plannerPanes.frame(height: 340)
                             VStack(alignment: .leading, spacing: 12) {
@@ -58,11 +58,14 @@ struct SharedPlanningResultView: View {
                                         implementationHistory.select(record); section = "Implementation"
                                     }
                                 } else {
-                                    messageBlocks(result.version.steps.filter { $0.phase == "merge" })
+                                    messageBlocks(result.version.steps.filter { $0.phase == "merge" }) { proxy.scrollTo("shared-result-bottom", anchor: .bottom) }
                                 }
                             }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
                                 .background(.white).clipShape(RoundedRectangle(cornerRadius: 10))
+                            Color.clear.frame(height: 1).id("shared-result-bottom")
                         }
+                    }.onAppear { proxy.scrollTo("shared-result-bottom", anchor: .bottom) }
+                        .onChange(of: section) { _, _ in proxy.scrollTo("shared-result-bottom", anchor: .bottom) }
                     }
                 } else { plannerPanes }
                 HStack {
@@ -138,7 +141,7 @@ struct SharedPlanningResultView: View {
         ScrollViewReader { proxy in
             CampTranscriptViewport(followBottom: { proxy.scrollTo("bottom", anchor: .bottom) }) {
                 VStack(alignment: .leading, spacing: 14) {
-                    messageBlocks(steps)
+                    messageBlocks(steps) { proxy.scrollTo("bottom", anchor: .bottom) }
                     Color.clear.frame(height: 1).id("bottom")
                 }
             }.onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
@@ -146,10 +149,13 @@ struct SharedPlanningResultView: View {
                 .onChange(of: steps.map(\.output)) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
         }
     }
-    private func messageBlocks(_ steps: [CloudPlanningResult.Step]) -> some View {
+    private func messageBlocks(_ steps: [CloudPlanningResult.Step], onUpdate: @escaping () -> Void = {}) -> some View {
         ForEach(steps) { step in
             Text(step.phase == "draft" ? "Independent plan" : step.phase == "review" ? "Review" : "Combined plan").font(.system(size: 12, weight: .medium))
-            if step.output.isEmpty { HStack { if ["started", "claimed"].contains(step.state) { ProgressView().controlSize(.small) }; Text(step.state.replacingOccurrences(of: "_", with: " ")).font(.caption).foregroundStyle(campMuted) } }
+            if step.output.isEmpty, let planner = result.version.planners.first(where: { $0.slot == step.slot }) {
+                SharedPlanningLiveStep(cloud: store.cloud, planID: result.id, version: result.version.version, step: step, planner: planner, sourceIDs: result.referencedSessions, onUpdate: onUpdate)
+                    .id("\(result.id):\(result.version.version):\(step.ordinal)")
+            }
             else {
                 let planner = result.version.planners.first { $0.slot == step.slot }
                 MessageView(message: Message(id: String(step.id), role: "assistant", text: step.output),
@@ -162,6 +168,49 @@ struct SharedPlanningResultView: View {
                 if let error = saved.error, !error.isEmpty { Text(error).font(.caption).foregroundStyle(campMuted).textSelection(.enabled) }
             }
         }
+    }
+}
+
+private struct SharedPlanningLiveStep: View {
+    @ObservedObject var cloud: CampConnection
+    let planID: String
+    let version: Int
+    let step: CloudPlanningResult.Step
+    let planner: CloudPlanningResult.Planner
+    let sourceIDs: Set<String>
+    var onUpdate: () -> Void
+    @StateObject private var live = CloudLiveConversation()
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if live.messages.isEmpty {
+                HStack {
+                    if ["started", "claimed"].contains(step.state) { ProgressView().controlSize(.small) }
+                    Text(step.state.replacingOccurrences(of: "_", with: " ")).font(.caption).foregroundStyle(campMuted)
+                }
+            } else {
+                ForEach(live.messages) { message in
+                    MessageView(message: message,
+                        metadata: "\(planner.provider) · \(live.head?.model ?? planner.model) · \(ModelMenu.effortName(live.head?.effort ?? planner.effort)) effort · \(ModelMenu.speedName(live.head?.speed ?? planner.speed))", fontSize: 12)
+                }
+            }
+            if !live.notice.isEmpty { Text(live.notice).font(.caption).foregroundStyle(campMuted) }
+        }
+        .onAppear { watch() }
+        .onDisappear { live.stop() }
+        .onChange(of: cloud.planningStreamRevision) { _, _ in live.invalidate(planner.sessionId) }
+        .onChange(of: cloud.scope) { _, _ in live.stop(); watch() }
+        .onChange(of: sourceAccess) { _, _ in live.stop(); watch() }
+        .onChange(of: live.revision) { _, _ in
+            Task { @MainActor in await Task.yield(); if !Task.isCancelled { onUpdate() } }
+        }
+    }
+    private var sourceAccess: [String] {
+        cloud.sessions.filter { sourceIDs.contains($0.id) }.map { "\($0.id):\($0.permissionRevision)" }.sorted()
+    }
+    private func watch() {
+        guard let scope = cloud.scope, let client = cloud.client, let credential = cloud.credential,
+              cloud.sessions.contains(where: { $0.id == planner.sessionId }) else { return }
+        live.watchPlanning(planID: planID, version: version, ordinal: step.ordinal, sessionID: planner.sessionId, scope: scope, client: client, credential: credential)
     }
 }
 

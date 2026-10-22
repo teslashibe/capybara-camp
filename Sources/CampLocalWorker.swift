@@ -28,6 +28,7 @@ import SwiftUI
     private var polling = false
     private var active: LocalConversation?
     private var activeAttempt: CloudAttempt?
+    private var activeStream: CampLocalPlanStream?
     private var reservedPlanningSession: CampSession?
     private var preparingRequestID: String?
     private var preparationInterruption: String?
@@ -53,6 +54,7 @@ import SwiftUI
         let nextEligibility = Set(sessions.map { "\($0.id):\($0.ownerUserId):\($0.ownerDeviceId):\($0.externalOwner)" })
         self.sessions = sessions
         guard let scope, let actor, let transport else {
+            activeStream?.stop(); activeStream = nil
             task?.cancel(); task = nil; leaseTask?.cancel(); leaseTask = nil; active?.stop(); active = nil; activeAttempt = nil
             context = nil; reservedPlanningSession = nil; issues = []; status = "Local worker idle"; return
         }
@@ -60,6 +62,7 @@ import SwiftUI
             context?.transport = transport
             if priorEligibility != nextEligibility { hasWorkHint = true; queueSignal &+= 1 }
         } else {
+            activeStream?.stop(); activeStream = nil
             task?.cancel(); task = nil; leaseTask?.cancel(); leaseTask = nil; active?.stop(); active = nil; activeAttempt = nil
             context = Context(scope: scope, actor: actor, transport: transport, generation: UUID())
             hasWorkHint = true; queueSignal &+= 1
@@ -223,6 +226,7 @@ import SwiftUI
             let started = try await action("start", attempt: attempt, context: c, key: attempt.startKey)
             guard started.state == "started", let deadline = started.leaseUntil, deadline.timeIntervalSinceNow > 5 else { throw CampCloudError.invalidResponse }
             attempt.request.leaseUntil = deadline
+            attempt.request.streamSeq = started.streamSeq
         }
         catch {
             attempt.state = "uncertain"; try await save(attempt, c)
@@ -242,6 +246,20 @@ import SwiftUI
             await finished(attempt, ConversationResult(state: "failed", message: "The local runner was unavailable before submission", accepted: false), c); return
         }
         active = launched; status = attempt.request.isPlanning ? "Planning on this Mac" : "Running shared work on this Mac"
+        if attempt.request.isPlanning {
+            let stream = CampLocalPlanStream(request: attempt.request, transport: c.transport)
+            activeStream = stream
+            stream.failed = { [weak self] message in
+                if self?.activeAttempt?.id == attempt.id { self?.status = message }
+            }
+            launched.changed = { [weak launched, weak stream] in
+                guard let launched else { return }
+                var parts = launched.messages.filter { $0.role == "assistant" }.map(\.text)
+                if !launched.text.isEmpty { parts.append(launched.text) }
+                stream?.update(text: parts.joined(separator: "\n\n"), settings: launched.reportedSettings)
+            }
+            launched.changed?()
+        }
         watchLease(attempt.request.leaseUntil, attempt: attempt, context: c)
     }
     private func watchLease(_ deadline: Date?, attempt: CloudAttempt, context c: Context) {
@@ -293,7 +311,7 @@ import SwiftUI
     }
     private func finished(_ saved: CloudAttempt, _ result: ConversationResult, _ c: Context) async {
         var attempt = saved
-        if activeAttempt?.id == attempt.id { leaseTask?.cancel(); leaseTask = nil; active = nil; activeAttempt = nil }
+        if activeAttempt?.id == attempt.id { activeStream?.stop(); activeStream = nil; leaseTask?.cancel(); leaseTask = nil; active = nil; activeAttempt = nil }
         attempt.state = result.state == "uncertain" ? "uncertain" : "finish_pending"
         attempt.outcome = result.state == "uncertain" ? nil : result.state
         attempt.evidence = "Local CLI \(result.state); attempt \(attempt.startKey)"

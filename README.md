@@ -125,6 +125,10 @@ In a shared draft, **Run on** below each planner's model settings selects its
 Local or Cloud source separately. Choose a prepared cloud workspace or a
 session on this Mac, then apply the selection. Other planner settings and
 attached context stay unchanged.
+Running shared plans show each provider's output as it arrives, with reported
+model settings. Reopening the plan replays its saved stream; access changes
+hide the affected output. Native visual and live cloud validation are still
+required before V1 release.
 
 In the development build, choose **Save to Camp** from a local planning or
 implementation card's menu, or the cloud icon in the plan window. Review the

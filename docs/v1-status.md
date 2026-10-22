@@ -9,7 +9,7 @@ and acceptance are separate milestones.
 | Area | Implemented locally | Still required for V1 |
 | --- | --- | --- |
 | Local sessions | Automatic multi-profile import, board/chat, model/effort/speed controls, sub-agents, streaming, dictation, steering and queues | Finish live provider/recovery and performance validation after the Go migration; complete the final design comparison below |
-| Planning and projects | Single-model plan, provider comparison, saved versions, per-Camp execution defaults, shared-draft per-planner destination selection, pinned execution assignments, same-ticket local implementation, project assignment across repositories, native private history-import review and resumable source publication, imported-implementation reader | Native import visual acceptance, shared implementation and owner-routed approval completion; cross-device validation |
+| Planning and projects | Single-model plan, provider comparison, saved versions, live shared planning streams, per-Camp execution defaults, shared-draft per-planner destination selection, pinned execution assignments, same-ticket local implementation, project assignment across repositories, native private history-import review and resumable source publication, imported-implementation reader | Native streaming/import visual acceptance, shared implementation and owner-routed approval completion; cross-device validation |
 | Shared Camps | Go/PostgreSQL auth, membership, sessions, events, requests, native cache/outbox and owner-Mac worker | Real independent users on two Macs, remaining permission/recovery cases, production deployment |
 | Onboarding | Automatic profile discovery before full import, optional Camp sign-in, owner-only cloud account setup, GitHub connections, projects, execution defaults, notifications, skip/resume | Final onboarding validation after remaining services land |
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
@@ -24,6 +24,21 @@ implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
 the two-Mac acceptance run follow that deployment. Hardware has not been bought
 or provisioned for this goal.
+
+Shared planning now streams each active step into its existing provider pane.
+The owner-Mac worker sends bounded snapshots through the same event store as
+cloud runners; the native reader replays by sequence and follows new text.
+Reported model, effort and speed are preserved in stream metadata. Readers
+check the plan and all referenced sessions, and private planning output is
+excluded from ordinary session streams and anchor transcripts. Native tests
+cover slow connections, lost responses, switching versions and revoked access.
+Five focused native suites pass, including the owner-Mac worker's synthetic CLI
+stream before completion. The final full Go race suite and vet pass against
+PostgreSQL 17, and Linux command builds pass. The server tests cover private
+cloud plans, source revocation, request leases, replay and keeping planning
+output out of anchor chat history. Both audit apps pass strict signature
+verification and the staged secret scan is clean. Visual and live multi-device
+acceptance remain open.
 
 Schema 29 adds read-only source records for the native history publisher.
 The server rejects execution, ownership changes, workspaces and transfers for
@@ -133,8 +148,8 @@ and vet pass; focused native import, planning, worker and context tests pass.
 Final targeted checks cover removing/reinstating old sources, unknown source
 IDs, worker acknowledgement and source-access rejection. Linux builds pass and
 the synthetic audit apps have been rebuilt and signature-verified. Native
-import/upload, full implementation-history transfer and visual acceptance are
-still open.
+import/upload and copied implementation-history publication are now connected;
+full migration and visual acceptance are still open.
 
 The current Local-to-Cloud increment adds native working-file selection, exact
 captured-file previews, a pinned Git base, destination preparation, source

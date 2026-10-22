@@ -26,6 +26,7 @@ import SwiftUI
     var requestChanged: ((CloudRequest) -> Void)?
     var notificationsChanged: (([CloudNotification], CloudScope, Bool) -> Void)?
     var planningChanged: ((String) -> Void)?
+    @Published private(set) var planningStreamRevision: UInt64 = 0
     let live = CloudLiveConversation()
     private(set) var credential: CloudCredential?
     private(set) var scope: CloudScope?
@@ -241,6 +242,7 @@ import SwiftUI
             guard UUID(uuidString: id) != nil else { throw CampCloudError.invalidResponse }
             try await cache.ingest(scope: scope, cursor: event.cursor, expectedEpoch: epoch)
             live.invalidate(id)
+            if event.payload.planId != nil { planningStreamRevision &+= 1 }
             refreshControls()
             status = "Connected to Camp"; error = ""
             return

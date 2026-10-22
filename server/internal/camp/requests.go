@@ -349,7 +349,13 @@ func (s *Store) ListRequests(ctx context.Context, a auth.Actor, campID string) (
 }
 
 func emitRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, r Request, kind string, automatic bool) error {
-	if err := emit(ctx, tx, a, r.CampID, kind, map[string]any{"request_id": r.ID, "session_id": r.SessionID, "state": r.State, "revision": r.Revision, "reason": r.Reason, "automatic": automatic}); err != nil {
+	payload := map[string]any{"request_id": r.ID, "session_id": r.SessionID, "state": r.State, "revision": r.Revision, "reason": r.Reason, "automatic": automatic}
+	if r.Kind == "planning" {
+		payload["plan_id"] = r.PlanID
+		payload["plan_version"] = r.PlanVersion
+		payload["plan_step"] = r.PlanStep
+	}
+	if err := emit(ctx, tx, a, r.CampID, kind, payload); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `UPDATE events SET session_id=$2,plan_id=NULLIF($3,'')::uuid WHERE camp_id=$1 AND cursor=(SELECT event_cursor FROM camps WHERE id=$1)`, r.CampID, r.SessionID, r.PlanID)

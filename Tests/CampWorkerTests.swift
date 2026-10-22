@@ -14,6 +14,8 @@ actor WorkerFixture: CampPublishingTransport {
     var holdStartReply = false
     var planningPaused = false
     var finalPayload: [String: String] = [:]
+    var streamedText = ""
+    func liveText() -> String { streamedText }
     func resultPayload() -> [String: String] { finalPayload }
     init(request: CloudRequest, session: CloudSession) { self.request = request; self.session = session }
     func configure(claim: Bool = false, start: Bool = false, finish: Bool = false, hold: Bool = false, startReply: Bool = false) {
@@ -37,6 +39,13 @@ actor WorkerFixture: CampPublishingTransport {
             held = true; await withCheckedContinuation { gate = $0 }
         }
         let body = try JSONSerialization.jsonObject(with: operation.body) as! [String: Any]
+        if operation.kind == "planning-stream" {
+            guard body["lease_token"] as? String == request.leaseToken, request.state == "started" else { throw CampCloudError.server(409, "invalid_transition") }
+            let seq = (body["seq"] as! NSNumber).int64Value
+            request.streamSeq = seq
+            if let event = body["event"] as? [String: Any], let text = event["text"] as? String { streamedText = text }
+            return try CampWire.body(["seq": seq])
+        }
         if operation.kind == "claim" {
             let ids = body["session_ids"] as! [String]
             if request.isPlanning && planningPaused { return Data("null".utf8) }
@@ -139,6 +148,26 @@ actor WorkerFixture: CampPublishingTransport {
         check(planningPayload["output"] == "Frozen planning output" && planningPayload["input_tokens"] == "73", "Planning output and usage did not reach the server")
         check(!planWorker.usesPlanningProvider("Codex") && planWorker.activePlanningCount == 0)
         planWorker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+
+        let streamCache = try CampCache(directory: root.appendingPathComponent("planning-stream"))
+        let streamAPI = WorkerFixture(request: planRequest, session: remote)
+        let streamWorker = CampLocalWorker(readFences: { [] }, cache: streamCache, automatic: false)
+        streamWorker.nativeSession = { _ in local }; streamWorker.available = { _ in true }
+        var streamedRun: LocalConversation?
+        streamWorker.execute = { native, work, prompt, _, contexts, completed in
+            let run = LocalConversation(session: native, history: [], prompt: prompt)
+            run.completed = completed
+            do { try run.start(prompt: prompt, model: work.model, tuning: .init(), contexts: contexts, mode: .planning, makeProcess: { fixtureProcess("ui-audit") }) }
+            catch { return nil }
+            streamedRun = run; return run
+        }
+        streamWorker.attach(scope: scope, actor: actor, transport: streamAPI, sessions: [remote])
+        await streamWorker.poll()
+        try await eventually("Live provider text was not published before completion") { await streamAPI.liveText().contains("Latest synthetic streaming marker") }
+        check(await streamAPI.snapshot().0.state == "started", "Streaming required a completed planning turn")
+        streamedRun?.stop()
+        try await eventually("Stopped streaming worker did not finish") { try await streamCache.attempts(scope).isEmpty }
+        streamWorker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
 
         let resumeCache = try CampCache(directory: root.appendingPathComponent("planning-resume"))
         let resumeAPI = WorkerFixture(request: planRequest, session: remote)

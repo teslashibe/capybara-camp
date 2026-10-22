@@ -4,9 +4,25 @@ import (
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
 	"github.com/teslashibe/capybara-camp/server/internal/camp"
 	"net/http"
+	"strconv"
 )
 
 func (a *API) planningRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/camps/{camp}/planning/{plan}/steps/{step}/stream", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		version, ok := queryInt(w, r, "version")
+		if !ok {
+			return
+		}
+		step, err := strconv.Atoi(r.PathValue("step"))
+		if err != nil {
+			problem(w, 400, "invalid_input")
+			return
+		}
+		value, err := a.Camps.PlanningStream(r.Context(), u, r.PathValue("camp"), r.PathValue("plan"), version, step)
+		if !fail(w, err) {
+			write(w, 200, value)
+		}
+	}))
 	mux.HandleFunc("GET /v1/camps/{camp}/planning/{plan}/implementations", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		version, ok := queryInt(w, r, "version")
 		if !ok {

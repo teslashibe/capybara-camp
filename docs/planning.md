@@ -92,9 +92,23 @@ next phase is checked before its requests are created. Restart creates a new
 revision with newly reviewed destinations. [Execution defaults](execution-locations.md#defaults-for-new-plans)
 apply only to newly created drafts and never edit these saved revisions.
 
-Shared results refresh when steps complete. Partial remote output and shared
-plan-to-implementation conversion remain unfinished; local plans already
-support both live output and approved implementation on the same ticket.
+The open shared plan shows partial output from each running step, including
+the combined plan. The owner-Mac worker publishes bounded text snapshots; a
+cloud runner uses the same ordered stream with its existing runner grant.
+Camp events wake the open panes, and reconnect replays the saved output in
+order. The final result still comes from the completed planning step. Leaving
+the view stops its stream readers while the worker continues.
+
+Planning streams check access to the whole plan and every source on each read.
+They never appear as ordinary chat streams on the anchor session. Local stream
+writes require the assigned owner, device and request lease, and accept only
+text and reported model settings. Duplicate sequence numbers must have the
+same content. Slow connections retain one in-flight snapshot and the latest
+replacement rather than buffering every text update.
+
+Shared plan-to-implementation conversion remains unfinished; local plans
+already support approved implementation on the same ticket. Live two-Mac and
+native visual validation remain release gates for shared streaming.
 
 At most one planning step per provider can be leased to a device, including
 across different tickets and profiles. The two providers may run concurrently.
@@ -129,6 +143,11 @@ respect the same plan visibility as reads.
   `start: true` also queues the first turns in that transaction
 - `GET /v1/camps/{camp}/planning` returns bounded board summaries
 - `GET /v1/camps/{camp}/planning/{plan}?version=N` reads one saved version
+- `GET /v1/camps/{camp}/planning/{plan}/steps/{step}/stream?version=N` reads
+  the live request head for that exact version and step; request event pages
+  use the existing `/requests/{request}/events?after=N` endpoint
+- `POST /v1/camps/{camp}/requests/{request}/planning-events` publishes a local
+  worker's `{seq,event,lease_token}` snapshot using the active request lease
 - `POST /v1/camps/{camp}/planning/{plan}/actions` accepts start, pause, resume,
   cancel or restart with an expected ticket revision; cancellation can include
   `expected_version` to tolerate progress within that version, and restart can
@@ -366,7 +385,8 @@ Selecting one opens its chat and attempt records in the same workspace, with
 the existing provider marks, model controls and transcript component. Earlier
 messages and further attempts load in bounded pages. Switching records cancels
 the previous read; sign-out or observed permission changes clear its contents.
-Native publication and continuation of these imported implementations remain
+Save to Camp publishes these histories through the native import review.
+Continuing an imported implementation and live migration acceptance remain
 release work.
 
 Planning tables were introduced in schema 5. The current required schema is

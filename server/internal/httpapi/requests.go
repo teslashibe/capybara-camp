@@ -9,6 +9,16 @@ import (
 )
 
 func (a *API) requestRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /v1/camps/{camp}/requests/{request}/planning-events", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		var input camp.LocalPlanningEvent
+		if !decode(w, r, &input) {
+			return
+		}
+		seq, err := a.Camps.AppendLocalPlanningEvent(r.Context(), u, r.PathValue("camp"), r.PathValue("request"), input)
+		if !fail(w, err) {
+			write(w, 200, map[string]int64{"seq": seq})
+		}
+	}))
 	mux.HandleFunc("GET /v1/camps/{camp}/requests/{request}/controls/{control}", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		out, err := a.Camps.ControlStatus(r.Context(), u, r.PathValue("camp"), r.PathValue("request"), r.PathValue("control"))
 		if !fail(w, err) {
