@@ -43,6 +43,10 @@ func TestMain(m *testing.M) {
 		if err := (&App{}).ServeContext(context.Background(), os.Getenv("CAMP_LOCAL_TEST_MANIFEST"), os.Stdin, os.Stdout); err != nil {
 			os.Exit(1)
 		}
+	case "conversation-codex":
+		runConversationCodexFixture()
+	case "conversation-claude":
+		runConversationClaudeFixture()
 	case "wait":
 		_ = os.WriteFile(os.Getenv("CAMP_LOCAL_TEST_PID"), []byte(strconv.Itoa(os.Getpid())), 0600)
 		for {

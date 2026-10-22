@@ -124,31 +124,14 @@ enum Bridge {
         if let path = ProcessInfo.processInfo.environment["CAPY_SUPPORT"], path.hasPrefix("/") { return URL(fileURLWithPath: path) }
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Capybara Camp")
     }()
-    static let python: String = {
-        let candidates = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"] +
-            (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map { String($0) + "/python3" }
-        for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate) {
-            let probe = Process()
-            probe.executableURL = URL(fileURLWithPath: candidate)
-            probe.arguments = ["-c", "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)"]
-            probe.standardOutput = FileHandle.nullDevice; probe.standardError = FileHandle.nullDevice
-            do { try probe.run(); probe.waitUntilExit(); if probe.terminationStatus == 0 { return candidate } } catch { continue }
-        }
-        return ""
-    }()
     static func process(_ action: String) throws -> Process {
-        let p = Process()
-        if ["discover", "scan", "transcript", "export-page", "add-source", "children", "activity", "permissions", "execution-context", "codex-activity-watch"].contains(action) {
-            let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/camp-local")
-            guard FileManager.default.isExecutableFile(atPath: helper.path) else { throw CampError.message("The bundled Go session helper is missing. Rebuild the app.") }
-            p.executableURL = helper; p.arguments = [action]
-            return p
+        guard ["discover", "scan", "transcript", "export-page", "add-source", "children", "activity", "permissions", "execution-context", "codex-activity-watch", "conversation"].contains(action) else {
+            throw CampError.message("Unsupported local session action")
         }
-        guard let script = Bundle.main.url(forResource: "bridge", withExtension: "py") else { throw CampError.message("The local session adapter is missing. Rebuild the app.") }
-        guard FileManager.default.isExecutableFile(atPath: python) else { throw CampError.message("Install Python 3.11 or newer to read local sessions") }
-        p.executableURL = URL(fileURLWithPath: python)
-        p.arguments = [script.path, action]
-        p.environment = ProcessInfo.processInfo.environment.merging(["PYTHONUNBUFFERED": "1", "PYTHONDONTWRITEBYTECODE": "1"]) { _, new in new }
+        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/camp-local")
+        guard FileManager.default.isExecutableFile(atPath: helper.path) else { throw CampError.message("The bundled Go session helper is missing. Rebuild the app.") }
+        let p = Process()
+        p.executableURL = helper; p.arguments = [action]
         return p
     }
     static func call(_ action: String, input: Data = Data()) async throws -> Data {
@@ -1041,6 +1024,9 @@ final class TranscriptWatch {
         }
         run.completed = { [weak self, weak run] result in
             guard let self, let run, self.conversations[s.id]?.id == run.id else { return }
+            if !result.accepted, result.state != "completed", queuedID == nil, completion == nil {
+                self.restoreDraft(prompt, for: s.id)
+            }
             if let restored = run.takePendingSteer() { self.restoreDraft(restored, for: s.id) }
             let visible = self.selected.map { self.conversation($0)?.id == run.id } ?? false
             if visible { self.messages = run.messages; self.banner = result.message }

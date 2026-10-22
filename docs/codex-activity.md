@@ -18,8 +18,9 @@ The current native observer runs through `camp-local codex-activity-watch`.
 Go tests in `server/internal/localcli/codex_observer_test.go` cover partial and
 oversized socket frames, read-only RPCs, private socket permissions, approval-ID
 collisions, inode ownership, partial rollout records, repeated shutdown and
-bounded unfinished-record buffers. The Python reference remains temporarily
-for the conversation ownership check while that execution code is migrated.
+bounded unfinished-record buffers. Conversation ownership also uses Go, with
+the same private socket and verified writer checks. The Python reference
+remains temporarily for regression-test conversion.
 
 A ten-second comparison on October 21 found the same 12 live Codex session IDs
 and states in both implementations: eleven idle and one running, with no decode

@@ -129,6 +129,31 @@ import Foundation
         for _ in 0..<50 { if notifications > 0 { break }; try await Task.sleep(for: .milliseconds(10)) }
         precondition(notifications > 0, "The replacement file must stay live")
         watcher.stop()
-        print("PASS: 40 native checks including immediate append/replacement notifications, sync preservation and queues")
+        for background in [false, true] {
+            let rejected = CampStore(stateDirectory: root.appendingPathComponent("rejected-\(background)"), conversationProcess: {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/bin/sh")
+                process.arguments = ["-c", "read -r request; printf '%s\\n' '{\"type\":\"error\",\"message\":\"Session ownership could not be verified\"}'; exit 1"]
+                return process
+            })
+            rejected.sessions = [a, b]; rejected.selectedID = a.id; rejected.view = "Chat"
+            rejected.draft = "Preserve this rejected prompt"
+            precondition(rejected.start(a, prompt: rejected.draft, model: "", tuning: ModelTuning(), notifyCompletion: false))
+            rejected.draft = ""
+            if background { rejected.selectedID = b.id; rejected.draft = "Another session's draft" }
+            for _ in 0..<200 {
+                if rejected.conversations[a.id] == nil { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            precondition(rejected.conversations[a.id] == nil, "A rejected turn must finish")
+            if background {
+                precondition(rejected.draft == "Another session's draft", "A background failure must not overwrite the visible draft")
+                rejected.open(a)
+                precondition(rejected.draft == "Preserve this rejected prompt", "Recover the rejected prompt when returning to its original session")
+            } else {
+                precondition(rejected.draft == "Preserve this rejected prompt", "A rejection before acceptance must not discard the prompt")
+            }
+        }
+        print("PASS: native state, transcript notifications, queues and rejected prompt recovery")
     }
 }

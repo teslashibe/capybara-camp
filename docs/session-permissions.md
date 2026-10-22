@@ -55,9 +55,10 @@ original input. Duplicate, cancelled and mismatched request answers are rejected
 
 ## Validation and remaining work
 
-Python tests cover provider-specific validation, managed allowlists, immutable
+Go tests cover provider-specific validation, managed allowlists, immutable
 fingerprints, explicit CLI mode arguments, acknowledgment before submission,
-and offered approval choices. Native tests cover saved choices, next-turn
+and offered approval choices. The prior Python reference tests remain during
+fixture conversion. Native tests cover saved choices, next-turn
 behavior, Needs you, stale queues and restart persistence. The native fixture is
 synthetic and uses no provider credentials.
 

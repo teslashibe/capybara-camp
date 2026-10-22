@@ -25,7 +25,23 @@ func main() {
 	var result any
 	if err == nil {
 		app := localcli.New(cfg)
-		if contextTool {
+		if len(os.Args) == 2 && os.Args[1] == "conversation" {
+			var input, output *os.File
+			input, err = pollableInput(os.Stdin)
+			if err == nil {
+				defer input.Close()
+				output, err = pollableInput(os.Stdout)
+			}
+			if err == nil {
+				defer output.Close()
+				stopIO := context.AfterFunc(ctx, func() { _ = input.Close(); _ = output.Close() })
+				defer stopIO()
+				err = app.Conversation(ctx, input, output)
+			}
+			if err == nil {
+				return
+			}
+		} else if contextTool {
 			var input *os.File
 			input, err = pollableInput(os.Stdin)
 			if err == nil {

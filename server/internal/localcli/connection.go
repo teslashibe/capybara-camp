@@ -16,6 +16,10 @@ import (
 
 const maxNativeEvent = 1 << 20
 
+type nativeRejection struct{ message string }
+
+func (e *nativeRejection) Error() string { return e.message }
+
 type nativeEvent struct {
 	value map[string]any
 	err   error
@@ -208,7 +212,7 @@ func (c *nativeConnection) RPC(method string, params map[string]any, timeout tim
 			if c.ctx.Err() != nil {
 				return nil, c.ctx.Err()
 			}
-			return nil, fmt.Errorf("The native CLI did not acknowledge %s", method)
+			return nil, fmt.Errorf("The native CLI did not acknowledge %s: %w", method, context.DeadlineExceeded)
 		case next, ok := <-c.events:
 			if !ok {
 				return nil, fmt.Errorf("The native CLI closed before acknowledging %s", method)
@@ -227,7 +231,7 @@ func (c *nativeConnection) RPC(method string, params map[string]any, timeout tim
 					if message == "" {
 						message = "Native request rejected"
 					}
-					return nil, errors.New(message)
+					return nil, &nativeRejection{message: message}
 				}
 				result, ok := event["result"].(map[string]any)
 				if !ok {

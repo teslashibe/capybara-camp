@@ -2,7 +2,7 @@
 
 The Mac app builds `server/cmd/camp-local` for each requested architecture and bundles it in `Contents/MacOS`. The helper uses stdin/stdout JSON and opens provider SQLite databases read-only. It needs no separate Go installation on the user's Mac. The native app and helper are signed as part of the same build.
 
-The current development build routes profile discovery, session import, profile addition, transcript reads, shared transcript export, Claude live activity, model catalogues, sub-agent discovery, permission discovery, approval-context fingerprints and the Codex live observer to this helper. Profile roots stay part of every imported ID. Existing `sources.json`, `import-cache.json` and transcript indexes remain readable, including stable export ordinals and tombstones. A changed fingerprint rebuilds an index without replacing message identities.
+The current development build routes every local action through this helper: profile discovery, session import, profile addition, transcript reads, shared transcript export, live activity, model catalogues, sub-agent discovery, permissions, approval fingerprints, conversations and attached context. Profile roots stay part of every imported ID. Existing `sources.json`, `import-cache.json` and transcript indexes remain readable, including stable export ordinals and tombstones. A changed fingerprint rebuilds an index without replacing message identities.
 
 Each invocation closes its files and databases before exit. Visible history keeps only the requested message tail in memory. Metadata discovery reads at most 100 records per Claude transcript and one record per legacy Codex transcript. Transcript export pages remain limited to 200 messages and 1 MiB. Incomplete Claude writes roll back index updates. A failed source stays visible for the native app's retention logic, and cancellation leaves the prior cache intact.
 
@@ -10,7 +10,7 @@ Sub-agent history does not prove that a process is running. Stored Codex descend
 
 ## Migration still in progress
 
-Conversation execution still uses the existing Python adapter. Packaged apps now serve attached session snapshots through the Go `context-tool` process; the temporary snapshot lifecycle still starts in the conversation adapter. The Go approval relay and snapshot lifecycle have regression coverage but are not yet connected to conversation execution. The former Codex observer code also remains as the conversation ownership check and a regression reference until that execution path is ported. The Python regression suite and inline native fixtures remain. The app still requires Python until those paths have Go or Swift replacements and pass their existing behavior checks. V1 must remove the remaining Python source, runtime requirement, fixtures, CI setup and documentation requirements.
+The app no longer invokes or bundles Python. Both provider conversations, approval relay, temporary context lifecycle and external-session ownership checks run in Go. Python source remains temporarily as a regression reference, and the retained Python suite and inline native fixtures still need conversion. V1 must remove those files, the test requirement and CI setup before release.
 
 Claude status comes from the installed CLI's safe-mode `agents --json` response. Registry files alone never prove activity. Each probe uses its selected profile, discards inherited provider credentials and tuning, caps stdout at 2 MiB and stderr at 64 KiB, and has an eight-second timeout within a thirty-second activity request. Failures report status as unavailable without exposing raw provider errors. Cancellation and timeout stop only the process group created by that probe.
 
@@ -50,14 +50,15 @@ selected text at 256 KiB and one read at 64 KiB. Stdio requests are capped at
 directory; symlinks and FIFOs are rejected. Cancellation closes the server's
 stdin so an idle process can exit.
 
-The pending Go approval relay retains at most sixteen requests and sixteen file
+The Go approval relay retains at most sixteen requests and sixteen file
 previews. It copies the provider's offered choices, diffs and permission scope
 before displaying them. Approval replies cannot add permissions, mutate a saved
 rule or approve another thread's request. Duplicate and cancelled requests are
 handled once. Questions must fit the native renderer's bounds, and a failed
-provider write does not report success. The next migration step must wire this
-relay into both provider turn loops and verify streaming, steering, cancellation
-and ownership before switching the native conversation action to Go.
+provider write does not report success. Both provider turn loops now use this
+relay. Codex confirms selected permissions before submitting a prompt; Claude
+initializes its approval channel before the first prompt and confirms its mode
+before exposing tool approvals.
 
 Validation passed with 103 retained Python tests, fifteen native suites, Go
 race tests and vet. A signed arm64 development app served synthetic context
@@ -68,3 +69,39 @@ initial unit tests missed. The helper now uses a pollable input descriptor;
 the repeated regression passes and the packaged process exited in 8 ms after
 SIGTERM. Mac amd64 and Linux amd64 builds also pass. These checks do not replace
 the final live-provider, two-Mac or soak acceptance runs.
+
+## Conversation runtime
+
+The Go `conversation` action preserves the existing native event protocol. It
+holds a lock derived from the canonical provider profile and native session ID,
+including a newly created implementation ID before publishing it or submitting
+its first prompt. External Codex writers and loaded daemon sessions remain
+owned by their original client, even when idle. Claude uses its safe live-session
+probe. Neither check resumes another client's session.
+
+Chat and planning disable project tools and configured MCP servers before the
+CLI parses desktop-only URLs. Selected context is the only additional read
+tool. Planning creates an ephemeral Codex thread or non-persistent Claude
+session and keeps its 8 KiB response limit. Implementation uses the approved
+permission fingerprint and installed CLI rules. A Codex steering timeout pauses
+the queue; a Claude steer waits for the interrupt acknowledgment, result boundary
+and echoed new prompt before reporting acceptance.
+
+Input queues, provider frames, output, file reads and process groups are bounded.
+Cancellation joins the control reader and reaps the owned provider process.
+Go process fixtures exercise both providers in chat, planning and implementation,
+including a provider request that collides with a client RPC ID. A live isolated
+Codex planning turn read a new synthetic validation word through the Go context
+tool and returned its pinned source link. This validates Codex context use; it
+does not prove successful live Claude execution, cloud execution or the release
+soak gate.
+
+The signed native walkthrough used one synthetic profile, with personal profile
+files inaccessible to that test process. It verified automatic discovery,
+transcript append updates, persisted model/effort/Ultra Fast choices and a safe
+ownership-check failure. That failure exposed a composer recovery bug: an
+unaccepted prompt disappeared after the error. The native completion handler
+now restores it to the original chat without overwriting another chat's draft;
+both the new regression and the repeated computer-use check passed. All fifteen
+native suites passed against the updated module. The test app then quit normally
+and its helper stopped.

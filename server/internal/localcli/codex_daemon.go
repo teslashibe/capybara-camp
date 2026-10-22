@@ -338,12 +338,14 @@ func boundedCodexStatus(value any) map[string]any {
 	return result
 }
 
-func (c *codexDaemon) loaded(ctx context.Context) (map[string]map[string]any, error) {
-	rows := map[string]map[string]any{}
+func (c *codexDaemon) loadedIDs(ctx context.Context) ([]string, error) {
 	ids := []string{}
 	seen := map[string]bool{}
 	cursor := ""
-	for {
+	for pages := 0; ; pages++ {
+		if pages > codexThreadLimit {
+			return nil, errors.New("Too many loaded Codex thread pages")
+		}
 		params := map[string]any{"limit": 200}
 		if cursor != "" {
 			params["cursor"] = cursor
@@ -369,11 +371,20 @@ func (c *codexDaemon) loaded(ctx context.Context) (map[string]map[string]any, er
 			break
 		}
 		cursor, ok = next.(string)
-		if !ok || seen["cursor:"+cursor] {
+		if !ok || len(cursor) > 4096 || seen["cursor:"+cursor] {
 			return nil, errors.New("Invalid Codex page cursor")
 		}
 		seen["cursor:"+cursor] = true
 	}
+	return ids, nil
+}
+
+func (c *codexDaemon) loaded(ctx context.Context) (map[string]map[string]any, error) {
+	ids, err := c.loadedIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows := map[string]map[string]any{}
 	for _, id := range ids {
 		result, err := c.rpc(ctx, "thread/read", map[string]any{"threadId": id, "includeTurns": false})
 		if err != nil {
