@@ -141,9 +141,9 @@ respect the same plan visibility as reads.
 
 The development Go API accepts an existing local plan at
 `POST /v1/camps/{camp}/planning/import`. This is the storage portion of local-plan
-promotion. The native review/upload flow is not connected yet. Existing
-implementation conversations are not supported by this endpoint; the native
-flow must preserve them before it can ship. Keep the original local plan.
+promotion. The native review/upload flow is not connected yet. The endpoint
+can also attach implementation histories already copied to private Camp
+sessions. Keep the original local plan until the complete native flow ships.
 
 The request uses the normal native bearer token and an `Idempotency-Key`. It
 contains a `source_id`, `title`, destination `project_id` and `versions`. The
@@ -221,6 +221,45 @@ quotes from retained local recovery records.
 Quoted-context citations contain the plan, version and source identity. Opening
 one fetches that authorized version and selects the referenced message; it does
 not substitute the latest plan or a newer source revision.
+
+## Imported implementation history
+
+An import can include up to 100 `implementations`. Each names its saved plan
+version, source identity, provider and copied Camp session, with the exact
+transcript revision and visible message count. The session must belong to the
+importing person in that Camp and match the provider. Import checks the count
+against the stored revision and limits it to 2,000 messages and 8 MiB of text.
+This prevents a partial transcript copy from being accepted as the full history.
+
+Saved model settings, initial prompt, plan/context fingerprints and historical
+permission settings remain attached to that implementation. Up to 200 attempts
+retain their prompt, outcome, error, settings, permission fingerprint and
+reported usage. Running attempts are rejected; an unconfirmed outcome is stored
+as `uncertain`. This is historical evidence supplied by the owner and never
+permission to run another turn. Profile paths and provider credentials are not
+fields in the import contract.
+
+The history uses the existing versioned transcript store. Later changes to the
+source session do not change the imported revision. Every read checks Camp and
+plan access plus access to the source session, including reads of attempts.
+Unsharing that source removes another member's access to its implementation
+history. The import and its attempt rows commit in the same transaction as the
+plan; repeating an import returns the same records without creating work.
+
+- `GET /v1/camps/{camp}/planning/{plan}/implementations?version=N&after=0&limit=20`
+  lists a version's implementations, with a maximum page size of 50
+- `GET /v1/camps/{camp}/planning/{plan}/implementations/{id}` returns its saved
+  metadata and initial prompt
+- `GET /v1/camps/{camp}/planning/{plan}/implementations/{id}/attempts?after=0&limit=10`
+  pages through attempt records, at most ten per response
+- `GET /v1/camps/{camp}/planning/{plan}/implementations/{id}/transcript?before=0&limit=200`
+  reads the pinned transcript using the existing message-count and byte limits
+
+Implementation and attempt pages return a `next` cursor of zero at the end.
+Transcript pages retain the ordinary `before`/`has_more` contract. Schema 28
+stores the links and attempt records and refuses a downgrade that would erase
+them. Native publication, browsing and continuation of these imported
+implementations remain release work.
 
 Planning tables were introduced in schema 5. The current required schema is
 defined by `SchemaVersion` in [the database package](../server/internal/database/database.go).

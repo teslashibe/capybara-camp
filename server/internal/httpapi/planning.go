@@ -7,6 +7,67 @@ import (
 )
 
 func (a *API) planningRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/camps/{camp}/planning/{plan}/implementations", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		version, ok := queryInt(w, r, "version")
+		if !ok {
+			return
+		}
+		after, ok := queryInt(w, r, "after")
+		if !ok {
+			return
+		}
+		limit, ok := queryInt(w, r, "limit")
+		if !ok {
+			return
+		}
+		if limit == 0 {
+			limit = 20
+		}
+		value, err := a.Camps.ImportedImplementations(r.Context(), u, r.PathValue("camp"), r.PathValue("plan"), version, int(after), int(limit))
+		if !fail(w, err) {
+			write(w, 200, value)
+		}
+	}))
+	mux.HandleFunc("GET /v1/camps/{camp}/planning/{plan}/implementations/{implementation}", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		value, err := a.Camps.ImportedImplementation(r.Context(), u, r.PathValue("camp"), r.PathValue("plan"), r.PathValue("implementation"))
+		if !fail(w, err) {
+			write(w, 200, value)
+		}
+	}))
+	mux.HandleFunc("GET /v1/camps/{camp}/planning/{plan}/implementations/{implementation}/attempts", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		after, ok := queryInt(w, r, "after")
+		if !ok {
+			return
+		}
+		limit, ok := queryInt(w, r, "limit")
+		if !ok {
+			return
+		}
+		if limit == 0 {
+			limit = 10
+		}
+		value, err := a.Camps.ImportedImplementationAttempts(r.Context(), u, r.PathValue("camp"), r.PathValue("plan"), r.PathValue("implementation"), int(after), int(limit))
+		if !fail(w, err) {
+			write(w, 200, value)
+		}
+	}))
+	mux.HandleFunc("GET /v1/camps/{camp}/planning/{plan}/implementations/{implementation}/transcript", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		before, ok := queryInt(w, r, "before")
+		if !ok {
+			return
+		}
+		limit, ok := queryInt(w, r, "limit")
+		if !ok {
+			return
+		}
+		if limit == 0 {
+			limit = 200
+		}
+		value, err := a.Camps.ImportedImplementationTranscript(r.Context(), u, r.PathValue("camp"), r.PathValue("plan"), r.PathValue("implementation"), before, int(limit))
+		if !fail(w, err) {
+			write(w, 200, value)
+		}
+	}))
 	mux.HandleFunc("POST /v1/camps/{camp}/planning/import", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		var input camp.PlanningImportInput
 		if !decode(w, r, &input) {

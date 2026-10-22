@@ -51,10 +51,11 @@ type ImportedPlanningVersion struct {
 	Steps        []ImportedPlanningStep   `json:"steps"`
 }
 type PlanningImportInput struct {
-	SourceID  string                    `json:"source_id"`
-	Title     string                    `json:"title"`
-	ProjectID string                    `json:"project_id"`
-	Versions  []ImportedPlanningVersion `json:"versions"`
+	SourceID        string                        `json:"source_id"`
+	Title           string                        `json:"title"`
+	ProjectID       string                        `json:"project_id"`
+	Versions        []ImportedPlanningVersion     `json:"versions"`
+	Implementations []ImportedImplementationInput `json:"implementations,omitempty"`
 }
 type PlanningImportSnapshot struct {
 	State        string                   `json:"state"`
@@ -114,7 +115,7 @@ func validImportedPlanningVersion(v ImportedPlanningVersion) bool {
 }
 
 func (s *Store) ImportPlanning(ctx context.Context, a auth.Actor, campID, key string, in PlanningImportInput) (PlanningTicket, error) {
-	if !digest64(in.SourceID) || !validID(in.ProjectID) || strings.TrimSpace(in.Title) == "" || len(in.Title) > 2000 || len(in.Versions) == 0 || len(in.Versions) > 100 {
+	if !digest64(in.SourceID) || !validID(in.ProjectID) || strings.TrimSpace(in.Title) == "" || len(in.Title) > 2000 || len(in.Versions) == 0 || len(in.Versions) > 100 || !validImportedImplementations(in.Implementations, len(in.Versions)) {
 		return PlanningTicket{}, ErrInput
 	}
 	for i, v := range in.Versions {
@@ -228,6 +229,9 @@ func (s *Store) ImportPlanning(ctx context.Context, a auth.Actor, campID, key st
 		if _, err = tx.Exec(ctx, `UPDATE planning_versions SET import_snapshot=$3 WHERE plan_id=$1 AND version=$2`, id, v.Version, data); err != nil {
 			return saved, err
 		}
+	}
+	if err = s.insertImportedImplementations(ctx, tx, a, campID, id, in.Implementations); err != nil {
+		return saved, err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO planning_imports(camp_id,owner_user_id,source_id,plan_id,input_sha256) VALUES($1,$2,$3,$4,$5)`, campID, a.UserID, in.SourceID, id, digest[:]); err != nil {
 		return saved, err

@@ -129,10 +129,13 @@ the native import flow to move into the shared coordinator. The development
 Go API can now preserve their saved planning versions as private history,
 without queuing provider work. The native reader displays imported sources,
 saved errors and unconfirmed outcomes. The native review/upload flow and preservation
-of existing implementation conversations remain unfinished; see
+of existing implementation conversations in the native flow remain unfinished; see
 [local-plan import](docs/planning.md#local-plan-import-api).
 Start over retains quoted context in the new draft. Removing a source there
 does not alter the saved planning history.
+The development API can attach copied implementation transcripts and saved
+attempt records to their original plan versions. Its paged reads preserve the
+copied revision and current permissions; the native controls are still pending.
 
 ### Default execution settings
 
