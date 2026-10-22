@@ -10,7 +10,7 @@ Sub-agent history does not prove that a process is running. Stored Codex descend
 
 ## Migration still in progress
 
-Conversation execution, approval relay and the attached-context tool still use the existing Python adapter. The former Codex observer code also remains as the conversation ownership check and a regression reference until that execution path is ported. The Python regression suite and inline native fixtures remain. The app still requires Python until those paths have Go or Swift replacements and pass their existing behavior checks. V1 must remove the remaining Python source, runtime requirement, fixtures, CI setup and documentation requirements.
+Conversation execution still uses the existing Python adapter. Packaged apps now serve attached session snapshots through the Go `context-tool` process; the temporary snapshot lifecycle still starts in the conversation adapter. The Go approval relay and snapshot lifecycle have regression coverage but are not yet connected to conversation execution. The former Codex observer code also remains as the conversation ownership check and a regression reference until that execution path is ported. The Python regression suite and inline native fixtures remain. The app still requires Python until those paths have Go or Swift replacements and pass their existing behavior checks. V1 must remove the remaining Python source, runtime requirement, fixtures, CI setup and documentation requirements.
 
 Claude status comes from the installed CLI's safe-mode `agents --json` response. Registry files alone never prove activity. Each probe uses its selected profile, discards inherited provider credentials and tuning, caps stdout at 2 MiB and stderr at 64 KiB, and has an eight-second timeout within a thirty-second activity request. Failures report status as unavailable without exposing raw provider errors. Cancellation and timeout stop only the process group created by that probe.
 
@@ -38,3 +38,33 @@ the release soak test. Go race/vet checks cover socket fragments, ping/pong,
 approval-ID collisions, private socket permissions, partial records, buffer
 limits and repeated shutdown. The helper builds for Mac arm64/amd64 and Linux
 amd64.
+
+## Attached context and approval migration
+
+The Go context server exposes only `read_session` for the exact messages attached
+to the current turn. It cannot discover other sessions, read arbitrary paths or
+send prompts. It preserves existing source links and sorted UTF-8 message
+digests, rejects unknown fields and invalid UTF-8, caps manifests at 1 MiB,
+selected text at 256 KiB and one read at 64 KiB. Stdio requests are capped at
+128 KiB. The manifest must be an owner-only regular file inside an owner-only
+directory; symlinks and FIFOs are rejected. Cancellation closes the server's
+stdin so an idle process can exit.
+
+The pending Go approval relay retains at most sixteen requests and sixteen file
+previews. It copies the provider's offered choices, diffs and permission scope
+before displaying them. Approval replies cannot add permissions, mutate a saved
+rule or approve another thread's request. Duplicate and cancelled requests are
+handled once. Questions must fit the native renderer's bounds, and a failed
+provider write does not report success. The next migration step must wire this
+relay into both provider turn loops and verify streaming, steering, cancellation
+and ownership before switching the native conversation action to Go.
+
+Validation passed with 103 retained Python tests, fifteen native suites, Go
+race tests and vet. A signed arm64 development app served synthetic context
+through its actual bundled helper, preserved the source digest and links, and
+rejected unshared sessions, arbitrary paths, sending and a publicly readable
+manifest. This process check found an idle-stdin cancellation defect that the
+initial unit tests missed. The helper now uses a pollable input descriptor;
+the repeated regression passes and the packaged process exited in 8 ms after
+SIGTERM. Mac amd64 and Linux amd64 builds also pass. These checks do not replace
+the final live-provider, two-Mac or soak acceptance runs.

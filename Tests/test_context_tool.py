@@ -87,6 +87,28 @@ class ContextToolTests(unittest.TestCase):
             finally:
                 grant.close()
 
+    def test_packaged_app_uses_go_and_fails_if_helper_is_missing(self):
+        with tempfile.TemporaryDirectory() as root:
+            resources = Path(root) / 'Example.app' / 'Contents' / 'Resources'
+            resources.mkdir(parents=True)
+            module = resources / 'context_tool.py'
+            helper = resources.parent / 'MacOS' / 'camp-local'
+            helper.parent.mkdir()
+            helper.write_text('#!/bin/sh\nexit 0\n')
+            helper.chmod(0o700)
+            with mock.patch('context_tool.__file__', str(module)):
+                grant = ContextGrant(self.sources(), root)
+                try:
+                    self.assertEqual(grant.server['command'], str(helper.resolve()))
+                    self.assertEqual(grant.server['args'][0], 'context-tool')
+                    self.assertEqual(Path(grant.server['args'][1]).name, 'sources.json')
+                finally:
+                    grant.close()
+                helper.unlink()
+                with self.assertRaisesRegex(ValueError, 'Go context helper is missing'):
+                    ContextGrant(self.sources(), root)
+            self.assertEqual(list(Path(root).glob('camp-context-*')), [])
+
     def test_context_bounds_and_duplicate_ids(self):
         for change in ('large', 'duplicate', 'role'):
             source = self.sources()

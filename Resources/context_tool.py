@@ -87,7 +87,16 @@ class ContextGrant:
             path = Path(self.temp.name) / "sources.json"
             with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as file:
                 json.dump(self.sources, file)
-            self.server = {"command": sys.executable, "args": [str(Path(__file__).resolve()), str(path)]}
+            resources = Path(__file__).resolve().parent
+            if resources.name == "Resources" and resources.parent.name == "Contents":
+                # The conversation relay is still migrating, but packaged apps
+                # already serve attached snapshots through the bundled Go tool.
+                helper = resources.parent / "MacOS" / "camp-local"
+                if not helper.is_file() or not os.access(helper, os.X_OK):
+                    raise ValueError("The bundled Go context helper is missing. Rebuild the app.")
+                self.server = {"command": str(helper), "args": ["context-tool", str(path)]}
+            else:
+                self.server = {"command": sys.executable, "args": [str(Path(__file__).resolve()), str(path)]}
             self.instructions_path = Path(self.temp.name) / "instructions.txt"
             with os.fdopen(os.open(self.instructions_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as file:
                 file.write(self.instructions)

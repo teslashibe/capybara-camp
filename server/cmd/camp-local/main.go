@@ -18,13 +18,26 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	cfg, err := config.LoadLocal()
-	if err == nil && len(os.Args) != 2 {
+	contextTool := len(os.Args) == 3 && os.Args[1] == "context-tool"
+	if err == nil && len(os.Args) != 2 && !contextTool {
 		err = fmt.Errorf("Choose a local helper action")
 	}
 	var result any
 	if err == nil {
 		app := localcli.New(cfg)
-		if os.Args[1] == "codex-activity-watch" {
+		if contextTool {
+			var input *os.File
+			input, err = pollableInput(os.Stdin)
+			if err == nil {
+				defer input.Close()
+				stopInput := context.AfterFunc(ctx, func() { _ = input.Close() })
+				defer stopInput()
+				err = app.ServeContext(ctx, os.Args[2], input, os.Stdout)
+			}
+			if err == nil {
+				return
+			}
+		} else if os.Args[1] == "codex-activity-watch" {
 			err = app.WatchCodex(ctx, os.Stdin, os.Stdout)
 			if err == nil {
 				return
@@ -40,4 +53,20 @@ func main() {
 	if err = json.NewEncoder(os.Stdout).Encode(result); err != nil {
 		os.Exit(1)
 	}
+}
+
+// Standard stdin can wrap a blocking pipe without Go's poller. Closing that
+// wrapper does not reliably interrupt an in-flight read on macOS. Give the
+// context server its own nonblocking descriptor before starting the scanner.
+func pollableInput(source *os.File) (*os.File, error) {
+	fd, err := syscall.Dup(int(source.Fd()))
+	if err != nil {
+		return nil, fmt.Errorf("Could not open context input")
+	}
+	syscall.CloseOnExec(fd)
+	if err := syscall.SetNonblock(fd, true); err != nil {
+		_ = syscall.Close(fd)
+		return nil, fmt.Errorf("Could not configure context input")
+	}
+	return os.NewFile(uintptr(fd), "context-input"), nil
 }
