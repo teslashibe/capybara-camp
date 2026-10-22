@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
@@ -17,6 +18,10 @@ import (
 )
 
 type workspaceHTTPProvider struct{ gitHTTPProvider }
+
+func (workspaceHTTPProvider) ScopeRead(_ context.Context, _ string, expiry time.Time, user int64, _ gitprovider.Installation, repo gitprovider.Repository) (gitprovider.ReadGrant, error) {
+	return gitprovider.ReadGrant{Token: "ghu_" + strings.Repeat("n", 36), ExpiresAt: time.Now().Add(5 * time.Minute), RepositoryID: repo.ID, UserID: user}, nil
+}
 
 func (workspaceHTTPProvider) Repositories(context.Context, string, gitprovider.Installation, int) (gitprovider.Repositories, error) {
 	return gitprovider.Repositories{Values: []gitprovider.Repository{{ID: 20, InstallationID: 10, FullName: "test-user/project", DefaultBranch: "main", Read: true}}}, nil
@@ -163,8 +168,35 @@ func TestWorkspaceHTTPRequiresOwnerAndReplaysReceipt(t *testing.T) {
 	readPath := "/v1/camps/" + c.ID + "/workspaces/" + workspace.ID
 	call("GET", readPath, tokens[1], "", nil, 404)
 	call("GET", readPath, tokens[0], "", nil, 200)
+	runnerPath := "/v1/runner/workspaces/" + workspace.ID
+	claimID := uuid.NewString()
+	claimJSON, _ := json.Marshal(map[string]string{"claim_id": claimID})
+	call("POST", runnerPath+"/claim", tokens[0], "", claimJSON, 401)
+	call("GET", "/v1/runner/workspaces/next", grant.Token, "", nil, 200)
+	raw = call("POST", runnerPath+"/claim", grant.Token, "", claimJSON, 200)
+	var claimResult camp.RunnerWorkspaceClaim
+	if err = json.Unmarshal(raw, &claimResult); err != nil || claimResult.Workspace.State != "preparing" {
+		t.Fatal("runner claim failed", err)
+	}
+	raw = call("POST", runnerPath+"/token", grant.Token, "", claimJSON, 200)
+	var readToken camp.RunnerWorkspaceToken
+	if err = json.Unmarshal(raw, &readToken); err != nil || readToken.Token == "" {
+		t.Fatal("runner token missing", err)
+	}
+	if !bytes.Equal(raw, call("POST", runnerPath+"/token", grant.Token, "", claimJSON, 200)) {
+		t.Fatal("token redelivery changed")
+	}
+	public := call("GET", readPath, tokens[0], "", nil, 200)
+	if bytes.Contains(public, []byte(readToken.Token)) {
+		t.Fatal("token in public record")
+	}
+	call("POST", runnerPath+"/heartbeat", grant.Token, "", claimJSON, 200)
+	reportJSON, _ := json.Marshal(map[string]string{"claim_id": claimID, "state": "ready", "base_commit": workspace.BaseCommit, "branch": workspace.Branch})
+	call("POST", runnerPath+"/report", grant.Token, "", reportJSON, 200)
+	call("POST", runnerPath+"/report", grant.Token, "", reportJSON, 200)
+	call("POST", runnerPath+"/token", grant.Token, "", claimJSON, 409)
 	call("POST", readPath+"/cancel", tokens[1], uuid.NewString(), []byte(`{"expected_revision":1}`), 404)
-	raw = call("POST", readPath+"/cancel", tokens[0], uuid.NewString(), []byte(`{"expected_revision":1}`), 200)
+	raw = call("POST", readPath+"/cancel", tokens[0], uuid.NewString(), []byte(`{"expected_revision":3}`), 200)
 	if err = json.Unmarshal(raw, &workspace); err != nil || workspace.State != "cancelled" {
 		t.Fatal("cancellation failed", err)
 	}

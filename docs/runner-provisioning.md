@@ -28,12 +28,19 @@ role through your normal database administration process and apply the GRANT
 block from `00011_runner_provisioning.sql` as the migration owner. Do not rerun
 the whole migration or grant access to the provider credential columns.
 
+Schema 14 also grants the controller read access to only the workspace
+installation ID, state and lease expiry. These columns let it defer grant
+rotation during checkout. If the role is created after migration, apply the
+GRANT block from `00014_workspace_claims.sql` as well. Workspace credentials,
+repository names and other owners' user data remain unavailable to this role.
+
 ## Reconciliation and cleanup
 
 Each pass reads at most 64 accounts. Account locks serialize managed-grant
 creation and an authorization-slot cap limits active managed installations.
 The controller reuses the encrypted grant across retries. Near expiry it
-replaces an idle grant; it does not rotate one during an active login. A manual
+replaces an idle grant; it does not rotate one during an active login or a live
+workspace-preparation lease. A manual
 grant is never silently replaced by the controller.
 
 Resource names derive from a grant UUID. Labels bind each resource to its

@@ -29,6 +29,46 @@ func (a *API) gitAuthorize(next authorizedHandler) http.HandlerFunc {
 	})
 }
 func (a *API) gitRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/runner/workspaces/next", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
+		out, err := a.Git.NextRunnerWorkspace(r.Context(), token(r))
+		if !fail(w, err) {
+			if out == nil {
+				w.WriteHeader(204)
+			} else {
+				write(w, 200, out)
+			}
+		}
+	}))
+	for _, operation := range []string{"claim", "heartbeat", "token", "report"} {
+		mux.HandleFunc("POST /v1/runner/workspaces/{workspace}/"+operation, a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
+			var in struct {
+				ClaimID string `json:"claim_id"`
+				camp.WorkspaceReport
+			}
+			if !decode(w, r, &in) {
+				return
+			}
+			if operation != "report" && (in.State != "" || in.BaseCommit != "" || in.Branch != "" || in.FailureCode != "") {
+				problem(w, 400, "invalid_input")
+				return
+			}
+			var out any
+			var err error
+			switch operation {
+			case "claim":
+				out, err = a.Git.ClaimRunnerWorkspace(r.Context(), token(r), r.PathValue("workspace"), in.ClaimID)
+			case "heartbeat":
+				out, err = a.Git.HeartbeatRunnerWorkspace(r.Context(), token(r), r.PathValue("workspace"), in.ClaimID)
+			case "token":
+				out, err = a.Git.RunnerWorkspaceToken(r.Context(), token(r), r.PathValue("workspace"), in.ClaimID)
+			case "report":
+				out, err = a.Git.ReportRunnerWorkspace(r.Context(), token(r), r.PathValue("workspace"), in.ClaimID, in.WorkspaceReport)
+			}
+			if !fail(w, err) {
+				write(w, 200, out)
+			}
+		}))
+	}
 	mux.HandleFunc("POST /v1/camps/{camp}/sessions/{session}/workspaces", a.gitAuthorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		var input camp.WorkspaceInput
 		if !decode(w, r, &input) {
@@ -122,6 +162,16 @@ func (a *API) gitRoutes(mux *http.ServeMux) {
 	}))
 	mux.HandleFunc("GET /v1/git/github/callback", a.gitCallback)
 	mux.HandleFunc("POST /v1/git/github/events", a.gitWebhook)
+}
+
+func (a *API) workspaceRunnerAuthorize(next func(http.ResponseWriter, *http.Request, camp.RunnerAccountState)) http.HandlerFunc {
+	return a.runnerAuthorize(func(w http.ResponseWriter, r *http.Request, state camp.RunnerAccountState) {
+		if a.Git == nil {
+			problem(w, 503, "git_not_configured")
+			return
+		}
+		next(w, r, state)
+	})
 }
 
 func (a *API) gitWebhook(w http.ResponseWriter, r *http.Request) {

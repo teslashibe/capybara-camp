@@ -57,19 +57,63 @@ contain only the workspace/session IDs, state and revision, and are delivered
 only to its owner.
 
 Schema 13 adds these records without changing existing sessions or credentials.
-The worker does not claim queued workspaces yet. A queued response therefore
-means the preparation was saved, not that a checkout exists, a CLI is running,
-or execution moved from the Mac. The next runner integration must revalidate
-current permissions and credential epochs before issuing a repository-scoped
-token and must use the stored commit rather than resolving the ref again.
+A queued response means preparation was saved; it does not mean a checkout
+exists, a CLI is running, or execution moved from the Mac. The control plane
+supports worker claims and scoped checkout credentials as described below. The
+runner binary's filesystem checkout loop is still pending.
+
+## Worker claims and checkout credentials
+
+Only an active installation grant can use `/v1/runner/workspaces/next` or the
+`claim`, `heartbeat`, `token` and `report` POST routes beneath
+`/v1/runner/workspaces/{workspace}`. Human Camp tokens cannot use these routes.
+All POST requests carry the same worker-generated `claim_id`. Each installation
+has at most one preparing or ready workspace; other tickets remain queued.
+
+A claim leases preparation for 90 seconds with a fixed ten-minute deadline.
+Heartbeats extend the lease within that deadline. A different claim or a
+replacement runner grant cannot adopt it. The worker must save its claim ID
+before submitting a claim and reconcile a lost reply using that same ID.
+
+The token route revalidates Camp membership, source/project revisions, account
+epochs, and the selected GitHub installation/repository. It then requests a
+repository-scoped read-only token using the owner's user authorization. The
+broad GitHub token stays in the service. The scoped token is encrypted with the
+workspace, owner, claim, grant and Git epoch bound to it; it appears only in the
+private token response. Public workspace records and events omit it.
+
+The issuance fence is committed before the external token call. Repeated token
+requests return the saved token to the same active claim. An uncertain issuance
+fails that preparation rather than minting a second token. Cancellation or an
+authorization change during issuance refuses the candidate and queues its
+revocation. Expired claims cannot renew or obtain a token.
+
+A ready report must repeat the exact pinned commit and branch. Identical reports
+are retryable; conflicting terminal reports fail. Completion and cancellation
+erase the cached token and make its revocation due. A revocation is also queued
+for its permitted expiry when the token is first saved. The existing bounded
+Git cleanup worker performs those calls. Reaping closes stale leases and
+workspaces whose membership, source, project, account or Git authority changed.
+This protocol still needs the real filesystem and CLI integration before cloud
+execution can be accepted.
+
+Schema 14 adds these claims and retains older preparation records. New records
+also retain their installation/repository page selections. Older records use
+page one when revalidating; an old paginated selection that is no longer found
+must be cancelled and prepared again, with no alternate repository substituted.
 
 Local validation uses disposable PostgreSQL databases. It covers concurrent
 creation, response-loss replay, cancellation and restart, private events,
 cross-owner account/connection access, repository permissions, invalid commits,
 and Git/provider/source/membership changes during the external read. HTTP tests
 exercise authentication, strict input decoding, owner-only reads and cancellation.
-The schema-12 upgrade check retains the prior Git and provider credential bytes
-and epochs. The full Go race-test suite and vet checks pass. These tests do not
+Claim tests also cover competing workers, two tickets on one installation,
+heartbeat deadlines, one-time token issuance, cached redelivery, cancellation
+during issuance, terminal-report replay, stale grants and expiry cleanup. The
+HTTP tests follow a complete claim/token/report sequence and verify that the
+token is absent from the owner's ordinary workspace response.
+The upgrade check retains the prior Git and provider credential bytes and
+epochs. The full Go race-test suite and vet checks pass. These tests do not
 prove a real checkout, cloud provider turn or two-user GitHub operation.
 
 ## Self-hosted registration

@@ -208,6 +208,9 @@ func (g *GitStore) Repositories(ctx context.Context, a auth.Actor, id string, in
 // Reap clears expired attempts and resumes idempotent token revocations. It does
 // not retry OAuth exchanges or refreshes after their outcome becomes uncertain.
 func (g *GitStore) Reap(ctx context.Context) error {
+	if err := g.ReapWorkspaces(ctx); err != nil {
+		return err
+	}
 	if _, err := g.store.pool.Exec(ctx, `UPDATE git_logins SET state='expired',encrypted_context=NULL,updated_at=now() WHERE state IN ('waiting','exchanging') AND expires_at<=clock_timestamp()`); err != nil {
 		return err
 	}

@@ -22,6 +22,34 @@ type workspaceGit struct {
 	resolutions    int
 	resolveStarted chan struct{}
 	resolveProceed chan struct{}
+	scopeCalls     int
+	scopeError     error
+	scopeStarted   chan struct{}
+	scopeProceed   chan struct{}
+}
+
+func (f *workspaceGit) ScopeRead(ctx context.Context, root string, expiry time.Time, user int64, installation gitprovider.Installation, repo gitprovider.Repository) (gitprovider.ReadGrant, error) {
+	f.mu.Lock()
+	f.scopeCalls++
+	failure, started, proceed := f.scopeError, f.scopeStarted, f.scopeProceed
+	f.mu.Unlock()
+	if started != nil {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+	}
+	if proceed != nil {
+		select {
+		case <-proceed:
+		case <-ctx.Done():
+			return gitprovider.ReadGrant{}, ctx.Err()
+		}
+	}
+	if failure != nil {
+		return gitprovider.ReadGrant{}, failure
+	}
+	return gitprovider.ReadGrant{Token: "ghu_" + strings.Repeat("n", 36), ExpiresAt: time.Now().Add(5 * time.Minute), RepositoryID: repo.ID, UserID: user}, nil
 }
 
 func (f *workspaceGit) Installations(_ context.Context, _ string, page int) (gitprovider.Installations, error) {
