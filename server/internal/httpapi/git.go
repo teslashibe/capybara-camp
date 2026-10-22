@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
+	"github.com/teslashibe/capybara-camp/server/internal/camp"
 )
 
 func (a *API) gitAuthorize(next authorizedHandler) http.HandlerFunc {
@@ -28,6 +29,32 @@ func (a *API) gitAuthorize(next authorizedHandler) http.HandlerFunc {
 	})
 }
 func (a *API) gitRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /v1/camps/{camp}/sessions/{session}/workspaces", a.gitAuthorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		var input camp.WorkspaceInput
+		if !decode(w, r, &input) {
+			return
+		}
+		out, err := a.Git.CreateWorkspace(r.Context(), u, r.PathValue("camp"), r.PathValue("session"), r.Header.Get("Idempotency-Key"), input)
+		if !fail(w, err) {
+			write(w, 201, out)
+		}
+	}))
+	mux.HandleFunc("GET /v1/camps/{camp}/workspaces/{workspace}", a.gitAuthorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		out, err := a.Git.Workspace(r.Context(), u, r.PathValue("camp"), r.PathValue("workspace"))
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
+	mux.HandleFunc("POST /v1/camps/{camp}/workspaces/{workspace}/cancel", a.gitAuthorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		var input camp.WorkspaceCancel
+		if !decode(w, r, &input) {
+			return
+		}
+		out, err := a.Git.CancelWorkspace(r.Context(), u, r.PathValue("camp"), r.PathValue("workspace"), r.Header.Get("Idempotency-Key"), input)
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
 	mux.HandleFunc("GET /v1/git/connections", a.gitAuthorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		out, err := a.Git.Connections(r.Context(), u)
 		if !fail(w, err) {

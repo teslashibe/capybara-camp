@@ -14,12 +14,13 @@ and acceptance are separate milestones.
 | Onboarding | Automatic profile discovery before full import, optional Camp sign-in, owner-only cloud account setup, GitHub connections, projects, notifications, skip/resume | Default execution target; final onboarding validation after remaining services land |
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
 | Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, expiring login attempts, credential encryption, private Claude code delivery, disconnect/reactivation fencing, Go sign-in adapters, auth workers with recovery journals and a Kubernetes provisioning controller | Live sandbox/storage/network validation, isolated inference runtime, local/cloud defaults and transfers, usage states, real cloud sign-in and disconnected-Mac execution |
-| Git | Project repository links, local CLI project execution, owner-bound GitHub App authorization, native repository browsing, encrypted tokens, signed revocation, exact-commit and scoped read-token adapters | Persisted workspace jobs and isolated checkouts, execution grants, Git actor attribution, branch/push/PR recovery and live two-user GitHub validation |
+| Git | Project repository links, local CLI project execution, owner-bound GitHub App authorization, native repository browsing, encrypted tokens, signed revocation, exact-commit and scoped read-token adapters, owner-bound workspace preparation records | Runner claims and isolated checkouts, execution grants, Git actor attribution in execution, branch/push/PR recovery and live two-user GitHub validation |
 | Memory and skills | Approved Cortex/shared Markdown design | Actual native and Go integrations, provider/model consolidation, memory inspection, skill editing/version rollout and permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image and local development builds | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, Developer ID/notarization, universal V1 release and recorded website demo |
 
-Next: finish the current native design corrections and their click-through,
-then cloud account/runner and Git contracts, memory/skills and shared execution. Validate the full workflow
+Next: connect the stored workspace jobs to narrowly scoped runner claims and
+isolated checkouts, then complete cloud execution, memory/skills and shared
+execution. Continue the native design audit as those surfaces are implemented. Validate the full workflow
 locally before the owner provisions the Hetzner box with us. Cloud sign-in and
 the two-Mac acceptance run follow that deployment. Hardware has not been bought
 or provisioned for this goal.
@@ -52,8 +53,8 @@ recorded implementation and acceptance evidence, not just an updated spec.
 1. **In progress — native design audit and corrections**: compare the approved
    mock with synthetic sessions in the native app, fix current layout gaps and
    test the affected interactions. Repeat the complete audit at step 5.
-2. **Pending — cloud workspaces and execution**: durable Git workspace jobs,
-   isolated checkout, provider turns and streaming, approvals, steering, queues,
+2. **In progress — cloud workspaces and execution**: durable Git workspace jobs
+   are implemented; runner claims, isolated checkout, provider turns and streaming, approvals, steering, queues,
    recovery, Local/Cloud defaults and reviewed session transfers.
 3. **Pending — shared project capabilities**: Cortex consolidation and memory
    inspection, shared Markdown skills, Git publication and actor attribution,

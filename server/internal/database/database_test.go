@@ -1,6 +1,7 @@
 package database
 
 import (
+	"bytes"
 	"context"
 	"io/fs"
 	"net/url"
@@ -83,6 +84,20 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO planning_versions(plan_id,version,state,brief,sources,budget_policy) VALUES($1,1,'ready','Retain the old comparison','[]','calls')`, plan); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = provider.UpTo(ctx, 12); err != nil {
+		t.Fatal(err)
+	}
+	account, installation, connection := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	credentialFixture := []byte("encrypted-fixture-preserved-by-upgrade")
+	if _, err = pool.Exec(ctx, `INSERT INTO provider_accounts(id,owner_user_id,provider,label) VALUES($1,$2,'Codex','Preserved account')`, account, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO provider_installations(id,account_id,owner_user_id,location,state,epoch,credential_revision,encrypted_credentials) VALUES($1,$2,$3,'cloud','connected',3,4,$4)`, installation, account, id, credentialFixture); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO git_connections(id,owner_user_id,github_user_id,github_login,state,epoch,encrypted_credentials) VALUES($1,$2,123,'preserved-user','connected',5,$3)`, connection, id, credentialFixture); err != nil {
+		t.Fatal(err)
+	}
 	if err = Migrate(ctx, u.String()); err != nil {
 		t.Fatal(err)
 	}
@@ -100,5 +115,13 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	var limit int
 	if err = pool.QueryRow(ctx, `SELECT mode,brief,call_limit FROM planning_versions WHERE plan_id=$1 AND version=1`, plan).Scan(&mode, &brief, &limit); err != nil || mode != "comparison" || limit != 5 || brief != "Retain the old comparison" {
 		t.Fatal("planning migration lost existing history", err)
+	}
+	var credentials []byte
+	var epoch, revision int64
+	if err = pool.QueryRow(ctx, `SELECT encrypted_credentials,epoch,credential_revision FROM provider_installations WHERE id=$1`, installation).Scan(&credentials, &epoch, &revision); err != nil || !bytes.Equal(credentials, credentialFixture) || epoch != 3 || revision != 4 {
+		t.Fatal("workspace migration changed provider credentials", err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT encrypted_credentials,epoch FROM git_connections WHERE id=$1`, connection).Scan(&credentials, &epoch); err != nil || !bytes.Equal(credentials, credentialFixture) || epoch != 5 {
+		t.Fatal("workspace migration changed Git credentials", err)
 	}
 }
