@@ -27,7 +27,10 @@ actor CampHTTP {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
         if let body {
-            guard body.count <= 2 << 20 else { throw CampCloudError.responseTooLarge }
+            let segments = path.split(separator: "/", omittingEmptySubsequences: false)
+            let isPlanImport = method == "POST" && segments.count == 6 && segments[0].isEmpty && segments[1] == "v1" &&
+                segments[2] == "camps" && UUID(uuidString: String(segments[3])) != nil && segments[4] == "planning" && segments[5] == "import"
+            guard body.count <= (isPlanImport ? 16 : 2) << 20 else { throw CampCloudError.responseTooLarge }
             request.httpBody = body; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         if let key { request.setValue(key, forHTTPHeaderField: "Idempotency-Key") }

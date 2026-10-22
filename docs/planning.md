@@ -157,6 +157,9 @@ Each version supplies its saved `mode`, `state`, `brief`, `budget_policy`,
 IDs must resolve to the importing person's own accessible sessions in that
 Camp. Model, effort and speed remain the saved values; historical execution
 locations are left unrecorded. The destination project must exist and be active.
+Historical effort and speed values are bounded strings, including settings from
+older or newer provider versions. Import does not validate them as executable
+choices. A restarted plan still uses the normal supported-settings checks.
 
 `sources` are the existing pinned Camp message references, with current access
 checks. `local_sources` carry quoted local messages: an opaque hashed ID and
@@ -191,6 +194,39 @@ normal [self-hosting procedure](self-hosting.md). Downgrading an empty import
 table is supported; once imports exist, retain an import-aware server. The
 migration refuses to discard them. This backend increment is not a released
 native transfer feature.
+
+### Native import preparation and recovery
+
+`LocalPlanImport.prepare` maps a local ticket into the import contract. It
+requires an owned, published planner binding for each participant and a pinned,
+complete cloud transcript for each implementation. Message IDs, order, text and
+model metadata must match the local saved transcript. Missing, changed or
+unfinished history fails preparation instead of being omitted. Local source
+quotes are checked against their saved digest; Camp sources retain their pinned
+references and permissions.
+
+The mapped request contains opaque hashes, Camp IDs and historical content.
+It excludes local profile roots, working directories, transcript file paths and
+account configuration. It retains every version and implementation attempt,
+including uncertain outcomes. The original local ticket is not changed.
+
+`CampPlanImport` stores a single reviewed request in the owner-only, scoped
+SQLite cache. Submitting requires the same local ticket fingerprint that was
+reviewed. Approval persists before network work; an interrupted approved upload
+reuses its exact body and idempotency key on reconnect. Changing Camp or signing
+out clears visible state, and deleting the scoped cache also clears the saved
+request. Cache epochs fence late writes. Source permission changes stop result
+acceptance, including responses already in flight. A paused approved import
+retains its journal for explicit retry.
+
+The HTTP client allows up to 16 MiB only for the exact planning-import POST
+route. Other requests retain the 2 MiB limit. The final response must match the
+reviewed owner, Camp, project, version and saved planning snapshot before the
+controller installs it.
+
+These components are tested independently of the UI. Automatic publication of
+the required source snapshots and the native review screen remain unfinished;
+the current app does not yet expose a complete local-plan import action.
 
 The native reader retains import metadata in its scoped cache and shows the
 original saved state, step errors and unconfirmed outcomes. Quoted sources open

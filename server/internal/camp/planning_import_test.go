@@ -64,6 +64,34 @@ func TestPlanningImportPreservesHistoryWithoutProviderWork(t *testing.T) {
 	}
 }
 
+func TestPlanningImportPreservesHistoricalModelSettings(t *testing.T) {
+	s, actors, c, definition := planningFixture(t)
+	in := planningImportFixture(t)
+	in.ProjectID = definition.ProjectID
+	in.Versions[0].Planners = append([]PlannerInput(nil), definition.Planners...)
+	in.Versions[0].Planners[0].Model = "retired-codex-version"
+	in.Versions[0].Planners[0].Effort = "minimal"
+	in.Versions[0].Planners[0].Speed = "historical-speed"
+	in.Versions[0].Planners[1].Model = "retired-claude-version"
+	in.Versions[0].Planners[1].Effort = "future-effort"
+	p, err := s.ImportPlanning(t.Context(), actors[0], c.ID, uuid.NewString(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, actual := range p.Version.Planners {
+		want := in.Versions[0].Planners[i]
+		if actual.Model != want.Model || actual.Effort != want.Effort || actual.Speed != want.Speed || actual.Execution != nil {
+			t.Fatal("Historical settings changed or became executable", actual, want)
+		}
+	}
+	bad := in
+	bad.SourceID = strings.Repeat("d", 64)
+	bad.Versions[0].Planners[0].Effort = strings.Repeat("x", 65)
+	if _, err = s.ImportPlanning(t.Context(), actors[0], c.ID, uuid.NewString(), bad); !errors.Is(err, ErrInput) {
+		t.Fatal("Unbounded historical setting accepted", err)
+	}
+}
+
 func TestPlanningImportValidatesSnapshotsAndEmptyDraft(t *testing.T) {
 	s, actors, c, definition := planningFixture(t)
 	in := planningImportFixture(t)

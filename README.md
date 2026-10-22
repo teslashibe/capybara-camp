@@ -139,6 +139,16 @@ History view to inspect the chat or attempts in the same workspace. Paged reads
 preserve the copied revision and current permissions. Native import and
 publication controls remain pending.
 
+The native import preparation and upload controller preserve every saved plan
+revision, quoted source, implementation attempt and historical model setting.
+Preparation requires published source bindings and an exact match between the
+saved implementation transcript and its pinned cloud copy. The controller saves
+the reviewed request before submission, reuses its key after a lost response,
+and checks source access again before accepting the result. Profile paths and
+local execution directories are excluded. Automatic source publication and the
+native review screen still need to be connected before this becomes an
+end-to-end app flow.
+
 ### Default execution settings
 
 Open **Manage sources → Defaults**, or use the Defaults step during setup.

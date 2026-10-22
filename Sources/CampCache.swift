@@ -121,6 +121,15 @@ actor CampCache {
             try setMetadata("execution-setup:" + scope.key, data)
         }
     }
+    func savePlanImport(_ value: PlanImportJournal?, scope: CloudScope, expectedEpoch: Int64) throws {
+        let data = try value.map { try CampWire.encoder().encode($0) }
+        guard value?.valid ?? true, (data?.count ?? 0) <= 24 << 20 else { throw CampCloudError.invalidResponse }
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            if let data { try setMetadata("planning-import:" + scope.key, data) }
+            else { try execute("DELETE FROM metadata WHERE key=?", [.text("planning-import:" + scope.key)]) }
+        }
+    }
     func saveHandoffJournal(_ data: Data, scope: CloudScope, expectedEpoch: Int64) throws {
         try transaction {
             try checkEpoch(scope, expectedEpoch)
@@ -460,6 +469,7 @@ actor CampCache {
             try execute("DELETE FROM metadata WHERE key=?", [.text("snapshot:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("notifications:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("planning:" + scope.key)])
+            try execute("DELETE FROM metadata WHERE key=?", [.text("planning-import:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("worker-claim:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("execution-setup:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("source-handoff:" + scope.key)])

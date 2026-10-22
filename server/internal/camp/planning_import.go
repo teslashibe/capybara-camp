@@ -85,7 +85,7 @@ func validImportedPlanningVersion(v ImportedPlanningVersion) bool {
 		}
 	}
 	for _, planner := range v.Planners {
-		if planner.Execution != nil {
+		if planner.Execution != nil || len(planner.Model) > 200 || len(planner.Effort) > 64 || len(planner.Speed) > 64 {
 			return false
 		}
 	}
@@ -184,7 +184,13 @@ func (s *Store) ImportPlanning(ctx context.Context, a auth.Actor, campID, key st
 			}
 			brief = "Imported draft"
 		}
-		current, e := s.preparePlanning(ctx, tx, a, campID, PlanningInput{Mode: v.Mode, Title: in.Title, ProjectID: in.ProjectID, Brief: brief, Planners: v.Planners, Sources: v.Sources, BudgetPolicy: v.BudgetPolicy, MergeSlot: v.MergeSlot})
+		// Resolve ownership and source access through the normal planning path.
+		// Historical settings are observations, not executable model choices.
+		bindings := append([]PlannerInput(nil), v.Planners...)
+		for i := range bindings {
+			bindings[i].Model, bindings[i].Effort, bindings[i].Speed = "", "", ""
+		}
+		current, e := s.preparePlanning(ctx, tx, a, campID, PlanningInput{Mode: v.Mode, Title: in.Title, ProjectID: in.ProjectID, Brief: brief, Planners: bindings, Sources: v.Sources, BudgetPolicy: v.BudgetPolicy, MergeSlot: v.MergeSlot})
 		if e != nil {
 			return saved, e
 		}
