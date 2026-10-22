@@ -30,6 +30,7 @@ struct RunLocationView: View {
     @ObservedObject var accounts: CampProviderAccounts
     @ObservedObject var git: CampGitConnections
     @ObservedObject var sharing: CampSharing
+    @ObservedObject var transfers: CampTransfer
     let session: CampSession
     let requestedLocation: String?
     @Environment(\.dismiss) private var dismiss
@@ -48,9 +49,12 @@ struct RunLocationView: View {
     @State private var manageGit = false
     @State private var connectCamp = false
     @State private var permissions = PermissionSettings()
+    @State private var transferReview = false
+    @State private var transferInput: CloudWorkspaceInput?
     init(store: CampStore, session: CampSession, requestedLocation: String? = nil) {
         self.store = store; self.session = session; self.requestedLocation = requestedLocation; cloud = store.cloud; execution = store.cloud.execution
         accounts = store.cloud.providerAccounts; git = store.cloud.gitConnections; sharing = store.sharing
+        transfers = store.cloud.transfers
     }
     var remote: CloudSession? { store.executionSession(session) }
     var currentLocation: String { remote?.executionLocation == "cloud" ? "Cloud" : "This Mac" }
@@ -78,20 +82,26 @@ struct RunLocationView: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack { Text("Run on").font(.title2); Spacer(); Button("Done") { dismiss() } }
+            HStack { Text(transferReview ? "Move to cloud" : "Run on").font(.title2); Spacer(); Button("Done") { dismiss() } }
             Text(session.title).font(.system(size: 14, weight: .medium)).lineLimit(2)
-            Text("Currently \(currentLocation)").font(.system(size: 11)).foregroundStyle(campMuted)
-            ExecutionLocationPicker(selection: $location)
+            if !transferReview {
+                Text("Currently \(currentLocation)").font(.system(size: 11)).foregroundStyle(campMuted)
+                ExecutionLocationPicker(selection: $location)
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if busy { Text("Finish or stop the current turn before moving this session").font(.system(size: 12)).foregroundStyle(campMuted) }
-                    if location == "Local" { localForm }
+                    if transferReview,let remote {
+                        TransferReviewView(transfer:transfers,local:session,session:remote,input:transferInput ?? transfers.job?.input,busy:busy,permissions:$permissions,catalog:catalog,accountLabel:accounts.accounts.first(where:{$0.id==(transfers.job?.input.providerAccountId ?? transferInput?.providerAccountId)})?.label ?? ""){transferReview=false}
+                    } else if location == "Local" { localForm }
                     else if !cloud.signedIn || cloud.scope == nil {
                         Text("Connect your Camp to run sessions in the cloud").font(.system(size: 12))
                         Button("Connect a Camp") { connectCamp = true }
                     } else if let remote {
                         if remote.ownerUserId != cloud.credential?.actor.userId {
                             Text("The session owner chooses where this runs").font(.system(size: 12))
+                        } else if currentLocation != "Cloud" && remote.ownerDeviceId != cloud.credential?.actor.deviceId {
+                            Text("Open this session on its source Mac to review and move its files").font(.system(size:12))
                         } else if !historyReady { Text(sharing.binding(for:session)?.state ?? "Copying transcript…").font(.system(size:12)) }
                         else if review, let workspace { reviewForm(workspace, remote: remote) }
                         else { cloudForm(remote) }
@@ -114,6 +124,10 @@ struct RunLocationView: View {
                 permissions = session.provider == "Codex" ? PermissionSettings(sandbox: "workspace-write", approval: "on-request", reviewer: "user") : PermissionSettings(claudeMode: "manual")
             }
             .task { await accounts.refresh(); await git.refresh(); chooseAccount() }
+            .task {
+                await transfers.restore()
+                if let job=transfers.job,job.session.id==remote?.id,!["complete","cancelled"].contains(job.phase) {transferReview=true;transferInput=job.input}
+            }
             .task(id: remote?.id) {
                 while !Task.isCancelled, let remote, remote.ownerUserId == cloud.credential?.actor.userId {
                     await execution.refresh(remote)
@@ -163,7 +177,9 @@ struct RunLocationView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(workspace.repositoryName).font(.system(size: 13, weight: .medium))
                 Text("\(workspace.requestedRef) · \(workspace.baseCommit.prefix(10))").font(.caption).foregroundStyle(campMuted)
-                if workspace.state == "ready" {
+                if currentLocation != "Cloud" {
+                    Text(workspace.transferId == nil ? "Cancel this preparation to review local files for the move" : "A reviewed move is already prepared for this session").font(.caption).foregroundStyle(campMuted)
+                } else if workspace.state == "ready" {
                     Text(current(workspace, session: remote) ? "Workspace ready" : "The project or session changed · Cancel preparation and choose a new workspace").font(.caption)
                     Button("Review move") { review = true; approved = false }.disabled(busy || execution.working || execution.pending || !current(workspace, session: remote))
                 } else { Label(workspace.state == "cancel_requested" ? "Stopping preparation" : "Preparing workspace", systemImage: "clock").font(.caption) }
@@ -199,12 +215,16 @@ struct RunLocationView: View {
                 }.onChange(of: repositoryID) { _, id in ref = repositories.first { $0.id == id }?.defaultBranch ?? "" }
                 if let next = git.nextRepositoryPage { Button("More repositories") { Task { await git.loadRepositories(installation: git.selectedInstallation, page: next) } }.font(.caption) }
                 if !git.repositories.isEmpty && repositories.isEmpty { Text("Link a repository to this project in Projects first").font(.caption).foregroundStyle(campMuted) }
-                TextField("Branch, tag or commit", text: $ref)
+                if currentLocation == "Cloud" {TextField("Branch, tag or commit", text: $ref)}
+                else {Text("Uses the current local Git commit").font(.caption).foregroundStyle(campMuted)}
                 Toggle("Allow implementation in this workspace", isOn: $implementation)
-                Text("Cloud preparation uses this repository revision. Uncommitted local files are not copied.").font(.caption).foregroundStyle(campMuted)
+                Text(currentLocation == "Cloud" ? "Cloud preparation uses this repository revision" : "Review selected local changes and the pinned Git revision before moving").font(.caption).foregroundStyle(campMuted)
             }
             if !git.error.isEmpty { Text(git.error).font(.caption).foregroundStyle(.orange) }
-            Button("Review move") { prepare(remote) }.disabled(busy || !candidates.contains(where: { $0.id == accountID }) || repositoryID == 0 || execution.working || execution.pending)
+            Button("Review move") {
+                if currentLocation == "Cloud" {prepare(remote)}
+                else if let choice = workspaceInput(remote) {transferInput=choice;transferReview=true}
+            }.disabled(busy || !candidates.contains(where: { $0.id == accountID }) || repositoryID == 0 || execution.working || execution.pending)
         }
     }
     @ViewBuilder func reviewForm(_ workspace: CloudWorkspace, remote: CloudSession) -> some View {
@@ -230,7 +250,11 @@ struct RunLocationView: View {
         accountID = workspace?.providerAccountId ?? (saved.isEmpty ? candidates.first?.id ?? "" : saved)
     }
     private func prepare(_ remote: CloudSession) {
-        guard let project, let repo = repositories.first(where: { $0.id == repositoryID }), let account = candidates.first(where: { $0.id == accountID }), let connection = git.selection else { return }
-        Task { await execution.prepare(remote, input: CloudWorkspaceInput(providerAccountId: account.id, gitConnectionId: connection.id, githubInstallationId: git.selectedInstallation, repositoryId: repo.id, installationPage: git.installationPage, repositoryPage: git.repositoryPage, ref: ref, purpose: implementation ? "implementation" : "planning", expectedSessionRevision: remote.revision, expectedProjectRevision: project.version)) }
+        guard let choice=workspaceInput(remote) else{return}
+        Task { await execution.prepare(remote,input:choice) }
+    }
+    private func workspaceInput(_ remote:CloudSession) -> CloudWorkspaceInput? {
+        guard let project, let repo = repositories.first(where: { $0.id == repositoryID }), let account = candidates.first(where: { $0.id == accountID }), let connection = git.selection else { return nil }
+        return CloudWorkspaceInput(providerAccountId: account.id, gitConnectionId: connection.id, githubInstallationId: git.selectedInstallation, repositoryId: repo.id, installationPage: git.installationPage, repositoryPage: git.repositoryPage, ref: ref, purpose: implementation ? "implementation" : "planning", expectedSessionRevision: remote.revision, expectedProjectRevision: project.version)
     }
 }

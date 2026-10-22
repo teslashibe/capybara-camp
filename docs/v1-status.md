@@ -1,6 +1,6 @@
 # V1 delivery status
 
-October 21, 2026 · [Release epic](https://github.com/teslashibe/capybara-camp/issues/1)
+October 22, 2026 · [Release epic](https://github.com/teslashibe/capybara-camp/issues/1)
 
 V1 is not released. The public app and website still describe v0.0.1. Local
 development builds contain more functionality, but implementation, deployment
@@ -13,17 +13,36 @@ and acceptance are separate milestones.
 | Shared Camps | Go/PostgreSQL auth, membership, sessions, events, requests, native cache/outbox and owner-Mac worker | Real independent users on two Macs, remaining permission/recovery cases, production deployment |
 | Onboarding | Automatic profile discovery before full import, optional Camp sign-in, owner-only cloud account setup, GitHub connections, projects, execution defaults, notifications, skip/resume | Final onboarding validation after remaining services land |
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
-| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments and new-plan defaults, native Run on controls and private transcript copy, multi-ticket per-account scheduling, native steering/queue/stop controls, durable approval/control delivery, a shared request queue, provider subprocess consumption, event streaming and credential revision fencing, mandatory Linux child-process isolation | Standalone local-plan promotion, remaining signed-in recovery states, target-runtime isolation validation, reviewed transfers, complete reported runtime settings and usage states, live sandbox/network/login/control validation and disconnected-Mac execution |
+| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments and new-plan defaults, native Run on controls, reviewed Local-to-Cloud file capture and private transcript copy, multi-ticket per-account scheduling, native steering/queue/stop controls, durable approval/control delivery, a shared request queue, provider subprocess consumption, event streaming and credential revision fencing, mandatory Linux child-process isolation | Standalone local-plan promotion, remaining signed-in recovery states, target-runtime isolation validation, complete history/attachment and reverse transfers, complete reported runtime settings and usage states, live sandbox/network/login/control validation and disconnected-Mac execution |
 | Git | Project repository links, local CLI project execution, owner-bound GitHub App authorization, native repository browsing, encrypted tokens, signed revocation, exact-commit and scoped read-token adapters, workspace records, exclusive claims and isolated runner checkouts with restart/cancellation recovery | Execution grants, Git actor attribution in execution, branch/push/PR recovery and live two-user GitHub validation |
 | Memory and skills | Approved Cortex/shared Markdown design | Actual native and Go integrations, provider/model consolidation, memory inspection, skill editing/version rollout and permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: finish native transfer review and local-plan promotion, then memory/skills
+Next: validate the native transfer review, finish full-history migration and local-plan promotion, then memory/skills
 and shared execution. Continue the native design audit as those surfaces are
 implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
 the two-Mac acceptance run follow that deployment. Hardware has not been bought
 or provisioned for this goal.
+
+The current Local-to-Cloud increment adds native working-file selection, exact
+captured-file previews, a pinned Git base, destination preparation, source
+verification and final permission review. Upload and cancellation state survive
+a restart. Native tests cover a lost create response without duplicating the
+transfer, lost cancellation recovery, an intermediate claimed source, explicit
+retry after rejection, and original-device ownership. A packaged-app integration
+test reaches the actual Go change-list and capture commands. The Go capture
+tests cover renames, excluded credentials/links and an explicit no-file move.
+These checks do not complete child-history/attachment migration, unpushed commit
+transport, Cloud-to-Local moves, or live two-Mac acceptance.
+
+The final focused native run passed transfer, bundled-helper integration,
+execution, source handoff, onboarding, cloud account, GitHub and execution-default
+suites. The Go transfer/local-CLI race suites and vet passed. A full native run
+reached the permission-restore check but could not reopen its protected test
+file while macOS was locked; an isolated protected-file check reproduced that
+restriction. Repeat the full suite after unlocking. The staged-source secret
+scan passed. The native click-through is also waiting for the Mac to be unlocked.
 
 The transfer work includes a read-only Go capture layer for selected Git
 changes and owner-bound, encrypted, resumable upload storage. Completion checks

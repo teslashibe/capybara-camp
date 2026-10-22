@@ -78,6 +78,9 @@ type request struct {
 }
 
 func (a *App) Run(ctx context.Context, action string, input io.Reader) (any, error) {
+	if action == "transfer-changes" || action == "transfer-capture" {
+		return a.reviewTransfer(ctx, action, input)
+	}
 	if action == "transfer-resolve" {
 		return a.resolveTransferFence(ctx, input)
 	}

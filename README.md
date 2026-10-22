@@ -195,9 +195,18 @@ login expiry and usage limits remain under the provider's control.
 
 Open **Run on** from the card or chat. Review the private transcript copy,
 provider account, GitHub identity, project repository and pinned revision.
-Prepare the checkout, review permissions, then assign it to the session.
-Copying a transcript privately does not share it with teammates. Local
-uncommitted files are not included by this preparation flow.
+For a local session, open **Run on → Cloud**, choose the destination provider
+account and GitHub repository, then choose **Review move**. Select the working
+files to include, inspect the captured contents and exclusions, and choose
+**Prepare Cloud**. The review pins the current local Git commit. That commit
+must already be available in the selected remote repository.
+
+Once the destination is ready, choose **Verify source** on the original Mac.
+Camp checks that the provider has stopped and the selected files still match.
+Review the destination permissions, then choose **Move to cloud**. The ticket
+keeps its main conversation as imported context. Child transcripts, attachments
+and unpushed commits still need the migration work listed in the delivery status.
+Copying a transcript privately does not share it with teammates.
 
 Cloud assignment stops the local publisher from overwriting the cloud session.
 Returning an unused checkout to Local preserves the local draft and project.
@@ -217,7 +226,7 @@ and the delivery status.
 The Go API includes encrypted, resumable uploads for reviewed file-transfer
 manifests. An owner-authorized Cloud destination job connects the upload to the
 runner, stages files in a private checkout and validates its receipt. These are
-internal parts of the unfinished transfer flow: an upload alone does not move
+parts of the transfer flow: an upload alone does not move
 the session or apply files. The source cloud runner can now verify an idle
 provider and the reviewed files under a temporary session hold. It retries lost
 acknowledgements without restarting the provider. The Mac worker also holds the
@@ -228,15 +237,20 @@ epoch once. During the source hold, the Mac waits for saved, visible routing
 before releasing its lock. The cloud worker reconciles a lost completion
 response from its journal.
 The server retains the committed receipt and removes the temporary upload chunks.
-These internal operations do not yet provide the native transfer review flow,
-child-session and attachment migration, or cloud-to-local transfer acceptance.
+The native review stores its selected payload separately from its small recovery
+journal. Interrupted uploads reuse their saved command keys and missing chunks.
+A rejected operation pauses for explicit retry or cancellation. Closing the
+dialog keeps an active transfer running; cancellation is saved before the app
+sends it to the server. These controls still require the final live-provider and
+two-Mac acceptance tests, alongside child-session, attachment and cloud-to-local
+migration.
 The bundled helper now blocks the original local session across a hold timeout
 or app restart. Confirmed cancellation restores local execution; a completed
 move keeps the old source blocked. After sign-out or cache erasure, signing in
 to the same Camp recovers saved blockers from the local helper and checks them
 against the owner's server records. Confirmed cloud assignments return to the
-app; confirmed cancellations release the original local session. The native
-transfer review and complete migration acceptance remain unfinished.
+app; confirmed cancellations release the original local session. Complete
+migration acceptance remains unfinished.
 See the [transfer contract](docs/transfer-payload.md) for ownership, limits,
 recovery and the remaining handoff work.
 

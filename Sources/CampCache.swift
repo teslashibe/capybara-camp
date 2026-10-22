@@ -125,6 +125,23 @@ actor CampCache {
             try setMetadata("source-handoff:" + scope.key, data)
         }
     }
+    func saveTransferJournal(_ data: Data, payload: Data? = nil, id: String, scope: CloudScope, expectedEpoch: Int64, discardPayload: Bool = false) throws {
+        guard UUID(uuidString:id) != nil, data.count <= 512 << 10, (payload?.count ?? 0) <= 46 << 20 else { throw CampCloudError.invalidResponse }
+        try transaction {
+            try checkEpoch(scope,expectedEpoch)
+            if let payload {
+                try setMetadata("transfer-payload:"+scope.key+":"+id,payload)
+                try execute("DELETE FROM metadata WHERE key=?",[.text("transfer-cancel:"+scope.key)])
+            }
+            if discardPayload { try execute("DELETE FROM metadata WHERE key=?",[.text("transfer-payload:"+scope.key+":"+id)]) }
+            if discardPayload { try execute("DELETE FROM metadata WHERE key=?",[.text("transfer-cancel:"+scope.key)]) }
+            try setMetadata("transfer-review:"+scope.key,data)
+        }
+    }
+    func requestTransferCancellation(_ id:String,scope:CloudScope,expectedEpoch:Int64) throws {
+        guard UUID(uuidString:id) != nil else {throw CampCloudError.invalidResponse}
+        try transaction {try checkEpoch(scope,expectedEpoch);try setMetadata("transfer-cancel:"+scope.key,Data(id.utf8))}
+    }
     func localProjectState() throws -> LocalProjectState {
         var projects = try rows("SELECT id,name,revision,archived FROM local_projects ORDER BY archived,name,id") { CampProject(id: text($0,0), name: text($0,1), revision: sqlite3_column_int64($0,2), archived: sqlite3_column_int($0,3) != 0, repositories: []) }
         let links = try rows("SELECT project_id,url FROM local_project_repositories ORDER BY url") { (text($0,0),text($0,1)) }
@@ -363,6 +380,9 @@ actor CampCache {
             try execute("DELETE FROM metadata WHERE key=?", [.text("worker-claim:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("execution-setup:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("source-handoff:" + scope.key)])
+            try execute("DELETE FROM metadata WHERE key=?", [.text("transfer-review:" + scope.key)])
+            try execute("DELETE FROM metadata WHERE key=?", [.text("transfer-cancel:" + scope.key)])
+            try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-payload:" + scope.key + ":%")])
             for var attempt in try attempts(scope) {
                 if ["completed", "failed", "cancelled"].contains(attempt.state) {
                     try execute("DELETE FROM attempts WHERE id=?", [.text(attempt.id)]); continue

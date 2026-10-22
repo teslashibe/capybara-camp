@@ -4,7 +4,8 @@
 stores resumable, encrypted uploads of that manifest. The internal staging
 helper applies it to an isolated destination checkout. The cloud runner can
 prepare that destination through an owner-authorized workspace job. The native
-review flow and full session migration remain unfinished. Upload completion
+app includes a Local-to-Cloud review flow; full session migration and live
+acceptance remain unfinished. Upload completion
 means the payload passed validation and is ready for staging; it does not
 change the session's assignment. Used cloud workspaces remain protected by
 the existing transfer requirement.
@@ -56,8 +57,8 @@ replace the owner's review or the release security audit.
 
 Symlinks, hardlinks, directories and submodules are currently reported as
 excluded or unsupported. Unchanged selected files are identified separately.
-The future review UI must show these outcomes before accepting a transfer;
-it must not claim that an excluded file moved. Missing selected untracked
+The native review shows these outcomes before accepting a transfer;
+it does not claim that an excluded file moved. Missing selected untracked
 files are errors, while a missing tracked file is a deletion.
 
 ## Resumable upload API
@@ -192,7 +193,39 @@ The returned `StageReceipt` identifies the review digest, base commit,
 destination branch and file count. Replaying a completed stage rechecks the
 files before returning the same receipt. A receipt is evidence of local file
 verification, not permission to switch execution. Server-side source fencing,
-history transfer and assignment commit remain unfinished.
+main-history context and assignment commit use the handoff protocol below.
+
+## Native Local-to-Cloud review
+
+The original source Mac owns the review. In **Run on → Cloud**, the owner chooses
+the destination account and GitHub repository before selecting working-tree
+changes. `transfer-changes` lists at most 4,096 paths without reading their file
+contents. The review starts with no selected files; an explicit empty selection
+moves the main conversation and pinned base without working-tree changes.
+
+`transfer-capture` returns the exact manifest and its file summaries. The native
+review shows the pinned commit, exclusions and a captured-file preview capped at
+64 KiB. Changing a source file after capture requires a fresh review; the source
+worker rechecks it before acknowledging and before finishing the move. The
+selected remote repository must contain the pinned commit. The app does not
+silently substitute a branch tip or upload unpushed commits.
+
+The scoped SQLite cache stores the payload once, separately from the small
+transfer journal. Upload creation, workspace preparation, source hold and final
+confirmation retain their command keys across restarts. Chunks resume from the
+server's accepted ordinals. A terminal rejection pauses the flow for a deliberate
+retry or cancellation. Cancellation intent is durable before any request is
+cancelled. Clearing the Camp cache removes the journal and payload; persistent
+source-lock recovery still follows the server's authoritative outcome.
+
+One native transfer is active per signed-in Camp at a time. Closing its dialog
+does not cancel it. Reopening the source ticket restores the current phase.
+The final move shows the chosen destination and requires explicit tool
+permissions for implementation. A completed transfer changes the execution
+epoch only through the source-fenced server commit below.
+
+This path preserves main-history context. Child sessions, attachments, unpushed
+commit transport, Cloud-to-Local moves and live two-Mac validation remain open.
 
 ## Cloud runner integration
 

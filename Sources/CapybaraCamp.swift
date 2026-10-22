@@ -151,7 +151,7 @@ enum Bridge {
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Capybara Camp")
     }()
     static func process(_ action: String) throws -> Process {
-        guard ["discover", "scan", "transcript", "export-page", "add-source", "children", "activity", "permissions", "execution-context", "codex-activity-watch", "conversation", "transfer-source", "transfer-fences", "transfer-resolve"].contains(action) else {
+        guard ["discover", "scan", "transcript", "export-page", "add-source", "children", "activity", "permissions", "execution-context", "codex-activity-watch", "conversation", "transfer-source", "transfer-fences", "transfer-resolve", "transfer-changes", "transfer-capture"].contains(action) else {
             throw CampError.message("Unsupported local session action")
         }
         let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/camp-local")
@@ -538,6 +538,7 @@ final class TranscriptWatch {
                   self.selectedID==local.id || self.selectedID=="camp:"+id else{return}
             if let remote=self.sessions.first(where:{$0.id=="camp:"+id}),self.cloudSessions[remote.id]?.executionLocation=="cloud" {self.open(remote)}
         } }
+        cloud.transfers.changed = cloud.execution.changed
         cloud.live.changed = { [weak self] in
             guard let self, self.selectedID == self.cloud.live.sessionID.map({ "camp:" + $0 }) else { return }
             self.objectWillChange.send()

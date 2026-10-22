@@ -40,6 +40,7 @@ struct CloudWorkspace: Codable, Identifiable, Equatable, Sendable {
     var createdAt: Date
     var updatedAt: Date
     var failureCode: String?
+    var transferId: String? = nil
     func valid(session: CloudSession, owner: String) -> Bool {
         [id, providerAccountId, providerInstallationId, gitConnectionId].allSatisfy { UUID(uuidString: $0) != nil } &&
         campId == session.campId && sessionId == session.id && UUID(uuidString: projectId) != nil && ownerUserId == owner &&

@@ -14,7 +14,7 @@ swiftc -parse-as-library -emit-library -emit-module -enable-testing -D CAMP_TEST
   -o build/test-support/libCampTestSupport.dylib
 WORK="$(mktemp -d "$ROOT/build/.camp-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-SUITES=(CampStateTests CampCloudTests CampSharingTests LocalConversationTests CampWorkerTests CampHandoffTests BridgeIntegrationTests SessionMentionsTests LocalPlanningTests ExecutionApprovalTests ImplementationFlowTests CampNotificationTests CampPlanningTests CodexActivityTests CampProjectsTests PermissionSettingsTests CampOnboardingTests CampProviderAccountTests CampGitConnectionTests CampExecutionTests ExecutionDefaultsTests)
+SUITES=(CampStateTests CampCloudTests CampSharingTests LocalConversationTests CampWorkerTests CampHandoffTests CampTransferTests BridgeIntegrationTests SessionMentionsTests LocalPlanningTests ExecutionApprovalTests ImplementationFlowTests CampNotificationTests CampPlanningTests CodexActivityTests CampProjectsTests PermissionSettingsTests CampOnboardingTests CampProviderAccountTests CampGitConnectionTests CampExecutionTests ExecutionDefaultsTests)
 if [ "$#" -gt 0 ]; then
   for requested in "$@"; do
     found=false
@@ -26,6 +26,7 @@ fi
 for suite in "${SUITES[@]}"; do
   printf '%s\n' '@testable import CampTestSupport' > "$WORK/$suite.swift"
   cat Tests/FixtureProcess.swift >> "$WORK/$suite.swift"
+  if [ "$suite" = CampTransferTests ]; then cat Tests/TransferFixture.swift >> "$WORK/$suite.swift"; fi
   cat "Tests/$suite.swift" >> "$WORK/$suite.swift"
   swiftc -parse-as-library -swift-version 5 -I build/test-support -L build/test-support \
     -lCampTestSupport -framework SwiftUI -framework AppKit -framework Security -lsqlite3 \

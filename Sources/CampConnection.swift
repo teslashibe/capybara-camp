@@ -41,6 +41,7 @@ import SwiftUI
     lazy var providerAccounts = CampProviderAccounts(cache: cache)
     lazy var gitConnections = CampGitConnections(cache: cache)
     lazy var execution = CampExecution(cache: cache)
+    lazy var transfers = CampTransfer(cache: cache)
     private let vault: any CampCredentialStore
     private let allowLoopback: Bool
     private var generation = UUID()
@@ -150,6 +151,7 @@ import SwiftUI
     }
     private func loadCached(scope: CloudScope) async {
         execution.attach(scope:scope,credential:credential,transport:client)
+        transfers.attach(scope:scope,credential:credential,transport:client)
         guard let cache else { return }
         do {
             let token = generation
@@ -330,6 +332,7 @@ import SwiftUI
         flushRetryTask?.cancel(); flushRetryTask = nil
         controlTask?.cancel(); controlTask = nil; controlsDirty = false; controlSending = []
         execution.attach(scope:nil,credential:nil,transport:nil)
+        transfers.attach(scope:nil,credential:nil,transport:nil)
         live.stop()
         sessions = []; projects = []; members = []; requests = []; pending = []
         sessionIndex = [:]; requestIndex = [:]; sessionsChanged?([], [], nil)

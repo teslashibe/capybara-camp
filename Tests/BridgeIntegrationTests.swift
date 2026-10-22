@@ -21,8 +21,25 @@ import Foundation
         precondition(remaining.isEmpty,"The bundled helper did not resolve its marker")
         let empty = try JSONDecoder().decode([LocalTransferFence].self,from:await Bridge.call("transfer-fences"))
         precondition(empty.isEmpty)
+        let repository=root.appendingPathComponent("repository")
+        try FileManager.default.createDirectory(at:repository,withIntermediateDirectories:true)
+        func git(_ arguments:[String]) throws {
+            let process=Process();process.executableURL=URL(fileURLWithPath:"/usr/bin/git")
+            process.arguments=["-C",repository.path]+arguments;process.standardOutput=FileHandle.nullDevice;process.standardError=FileHandle.nullDevice
+            try process.run();process.waitUntilExit();precondition(process.terminationStatus==0)
+        }
+        try git(["init","-q"])
+        try Data("before\n".utf8).write(to:repository.appendingPathComponent("file.txt"))
+        try git(["add","file.txt"]);try git(["-c","user.name=Fixture","-c","user.email=fixture@example.com","commit","-qm","Fixture"])
+        try Data("after\n".utf8).write(to:repository.appendingPathComponent("file.txt"))
+        let session=CampSession(id:"fixture",sessionID:UUID().uuidString,provider:"Codex",sourceID:"fixture",sourceLabel:"Fixture",root:root.path,title:"Fixture",cwd:repository.path,updated:1,path:"",accountID:"",archived:false)
+        let request=try CampWire.body(["session":JSONSerialization.jsonObject(with:JSONEncoder().encode(session)),"paths":["file.txt"]])
+        let changes=try JSONDecoder().decode(TransferChanges.self,from:await Bridge.call("transfer-changes",input:request))
+        precondition(changes.files.count==1 && changes.files[0].path=="file.txt")
+        let capture=try JSONDecoder().decode(TransferCapture.self,from:await Bridge.call("transfer-capture",input:request))
+        precondition(capture.valid && capture.files.count==1 && capture.payload.map(PublishMessage.hash)==capture.payloadSha256,"The bundled capture helper was not used")
         do { _ = try Bridge.process("unrecognized-action"); preconditionFailure("The bridge accepted an unsupported command") }
         catch let error as CampError { precondition(error.localizedDescription == "Unsupported local session action") }
-        print("PASS: app-bundled Go recovery commands, isolated marker inventory, resolution and action validation")
+        print("PASS: app-bundled Go recovery, change review, exact capture and action validation")
     }
 }

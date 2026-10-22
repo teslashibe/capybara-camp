@@ -4,6 +4,20 @@ Reference: the approved [interactive design](http://127.0.0.1:8770/capybara-camp
 The native app has **not passed the full design audit**. This is the working
 discrepancy list, not a release approval.
 
+## Transfer review
+
+`tools/transfer-ui-audit.sh` builds a separate native window using the production
+transfer review component and Go capture helper. Its Git files and cached state
+are synthetic and private under `build/.transfer-ui.*`; its server transport is
+a fixture. It never signs in to a provider or uploads files to a server.
+
+The component adds file selection, captured-file inspection, excluded paths,
+pinned base, preparation, source verification and final permission review to
+the approved Move to cloud layout. Automated tests cover those state transitions
+and the bundled helper. The computer-use walkthrough is still pending: the
+latest attempt could not start because macOS was locked. This harness does not
+replace the full app's signed-in transfer or two-Mac acceptance.
+
 ## Review method
 
 Use a separately identified native development app and synthetic provider
