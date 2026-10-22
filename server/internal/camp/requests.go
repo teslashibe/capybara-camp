@@ -60,14 +60,17 @@ type Request struct {
 	RunnerGrantID        string                      `json:"-"`
 	ContextRevision      int64                       `json:"context_revision"`
 	StreamSeq            int64                       `json:"stream_seq"`
+	QuotedSources        []ImportedPlanningSource    `json:"quoted_sources,omitempty"`
+	QuotedContextDigest  string                      `json:"quoted_context_digest,omitempty"`
 }
 type RequestAction struct {
-	Output     string         `json:"output,omitempty"`
-	Usage      *PlanningUsage `json:"usage,omitempty"`
-	Action     string         `json:"action"`
-	LeaseToken string         `json:"lease_token,omitempty"`
-	Outcome    string         `json:"outcome,omitempty"`
-	Evidence   string         `json:"evidence,omitempty"`
+	QuotedContextDigest string         `json:"quoted_context_digest,omitempty"`
+	Output              string         `json:"output,omitempty"`
+	Usage               *PlanningUsage `json:"usage,omitempty"`
+	Action              string         `json:"action"`
+	LeaseToken          string         `json:"lease_token,omitempty"`
+	Outcome             string         `json:"outcome,omitempty"`
+	Evidence            string         `json:"evidence,omitempty"`
 }
 
 const requestColumns = `r.id,r.camp_id,r.session_id,r.requester_user_id,r.owner_user_id,r.owner_device_id,r.permission_revision,r.revision,r.prompt,r.model,r.effort,r.speed,r.state,
@@ -105,7 +108,22 @@ func loadRequest(ctx context.Context, tx pgx.Tx, campID, id string) (Request, er
 		}
 		r.Sources = append(r.Sources, source)
 	}
-	return r, rows.Err()
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return r, err
+	}
+	if r.Kind == "planning" {
+		var raw []byte
+		if err = tx.QueryRow(ctx, `SELECT quoted_sources FROM planning_versions WHERE plan_id=$1 AND version=$2`, r.PlanID, r.PlanVersion).Scan(&raw); err != nil {
+			return r, err
+		}
+		if err = json.Unmarshal(raw, &r.QuotedSources); err != nil {
+			return r, err
+		}
+		r.QuotedContextDigest = quotedContextDigest(r.QuotedSources)
+	}
+	return r, nil
 }
 
 func (s *Store) requestAccess(ctx context.Context, tx pgx.Tx, r Request) (Session, error) {
@@ -519,6 +537,9 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 	}
 	if _, err = s.readSession(ctx, tx, a, campID, r.SessionID); err != nil {
 		return Request{}, err
+	}
+	if input.Action == "start" && r.QuotedContextDigest != "" && input.QuotedContextDigest != r.QuotedContextDigest {
+		return r, ErrInput
 	}
 	leaseValid := false
 	if r.LeaseToken != "" && input.LeaseToken == r.LeaseToken {

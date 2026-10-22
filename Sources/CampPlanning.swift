@@ -155,15 +155,15 @@ struct CampPlanningState: Codable, Sendable {
     func restartDraft(_ ticket: CloudPlanningResult) async throws {
         let activeState = state.tickets.first { $0.id == ticket.id }?.state ?? ticket.version.state
         guard ticket.creatorUserId == context?.actor.userId, let revision = ticket.revision, !pending(ticket.id), !["running", "needs_review"].contains(activeState) else { throw CampError.message("Stop or review the current plan before starting over") }
-        guard ticket.version.imported?.localSources.isEmpty != false else {
-            throw CampError.message("This imported plan has local source snapshots. Keep them in history until their Camp context is ready for a new planning turn")
-        }
+        let verified = try await verifiedDetail(ticket)
         var input = CloudPlanningInput(title: ticket.title, projectId: ticket.projectId, brief: ticket.version.brief, shared: ticket.shared ?? false,
             planners: ticket.version.planners.sorted { $0.slot < $1.slot }.map { CloudPlannerInput(sessionId: $0.sessionId, model: $0.model, effort: $0.effort, speed: $0.speed, execution: executionTargets[$0.sessionId]) }, sources: ticket.version.sources)
         input.mergeSlot = ticket.version.mergeSlot
         input.mode = ticket.version.mode
+        input.quotedSourceIds = verified.version.allQuotedSources.map(\.id)
+        input.quotedSourceVersion = verified.version.version
         state.drafts.removeAll { $0.id == ticket.id }
-        state.drafts.append(CloudPlanDraft(id: ticket.id, input: input, restartPlanID: ticket.id, baseRevision: revision))
+        state.drafts.append(CloudPlanDraft(id: ticket.id, input: input, restartPlanID: ticket.id, baseRevision: revision, quotedSources: verified.version.allQuotedSources))
         try await persist(); publish()
     }
     func start(_ id: String, sources: [CloudSourceRef]) async {
@@ -190,6 +190,12 @@ struct CampPlanningState: Codable, Sendable {
             state.operations.append(CampPlanOperation(command: command, draftID: id)); publish()
             try await persist(); wake()
         } catch { self.error = "The shared plan could not be queued" }
+    }
+    func removeQuotedSource(_ sourceID: String, from id: String) {
+        guard let index = state.drafts.firstIndex(where: { $0.id == id }), !pending(id) else { return }
+        state.drafts[index].quotedSources?.removeAll { $0.id == sourceID }
+        let ids = state.drafts[index].quotedSources?.map(\.id) ?? []
+        edit(id) { $0.quotedSourceIds = ids }
     }
     func cancelDraft(_ id: String) async {
         guard let index = state.drafts.firstIndex(where: { $0.id == id }) else { return }
@@ -218,14 +224,18 @@ struct CampPlanningState: Codable, Sendable {
     func verifiedDetail(_ ticket: CloudPlanningResult) async throws -> CloudPlanningResult {
         guard let c = context, ticket.campId == c.scope.campId, ticket.valid,
               ticket.referencedSessions.isSubset(of: visibleSessions) else { throw CampCloudError.invalidResponse }
+        return try await readDetail(id: ticket.id, version: ticket.version.version)
+    }
+    func readDetail(id: String, version: Int) async throws -> CloudPlanningResult {
+        guard let c = context, UUID(uuidString: id) != nil, version > 0 else { throw CampCloudError.invalidResponse }
         let access = accessRevision
         let data = try await c.transport.perform(CampPublication(kind: "read", method: "GET",
-            path: "/v1/camps/\(c.scope.campId)/planning/\(ticket.id)?version=\(ticket.version.version)", body: Data()))
+            path: "/v1/camps/\(c.scope.campId)/planning/\(id)?version=\(version)", body: Data()))
         try check(c)
         let current = try CampWire.decoder().decode(CloudPlanningResult.self, from: data)
-        guard accessRevision == access, current.valid, current.campId == c.scope.campId, current.id == ticket.id,
+        guard accessRevision == access, current.valid, current.campId == c.scope.campId, current.id == id,
               current.referencedSessions.isSubset(of: visibleSessions),
-              current.version.version == ticket.version.version else { throw CampCloudError.invalidResponse }
+              current.version.version == version else { throw CampCloudError.invalidResponse }
         return current
     }
     func flush() async {

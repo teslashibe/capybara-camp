@@ -156,7 +156,7 @@ private struct SharedPlanningSources: View {
     @State private var generation = UUID()
 
     var body: some View {
-        if !result.version.sources.isEmpty || result.version.imported?.localSources.isEmpty == false {
+        if !result.version.sources.isEmpty || !result.version.allQuotedSources.isEmpty {
             ScrollView(.horizontal) {
                 HStack {
                     ForEach(result.version.sources, id: \.sessionId) { source in
@@ -164,7 +164,7 @@ private struct SharedPlanningSources: View {
                             open(source.sessionId, imported: false)
                         }
                     }
-                    ForEach(result.version.imported?.localSources ?? []) { source in
+                    ForEach(result.version.allQuotedSources) { source in
                         Button("@ " + (source.title.isEmpty ? "Imported source" : source.title)) { open(source.id, imported: true) }
                     }
                     if loading { ProgressView().controlSize(.small) }

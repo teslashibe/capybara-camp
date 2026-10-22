@@ -1,5 +1,19 @@
 import Foundation
 
+struct PlanningQuoteLink {
+    let planID: String
+    let version: Int
+    let sourceID: String
+    var id: String { "plan-source:\(planID):\(version):\(sourceID)" }
+    init(planID: String, version: Int, sourceID: String) { self.planID = planID; self.version = version; self.sourceID = sourceID }
+    init?(id: String) {
+        let parts = id.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 4, parts[0] == "plan-source", UUID(uuidString: String(parts[1])) != nil,
+              let version = Int(parts[2]), version > 0, parts[3].range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { return nil }
+        self.init(planID: String(parts[1]), version: version, sourceID: String(parts[3]))
+    }
+}
+
 struct ImportedPlanningSource: Codable, Equatable, Identifiable, Sendable {
     var id: String
     var title: String
@@ -51,9 +65,14 @@ struct ImportedPlanningSnapshot: Codable, Equatable, Sendable {
     }
 }
 
+func validPlanningQuotes(_ sources: [ImportedPlanningSource], sharedCount: Int) -> Bool {
+    sources.count + sharedCount <= 20 && sources.allSatisfy(\.valid) && Set(sources.map(\.id)).count == sources.count &&
+        sources.reduce(0, { $0 + $1.messages.reduce(0, { $0 + $1.text.utf8.count }) }) <= 256 << 10
+}
+
 func inspectImportedPlanningSource(_ plan: CloudPlanningResult, sourceID: String, scope: CloudScope, permissions: [String: Int64]) throws -> ContextInspection {
-    guard plan.valid, plan.campId == scope.campId, let imported = plan.version.imported,
-          let source = imported.localSources.first(where: { $0.id == sourceID }),
+    guard plan.valid, plan.campId == scope.campId,
+          let source = plan.version.allQuotedSources.first(where: { $0.id == sourceID }),
           plan.referencedSessions.allSatisfy({ permissions["camp:" + $0] != nil }) else { throw CampCloudError.invalidResponse }
     return ContextInspection(sourceID: "plan-source:" + source.id, title: source.title.isEmpty ? "Imported source" : source.title,
         messages: source.messages, selectedMessage: source.messages.first?.id ?? "", scope: scope.key,
@@ -61,6 +80,23 @@ func inspectImportedPlanningSource(_ plan: CloudPlanningResult, sourceID: String
 }
 
 extension CampStore {
+    func openQuotedPlanningLink(id: String, revision: String, message: String) {
+        guard let link = PlanningQuoteLink(id: id), let scope = cloud.scope else { banner = "This quoted planning source is unavailable"; return }
+        Task {
+            do {
+                let plan = try await sharedPlanning.readDetail(id: link.planID, version: link.version)
+                guard cloud.scope == scope, let source = plan.version.allQuotedSources.first(where: { $0.id == link.sourceID }), source.revision == revision,
+                      source.messages.contains(where: { $0.id == message }) else { throw CampCloudError.invalidResponse }
+                let permissions = try plan.referencedSessions.reduce(into: [String: Int64]()) { values, id in
+                    guard let value = cloudSessions["camp:" + id] else { throw CampCloudError.invalidResponse }
+                    values["camp:" + id] = value.permissionRevision
+                }
+                var inspection = try inspectImportedPlanningSource(plan, sourceID: link.sourceID, scope: scope, permissions: permissions)
+                inspection.selectedMessage = message
+                contextInspection = inspection
+            } catch is CancellationError {} catch { if cloud.scope == scope { banner = error.localizedDescription } }
+        }
+    }
     func inspectPlanningSource(_ plan: CloudPlanningResult, sourceID: String, imported: Bool) async throws -> ContextInspection {
         guard let scope = cloud.scope else { throw CampCloudError.cacheUnavailable }
         let permissions = try plan.referencedSessions.reduce(into: [String: Int64]()) { result, id in

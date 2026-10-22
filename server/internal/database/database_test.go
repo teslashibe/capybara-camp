@@ -203,7 +203,7 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 		t.Fatal(err)
 	}
 	// An empty import table can roll back without affecting prior histories.
-	if _, err = provider.Down(ctx); err != nil {
+	if _, err = provider.DownTo(ctx, 25); err != nil {
 		t.Fatal("Empty planning-import downgrade failed", err)
 	}
 	if _, err = provider.Down(ctx); err == nil {
@@ -218,8 +218,20 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO planning_imports(camp_id,owner_user_id,source_id,plan_id,input_sha256) VALUES($1,$2,$3,$4,$5)`, camp, id, strings.Repeat("e", 64), plan, bytes.Repeat([]byte{21}, 32)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = provider.Down(ctx); err != nil {
+		t.Fatal("Empty quoted-context rollback failed", err)
+	}
 	if _, err = provider.Down(ctx); err == nil {
 		t.Fatal("Downgrade discarded imported planning history")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE planning_versions SET quoted_sources='[{}]' WHERE plan_id=$1`, plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.Down(ctx); err == nil {
+		t.Fatal("Downgrade discarded carried quoted context")
 	}
 	if err = Ready(ctx, pool); err != nil {
 		t.Fatal("Rejected downgrade changed schema readiness", err)

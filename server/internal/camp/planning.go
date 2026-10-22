@@ -49,16 +49,18 @@ func planningExecution(session Session) PlanningExecution {
 }
 
 type PlanningInput struct {
-	Mode         string         `json:"mode,omitempty"`
-	Title        string         `json:"title"`
-	ProjectID    string         `json:"project_id"`
-	Brief        string         `json:"brief"`
-	Shared       bool           `json:"shared"`
-	Planners     []PlannerInput `json:"planners"`
-	Sources      []SourceRef    `json:"sources"`
-	BudgetPolicy string         `json:"budget_policy"`
-	MergeSlot    int            `json:"merge_slot"`
-	Start        bool           `json:"start,omitempty"`
+	Mode                string         `json:"mode,omitempty"`
+	Title               string         `json:"title"`
+	ProjectID           string         `json:"project_id"`
+	Brief               string         `json:"brief"`
+	Shared              bool           `json:"shared"`
+	Planners            []PlannerInput `json:"planners"`
+	Sources             []SourceRef    `json:"sources"`
+	BudgetPolicy        string         `json:"budget_policy"`
+	MergeSlot           int            `json:"merge_slot"`
+	Start               bool           `json:"start,omitempty"`
+	QuotedSourceIDs     []string       `json:"quoted_source_ids,omitempty"`
+	QuotedSourceVersion int64          `json:"quoted_source_version,omitempty"`
 }
 type Planner struct {
 	PlannerInput
@@ -79,19 +81,20 @@ type PlanningStep struct {
 	Usage     *PlanningUsage `json:"usage,omitempty"`
 }
 type PlanningVersion struct {
-	Mode         string                  `json:"mode"`
-	Version      int64                   `json:"version"`
-	State        string                  `json:"state"`
-	Brief        string                  `json:"brief"`
-	Sources      []SourceRef             `json:"sources"`
-	BudgetPolicy string                  `json:"budget_policy"`
-	CallLimit    int                     `json:"call_limit"`
-	InputTarget  int64                   `json:"input_target"`
-	OutputTarget int64                   `json:"output_target"`
-	MergeSlot    int                     `json:"merge_slot"`
-	Planners     []Planner               `json:"planners"`
-	Steps        []PlanningStep          `json:"steps"`
-	Imported     *PlanningImportSnapshot `json:"imported,omitempty"`
+	Mode          string                   `json:"mode"`
+	Version       int64                    `json:"version"`
+	State         string                   `json:"state"`
+	Brief         string                   `json:"brief"`
+	Sources       []SourceRef              `json:"sources"`
+	BudgetPolicy  string                   `json:"budget_policy"`
+	CallLimit     int                      `json:"call_limit"`
+	InputTarget   int64                    `json:"input_target"`
+	OutputTarget  int64                    `json:"output_target"`
+	MergeSlot     int                      `json:"merge_slot"`
+	Planners      []Planner                `json:"planners"`
+	Steps         []PlanningStep           `json:"steps"`
+	Imported      *PlanningImportSnapshot  `json:"imported,omitempty"`
+	QuotedSources []ImportedPlanningSource `json:"quoted_sources,omitempty"`
 }
 type PlanningTicket struct {
 	ID            string          `json:"id"`
@@ -206,8 +209,19 @@ func insertPlanningVersion(ctx context.Context, tx pgx.Tx, id string, v Planning
 	if err != nil {
 		return err
 	}
+	quotes := v.QuotedSources
+	if quotes == nil {
+		quotes = []ImportedPlanningSource{}
+	}
+	quoted, err := json.Marshal(quotes)
+	if err != nil {
+		return err
+	}
 	_, err = tx.Exec(ctx, `INSERT INTO planning_versions(plan_id,version,state,brief,sources,budget_policy,merge_slot,mode,call_limit) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, v.Version, v.State, v.Brief, source, v.BudgetPolicy, v.MergeSlot, v.Mode, v.CallLimit)
 	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE planning_versions SET quoted_sources=$3 WHERE plan_id=$1 AND version=$2`, id, v.Version, quoted); err != nil {
 		return err
 	}
 	for _, p := range v.Planners {
@@ -224,7 +238,7 @@ func insertPlanningVersion(ctx context.Context, tx pgx.Tx, id string, v Planning
 
 func (s *Store) CreatePlanning(ctx context.Context, a auth.Actor, campID, key string, input PlanningInput) (PlanningTicket, error) {
 	input.Title = strings.TrimSpace(input.Title)
-	if !validName(input.Title) || !validID(input.ProjectID) {
+	if !validName(input.Title) || !validID(input.ProjectID) || len(input.QuotedSourceIDs) > 0 || input.QuotedSourceVersion != 0 {
 		return PlanningTicket{}, ErrInput
 	}
 	tx, err := s.pool.Begin(ctx)
@@ -302,12 +316,15 @@ func (s *Store) loadPlanning(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 		version = p.ActiveVersion
 	}
 	v := PlanningVersion{Version: version, Planners: []Planner{}, Steps: []PlanningStep{}}
-	var sources, imported []byte
-	err = tx.QueryRow(ctx, `SELECT state,brief,sources,budget_policy,call_limit,input_target,output_target,merge_slot,mode,import_snapshot FROM planning_versions WHERE plan_id=$1 AND version=$2`, id, version).Scan(&v.State, &v.Brief, &sources, &v.BudgetPolicy, &v.CallLimit, &v.InputTarget, &v.OutputTarget, &v.MergeSlot, &v.Mode, &imported)
+	var sources, imported, quoted []byte
+	err = tx.QueryRow(ctx, `SELECT state,brief,sources,budget_policy,call_limit,input_target,output_target,merge_slot,mode,import_snapshot,quoted_sources FROM planning_versions WHERE plan_id=$1 AND version=$2`, id, version).Scan(&v.State, &v.Brief, &sources, &v.BudgetPolicy, &v.CallLimit, &v.InputTarget, &v.OutputTarget, &v.MergeSlot, &v.Mode, &imported, &quoted)
 	if err != nil {
 		return p, accessError(err)
 	}
 	if err = json.Unmarshal(sources, &v.Sources); err != nil {
+		return p, err
+	}
+	if err = json.Unmarshal(quoted, &v.QuotedSources); err != nil {
 		return p, err
 	}
 	rows, err := tx.Query(ctx, `SELECT slot,session_id,profile_id,owner_user_id,owner_device_id,permission_revision,provider,model,effort,speed,execution_location,execution_epoch,COALESCE(execution_workspace_id::text,'') FROM planning_participants WHERE plan_id=$1 AND version=$2 ORDER BY slot`, id, version)
@@ -754,6 +771,9 @@ func (s *Store) ActOnPlanning(ctx context.Context, a auth.Actor, campID, id, key
 		definition.Shared = p.Shared
 		v, err := s.preparePlanning(ctx, tx, a, campID, definition)
 		if err != nil {
+			return p, err
+		}
+		if err = s.retainPlanningQuotes(ctx, tx, p, definition, &v); err != nil {
 			return p, err
 		}
 		if definition.Start {

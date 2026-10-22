@@ -46,7 +46,9 @@ actor WorkerFixture: CampPublishingTransport {
         } else {
             guard body["lease_token"] as? String == request.leaseToken else { throw CampCloudError.server(409, "invalid_transition") }
             switch operation.kind {
-            case "start": request.state = "started"
+            case "start":
+                if let digest = request.quotedContextDigest, body["quoted_context_digest"] as? String != digest { throw CampCloudError.server(400, "context_not_acknowledged") }
+                request.state = "started"
             case "release": request.state = "queued"; request.leaseToken = nil
             case "heartbeat": break
             case "finish", "reconcile":
@@ -109,6 +111,8 @@ actor WorkerFixture: CampPublishingTransport {
 
         let planCache = try CampCache(directory: root.appendingPathComponent("planning"))
         var planRequest = request(); planRequest.kind = "planning"; planRequest.planId = UUID().uuidString; planRequest.planVersion = 1; planRequest.planStep = 0
+        planRequest.quotedSources = [ImportedPlanningSource(id: String(repeating: "a", count: 64), title: "Saved context", revision: String(repeating: "b", count: 64), messages: [Message(id: "quoted", role: "assistant", text: "Retained planning context")])]
+        planRequest.quotedContextDigest = String(repeating: "c", count: 64)
         let planAPI = WorkerFixture(request: planRequest, session: remote)
         await planAPI.configure(finish: true)
         let planWorker = CampLocalWorker(readFences:{[]},cache: planCache, automatic: false)
@@ -116,8 +120,9 @@ actor WorkerFixture: CampPublishingTransport {
         planWorker.readHistory = { _ in preconditionFailure("Planning must not read or resume the anchor conversation") }
         var planStarts = 0
         var planComplete: ((ConversationResult) -> Void)?
-        planWorker.execute = { native, work, prompt, history, _, completed in
+        planWorker.execute = { native, work, prompt, history, contexts, completed in
             check(work.isPlanning && work.planStep == 0 && history.isEmpty)
+            check(contexts.count == 1 && PlanningQuoteLink(id: contexts[0].id)?.planID == work.planId && contexts[0].messages.first?.text == "Retained planning context", "Quoted context did not reach the local CLI")
             planStarts += 1; planComplete = completed
             return LocalConversation(session: native, history: [], prompt: prompt)
         }
@@ -158,7 +163,7 @@ actor WorkerFixture: CampPublishingTransport {
         try await planCache.saveWorkerAttempt(retained, scope: scope, expectedEpoch: 0)
         try await planCache.clear(scope)
         let scrubbed = try await planCache.attempts(scope).first
-        check(scrubbed?.output == nil && scrubbed?.usage == nil && scrubbed?.request.prompt == "", "Signing out retained private planning output")
+        check(scrubbed?.output == nil && scrubbed?.usage == nil && scrubbed?.request.prompt == "" && scrubbed?.request.quotedSources == nil && scrubbed?.request.quotedContextDigest == nil, "Signing out retained private planning output")
 
         let cancelledCache = try CampCache(directory: root.appendingPathComponent("cancel-during-start"))
         let cancelledAPI = WorkerFixture(request: planRequest, session: remote)

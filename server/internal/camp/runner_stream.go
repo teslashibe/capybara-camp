@@ -215,6 +215,17 @@ func (g *GitStore) runnerTurn(ctx context.Context, token, workspaceID, id string
 		}
 		sources = append(sources, map[string]any{"id": "camp:" + ref.SessionID + ":" + strconv.Itoa(index), "title": "Camp session", "revision": strconv.FormatInt(ref.TranscriptRevision, 10), "messages": values})
 	}
+	for _, quote := range r.QuotedSources {
+		values := []map[string]string{}
+		for _, m := range quote.Messages {
+			size += len(m.Text)
+			if len(m.Text) > 48<<10 || size > 256<<10 {
+				return RunnerTurn{}, ErrInput
+			}
+			values = append(values, map[string]string{"id": m.ID, "role": m.Role, "text": m.Text})
+		}
+		sources = append(sources, map[string]any{"id": "plan-source:" + r.PlanID + ":" + strconv.FormatInt(r.PlanVersion, 10) + ":" + quote.ID, "title": quote.Title, "revision": quote.Revision, "messages": values})
+	}
 	if len(sources) > 20 {
 		return RunnerTurn{}, ErrInput
 	}

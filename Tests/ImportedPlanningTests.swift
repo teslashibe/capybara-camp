@@ -46,6 +46,9 @@ actor ImportedPlanningFixture: CampPublishingTransport {
                 steps: [.init(ordinal: 0, slot: 0, phase: "draft", state: "outcome_unknown", output: "Partial saved answer", usage: usage)], sources: [], mode: .single, imported: imported),
             campId: scope.campId, creatorUserId: actor.userId, shared: false, revision: 1, activeVersion: 1, updatedAt: Date())
         precondition(result.valid)
+        let link = PlanningQuoteLink(planID: result.id, version: 1, sourceID: source.id)
+        precondition(PlanningQuoteLink(id: link.id)?.sourceID == source.id)
+        precondition(PlanningQuoteLink(id: "plan-source:bad:0:wrong") == nil)
         let decoded = try CampWire.decoder().decode(CloudPlanningResult.self, from: CampWire.encoder().encode(result))
         precondition(decoded.version == result.version && decoded.id == result.id, "Imported source metadata was discarded")
         var bad = result; bad.version.imported?.localSources[0].messages[0] = Message(id: "source-message", role: "unexpected", text: "Wrong role")
@@ -75,6 +78,10 @@ actor ImportedPlanningFixture: CampPublishingTransport {
         let verified = try await manager.verifiedDetail(result)
         precondition(cached.details["\(result.id):1"]?.version.imported == imported)
         precondition(verified.version.imported == imported)
+        var wrongVersion = result; wrongVersion.version.version = 2; wrongVersion.activeVersion = 2
+        await fixture.replace(wrongVersion)
+        do { _ = try await manager.readDetail(id: result.id, version: 1); preconditionFailure("A different planning version satisfied a citation") } catch {}
+        await fixture.replace(result)
         await manager.act("resume", on: result)
         let afterResume = try await cache.planning(scope)
         precondition(!afterResume.operations.contains { $0.planID == result.id }, "Imported history queued a provider action")
@@ -83,8 +90,12 @@ actor ImportedPlanningFixture: CampPublishingTransport {
         precondition(ready.valid)
         await fixture.replace(ready)
         try await manager.install(ready)
-        do { try await manager.restartDraft(ready); preconditionFailure("Restart silently discarded quoted context") }
-        catch { precondition(error.localizedDescription.contains("local source snapshots"), "The context-loss guard was not checked") }
+        try await manager.restartDraft(ready)
+        precondition(manager.draft(ready.id)?.quotedSources == [source] && manager.draft(ready.id)?.input.quotedSourceIds == [source.id], "Restart dropped quoted context")
+        precondition(manager.draft(ready.id)?.input.quotedSourceVersion == 1)
+        manager.removeQuotedSource(source.id, from: ready.id)
+        precondition(manager.draft(ready.id)?.quotedSources == [] && manager.draft(ready.id)?.input.quotedSourceIds == [], "Explicit quote removal failed")
+        await manager.cancelDraft(ready.id)
         await fixture.replace(result)
         try await manager.install(result)
         await fixture.holdNext()

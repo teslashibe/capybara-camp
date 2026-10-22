@@ -131,6 +131,8 @@ without queuing provider work. The native reader displays imported sources,
 saved errors and unconfirmed outcomes. The native review/upload flow and preservation
 of existing implementation conversations remain unfinished; see
 [local-plan import](docs/planning.md#local-plan-import-api).
+Start over retains quoted context in the new draft. Removing a source there
+does not alter the saved planning history.
 
 ### Default execution settings
 

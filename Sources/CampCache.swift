@@ -471,7 +471,7 @@ actor CampCache {
                 if ["completed", "failed", "cancelled"].contains(attempt.state) {
                     try execute("DELETE FROM attempts WHERE id=?", [.text(attempt.id)]); continue
                 }
-                attempt.request.prompt = ""; attempt.request.sources = []; attempt.output = nil; attempt.usage = nil; attempt.state = "uncertain"
+                attempt.request.prompt = ""; attempt.request.sources = []; attempt.request.quotedSources = nil; attempt.request.quotedContextDigest = nil; attempt.output = nil; attempt.usage = nil; attempt.state = "uncertain"
                 try saveAttempt(attempt)
             }
         }

@@ -44,8 +44,8 @@ is clean. This does not complete the native import flow or live acceptance.
 The native reader retains imported source metadata and displays saved
 errors and unconfirmed outcomes in the existing planning workspace. Source
 inspection rechecks the plan and source access, including late responses after
-sign-out or revocation. The upload/review flow and carrying quoted sources into
-a restarted Camp plan remain unfinished.
+sign-out or revocation. Restarted drafts now carry selected quotes into a new
+immutable version; the upload/review flow remains unfinished.
 The focused native import, planning and context suites pass. They exercise
 metadata/cache round trips, invalid snapshots, blocked historical execution,
 and a read held across revocation or sign-out. The shared app module compiles;
@@ -53,6 +53,19 @@ the staged secret scan is clean. Visual acceptance remains pending because
 computer use still reports the Mac as locked.
 Both synthetic audit apps have been rebuilt with this module and pass strict
 signature verification using the existing development identity.
+
+Schema 27 retains selected quoted context when an imported plan starts a new
+version. The native draft keeps its source chips, with explicit removal, and
+both worker paths pass the saved text through the existing context tool. A
+worker must acknowledge the context digest before starting. Citation links
+identify the exact plan/version/source; opening them rechecks access. Sign-out
+scrubs quoted context from retained local recovery records. Full Go race tests
+and vet pass; focused native import, planning, worker and context tests pass.
+Final targeted checks cover removing/reinstating old sources, unknown source
+IDs, worker acknowledgement and source-access rejection. Linux builds pass and
+the synthetic audit apps have been rebuilt and signature-verified. Native
+import/upload, full implementation-history transfer and visual acceptance are
+still open.
 
 The current Local-to-Cloud increment adds native working-file selection, exact
 captured-file previews, a pinned Git base, destination preparation, source

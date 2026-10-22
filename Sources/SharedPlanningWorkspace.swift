@@ -182,6 +182,23 @@ struct SharedPlanningWorkspace: View {
                     TextEditor(text: Binding(get: { planning.draft(id)?.input.brief ?? "" }, set: { value in planning.edit(id) { $0.brief = value } }))
                         .font(.system(size: 13)).scrollContentBackground(.hidden).frame(height: 90).padding(8).background(.white).clipShape(RoundedRectangle(cornerRadius: 8)).accessibilityLabel("Planning brief").disabled(planning.pending(id))
                     if let destination = store.selected { SessionContextComposer(store: store, mentions: store.mentions, destination: destination).disabled(planning.pending(id)) }
+                    if let quotes = draft.quotedSources, !quotes.isEmpty {
+                        ScrollView(.horizontal) {
+                            HStack {
+                                ForEach(quotes) { source in
+                                    HStack(spacing: 4) {
+                                        Button("@ " + (source.title.isEmpty ? "Quoted source" : source.title)) {
+                                            guard let scope = store.cloud.scope else { return }
+                                            store.contextInspection = ContextInspection(sourceID: "plan-source:" + source.id, title: source.title,
+                                                messages: source.messages, selectedMessage: source.messages.first?.id ?? "", scope: scope.key, sourcePermissions: [:])
+                                        }.buttonStyle(.borderless)
+                                        Button { planning.removeQuotedSource(source.id, from: id) } label: { Image(systemName: "xmark").frame(width: 28,height: 28) }
+                                            .buttonStyle(.plain).help("Remove quoted source from this revision")
+                                    }.font(.system(size: 11)).disabled(planning.pending(id))
+                                }
+                            }
+                        }
+                    }
                     HStack {
                         Picker("Project", selection: Binding(get: { draft.input.projectId }, set: { value in planning.edit(id) { $0.projectId = value } })) { ForEach(store.cloud.projects.filter { !$0.isArchived }) { Text($0.name).tag($0.id) } }.frame(maxWidth: 300)
                         Toggle("Share plan with Camp", isOn: Binding(get: { draft.input.shared }, set: { value in planning.edit(id) { $0.shared = value } })).toggleStyle(.checkbox)

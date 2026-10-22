@@ -125,6 +125,7 @@ extension CampStore {
         let id = String(parts.path.dropFirst())
         let revision = parts.queryItems?.first { $0.name == "revision" }?.value ?? ""
         let message = parts.queryItems?.first { $0.name == "message" }?.value ?? ""
+        if id.hasPrefix("plan-source:") { openQuotedPlanningLink(id: id, revision: revision, message: message); return }
         guard let source = mentions.source(id: id, revision: revision, message: message), let destination = selected else {
             openCloudHistoryLink(id:id,revision:revision,message:message)
             return

@@ -20,18 +20,19 @@ import (
 )
 
 type turnRecord struct {
-	Workspace camp.Workspace    `json:"workspace"`
-	ClaimID   string            `json:"claim_id"`
-	RequestID string            `json:"request_id"`
-	StartKey  string            `json:"start_key"`
-	FinishKey string            `json:"finish_key"`
-	Phase     string            `json:"phase"`
-	Seq       int64             `json:"seq"`
-	Pending   *camp.StreamEvent `json:"pending,omitempty"`
-	Delivered []string          `json:"delivered"`
-	Outcome   string            `json:"outcome"`
-	Output    string            `json:"output,omitempty"`
-	Deadline  time.Time         `json:"deadline"`
+	Workspace           camp.Workspace    `json:"workspace"`
+	ClaimID             string            `json:"claim_id"`
+	RequestID           string            `json:"request_id"`
+	StartKey            string            `json:"start_key"`
+	FinishKey           string            `json:"finish_key"`
+	Phase               string            `json:"phase"`
+	Seq                 int64             `json:"seq"`
+	Pending             *camp.StreamEvent `json:"pending,omitempty"`
+	Delivered           []string          `json:"delivered"`
+	Outcome             string            `json:"outcome"`
+	Output              string            `json:"output,omitempty"`
+	Deadline            time.Time         `json:"deadline"`
+	QuotedContextDigest string            `json:"quoted_context_digest,omitempty"`
 }
 
 type profileRecord struct {
@@ -131,6 +132,7 @@ func (w *Worker) turnAction(ctx context.Context, r *turnRecord, action string) (
 	key := uuid.NewString()
 	if action == "start" {
 		key = r.StartKey
+		input.QuotedContextDigest = r.QuotedContextDigest
 	}
 	if action == "finish" || action == "reconcile" {
 		key = r.FinishKey
@@ -337,6 +339,7 @@ func (w *Worker) turnTick(ctx context.Context, state camp.RunnerAccountState, wo
 		}
 		input.ExecutionContext = approval.Fingerprint
 	}
+	r.QuotedContextDigest = work.Request.QuotedContextDigest
 	if r.Phase == "claimed" {
 		r.Phase = "starting"
 		r.Deadline = time.Now().Add(30 * time.Minute)

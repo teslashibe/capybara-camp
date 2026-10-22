@@ -93,6 +93,7 @@ import SwiftUI
     private func action(_ name: String, attempt: CloudAttempt, context c: Context, key: String = UUID().uuidString) async throws -> CloudRequest {
         try check(c)
         var body: [String: Any] = ["action": name, "lease_token": attempt.request.leaseToken ?? ""]
+        if name == "start", let digest = attempt.request.quotedContextDigest { body["quoted_context_digest"] = digest }
         if let value = attempt.outcome { body["outcome"] = value }
         if let value = attempt.evidence { body["evidence"] = value }
         if attempt.request.isPlanning, ["finish", "reconcile"].contains(name) {
@@ -253,7 +254,10 @@ import SwiftUI
         }
     }
     private func sourceContexts(_ request: CloudRequest, _ c: Context) async throws -> [SessionContext] {
-        var result: [SessionContext] = [], bytes = 0
+        let quoted = request.quotedSources ?? []
+        guard validPlanningQuotes(quoted, sharedCount: request.sources.count) else { throw CampCloudError.invalidResponse }
+        var result: [SessionContext] = quoted.map { SessionContext(id: PlanningQuoteLink(planID: request.planId ?? "", version: request.planVersion ?? 0, sourceID: $0.id).id, title: $0.title, revision: $0.revision, messages: $0.messages) }
+        var bytes = quoted.reduce(0, { $0 + $1.messages.reduce(0, { $0 + $1.text.utf8.count }) })
         for source in request.sources {
             if let ids = source.messageIds, !ids.isEmpty {
                 let operation = CampPublication(kind: "read", method: "POST", path: "/v1/camps/\(c.scope.campId)/sessions/\(source.sessionId)/context", body: try CampWire.encoder().encode(source))

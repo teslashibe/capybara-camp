@@ -91,10 +91,15 @@ struct CloudRequest: Codable, Identifiable, Equatable, Sendable {
     var planStep: Int? = nil
     var executionLocation: String? = nil
     var streamSeq: Int64? = nil
+    var quotedSources: [ImportedPlanningSource]? = nil
+    var quotedContextDigest: String? = nil
     var isPlanning: Bool { kind == "planning" }
     var supportedWork: Bool {
-        if isPlanning { return planId.flatMap(UUID.init(uuidString:)) != nil && (planVersion ?? 0) > 0 && (0..<5).contains(planStep ?? -1) }
-        return (kind == nil || kind == "chat") && planId == nil
+        let quoted = quotedSources ?? []
+        let validQuotes = validPlanningQuotes(quoted, sharedCount: sources.count) &&
+            (quoted.isEmpty ? quotedContextDigest == nil || quotedContextDigest == "" : quotedContextDigest?.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil)
+        if isPlanning { return validQuotes && planId.flatMap(UUID.init(uuidString:)) != nil && (planVersion ?? 0) > 0 && (0..<5).contains(planStep ?? -1) }
+        return quoted.isEmpty && (kind == nil || kind == "chat") && planId == nil
     }
 }
 struct CloudEvent: Codable, Sendable {
@@ -145,6 +150,8 @@ struct CloudPlanningResult: Codable, Equatable, Sendable {
         var version: Int; var state: String; var brief: String; var planners: [Planner]; var steps: [Step]; var sources: [CloudSourceRef]; var mergeSlot: Int = 0; var budgetPolicy: String = "calls"
         var mode: PlanningMode? = nil
         var imported: ImportedPlanningSnapshot? = nil
+        var quotedSources: [ImportedPlanningSource]? = nil
+        var allQuotedSources: [ImportedPlanningSource] { (quotedSources ?? []) + (imported?.localSources ?? []) }
         var workflow: PlanningMode { mode ?? .comparison }
     }
     var id: String; var title: String; var projectId: String; var version: Version
@@ -158,7 +165,7 @@ struct CloudPlanningResult: Codable, Equatable, Sendable {
         Set(version.planners.map(\.slot)) == Set(0..<version.workflow.plannerCount) &&
         (0..<version.workflow.plannerCount).contains(version.mergeSlot) &&
         version.planners.allSatisfy { $0.model.utf8.count <= 200 && UUID(uuidString: $0.sessionId) != nil && ($0.execution?.valid ?? true) } &&
-        version.sources.count <= 20 && version.sources.allSatisfy { UUID(uuidString: $0.sessionId) != nil } && (version.imported?.valid(for: version) ?? true) && version.steps.count <= version.workflow.turnLimit &&
+        version.sources.count <= 20 && version.sources.allSatisfy { UUID(uuidString: $0.sessionId) != nil } && validPlanningQuotes(version.allQuotedSources, sharedCount: version.sources.count) && (version.imported?.valid(for: version) ?? true) && version.steps.count <= version.workflow.turnLimit &&
         Set(version.steps.map(\.id)).count == version.steps.count && version.steps.allSatisfy {
             $0.output.utf8.count <= 8192 && (0..<version.workflow.plannerCount).contains($0.slot) && (0..<version.workflow.turnLimit).contains($0.ordinal) &&
             $0.slot == ($0.ordinal == 4 ? version.mergeSlot : $0.ordinal % 2) && $0.phase == ($0.ordinal < 2 ? "draft" : $0.ordinal < 4 ? "review" : "merge")
@@ -174,6 +181,8 @@ struct CloudPlanningInput: Codable, Equatable, Sendable {
     var planners: [CloudPlannerInput]; var sources: [CloudSourceRef] = []
     var budgetPolicy = "strict_tokens"; var mergeSlot = 0; var start = true
     var mode: PlanningMode? = nil
+    var quotedSourceIds: [String]? = nil
+    var quotedSourceVersion: Int? = nil
     var workflow: PlanningMode { mode ?? .comparison }
 }
 struct CloudPlanDraft: Codable, Equatable, Identifiable, Sendable {
@@ -181,6 +190,7 @@ struct CloudPlanDraft: Codable, Equatable, Identifiable, Sendable {
     var updatedAt = Date(); var cancelRequested = false
     var restartPlanID: String? = nil; var baseRevision: Int64? = nil
     var tuningHistory: [String: ModelTuning] = [:]
+    var quotedSources: [ImportedPlanningSource]? = nil
 }
 struct CloudPlanSummary: Codable, Equatable, Identifiable, Sendable {
     var id: String; var projectId: String; var creatorUserId: String; var title: String; var shared: Bool

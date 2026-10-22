@@ -199,10 +199,28 @@ Camp, losing plan access or observing a source permission change closes the
 snapshot; a late response cannot reopen it. Ordinary shared-plan source chips
 use the same access checks.
 
-Restarting an imported version with quoted local sources is currently blocked
-until those sources can be carried into the new Camp request. The reader must
-not silently drop them. Completing that continuation path, native import review
-and implementation-history transfer remain release work.
+Start over carries quoted local sources into the new draft. Inspect a source
+or remove it with its close control before starting. Removing it affects only
+the new revision; the saved version keeps its context. Native import review and
+implementation-history transfer remain release work.
+
+On restart, `input.quoted_source_version` names the saved version and
+`input.quoted_source_ids` selects its quoted sources. The server copies only
+those stored snapshots into the new revision. An explicit empty array removes
+them; omitting the selection when quotes exist is rejected. A different plan's
+source IDs cannot supply content. Ordinary Camp references and quoted messages
+share the 20-source and 256 KiB context budget.
+
+Schema 27 persists carried quotes independently from imported results. Both
+owner-Mac workers and cloud runners receive them through the existing context
+tool, keeping the brief separate from source text. Starting the request requires
+the worker's acknowledgement of `quoted_context_digest`; an older worker that
+ignores the new field cannot start without the context. This acknowledgement
+records protocol support, not proof of what the model read. Sign-out clears
+quotes from retained local recovery records.
+Quoted-context citations contain the plan, version and source identity. Opening
+one fetches that authorized version and selects the referenced message; it does
+not substitute the latest plan or a newer source revision.
 
 Planning tables were introduced in schema 5. The current required schema is
 defined by `SchemaVersion` in [the database package](../server/internal/database/database.go).
