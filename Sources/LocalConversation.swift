@@ -44,6 +44,7 @@ struct ConversationResult: Sendable {
     @Published private(set) var answering: Set<String> = []
     private(set) var providerSessionID: String?
     private(set) var activity = ""
+    private(set) var effectivePermissions = ""
     var changed: (() -> Void)?
     var completed: ((ConversationResult) -> Void)?
     var didAccept: (() -> Void)?
@@ -69,14 +70,17 @@ struct ConversationResult: Sendable {
     func start(prompt: String, model: String, tuning: ModelTuning,
                contexts: [SessionContext] = [], mode: ConversationMode = .chat,
                executionApproved: Bool = false, newSession: Bool = false,
-               executionContext: String = "",
+               executionContext: String = "", permissions: PermissionSettings? = nil,
                makeProcess: () throws -> Process = { try Bridge.process("conversation") }) throws {
         guard process == nil, !finished, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               prompt.utf8.count <= 65536 else { throw CampError.message("Write a prompt under 64 KB") }
         self.mode = mode
         guard mode != .implementation || (executionApproved && executionContext.count == 64) else { throw CampError.message("Approve the implementation before enabling project tools") }
+        guard permissions?.valid(for: session.provider) ?? true else { throw CampError.message("Invalid provider permission settings") }
         let p = try makeProcess(), out = Pipe(), err = Pipe(), stdin = Pipe()
-        var payload = try JSONSerialization.data(withJSONObject: ["session": try JSONSerialization.jsonObject(with: JSONEncoder().encode(session)), "prompt": prompt, "model": model, "effort": tuning.effort, "speed": tuning.speed, "context": JSONSerialization.jsonObject(with: JSONEncoder().encode(contexts)), "mode": mode.rawValue, "executionApproved": executionApproved, "newSession": newSession, "executionContext": executionContext])
+        var object: [String: Any] = ["session": try JSONSerialization.jsonObject(with: JSONEncoder().encode(session)), "prompt": prompt, "model": model, "effort": tuning.effort, "speed": tuning.speed, "context": try JSONSerialization.jsonObject(with: JSONEncoder().encode(contexts)), "mode": mode.rawValue, "executionApproved": executionApproved, "newSession": newSession, "executionContext": executionContext]
+        if let permissions { object["permissions"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(permissions)) }
+        var payload = try JSONSerialization.data(withJSONObject: object)
         payload.append(10)
         p.standardOutput = out; p.standardError = err; p.standardInput = stdin
         let writer = ConversationInput(stdin.fileHandleForWriting)
@@ -165,6 +169,7 @@ struct ConversationResult: Sendable {
         case "error": terminal = "failed"; notice = value
         case "notice": notice = value
         case "activity": activity = String(value.prefix(8192))
+        case "permissions": effectivePermissions = String(value.prefix(1024))
         case "approvalResolved":
             approvals.removeAll { $0.id == requestID }; if let requestID { answering.remove(requestID) }
         case "approvalRejected":
@@ -187,11 +192,14 @@ struct ConversationResult: Sendable {
         guard !finished, !stopped, providerSessionID == nil else { return }
         providerSessionID = id; sessionCreated?(id); changed?()
     }
-    func answer(_ id: String, allow: Bool, answers: [String: [String]] = [:]) {
+    func answer(_ id: String, allow: Bool, answers: [String: [String]] = [:], decision: String? = nil) {
         guard !finished, !stopped, !answering.contains(id), let approval = approvals.first(where: { $0.id == id }),
               !allow || approval.canApprove, let input else { return }
         do {
-            var data = try JSONSerialization.data(withJSONObject: ["type": "approval", "id": id, "allow": allow, "answers": answers]); data.append(10)
+            if let decision { guard approval.decisions?.contains(where: { $0.id == decision && $0.allows == allow }) == true else { return } }
+            var value: [String: Any] = ["type": "approval", "id": id, "allow": allow, "answers": answers]
+            if let decision { value["decision"] = decision }
+            var data = try JSONSerialization.data(withJSONObject: value); data.append(10)
             guard data.count <= 65536 else { throw CampError.message("The answer is too long") }
             answering.insert(id); changed?()
             let payload = data

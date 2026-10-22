@@ -510,7 +510,7 @@ def chat(s, prompt, model="", effort="", speed=""):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("action", choices=["scan", "transcript", "export-page", "chat", "conversation", "execution-context", "add-source", "activity", "codex-activity-watch", "children"])
+    p.add_argument("action", choices=["scan", "transcript", "export-page", "chat", "conversation", "execution-context", "permissions", "add-source", "activity", "codex-activity-watch", "children"])
     args = p.parse_args()
     if args.action == "scan":
         emit(scan())
@@ -531,7 +531,11 @@ def main():
         run(json.loads(sys.stdin.readline()))
     elif args.action == "execution-context":
         from execution import execution_context
-        emit(execution_context(json.load(sys.stdin)['session']))
+        value = json.load(sys.stdin)
+        emit(execution_context(value['session'], value.get('permissions')))
+    elif args.action == "permissions":
+        from permissions import catalog
+        emit(catalog(json.load(sys.stdin)['session']))
     else:
         request = json.load(sys.stdin)
         if args.action == "export-page":

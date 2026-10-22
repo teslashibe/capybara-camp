@@ -16,6 +16,8 @@ struct ImplementationAttempt: Codable, Equatable, Identifiable {
     var state = "starting"
     var error = ""
     var usage = ConversationUsage()
+    var permissions: PermissionSettings? = nil
+    var permissionFingerprint: String? = nil
 }
 
 struct LocalImplementation: Codable, Equatable, Identifiable {
@@ -36,6 +38,7 @@ struct LocalImplementation: Codable, Equatable, Identifiable {
     var valid: Bool {
         UUID(uuidString: id) != nil && planVersion > 0 && planDigest.count == 64 && context.fingerprint.count == 64 &&
         ["Codex", "Claude"].contains(executor.session.provider) && context.provider == executor.session.provider &&
+        (executor.permissions?.valid(for: executor.session.provider) ?? true) &&
         !context.cwd.isEmpty && !context.profile.isEmpty && !providerSessionID.isEmpty && providerSessionID.utf8.count <= 200 &&
         !providerSessionID.contains("/") && !providerSessionID.contains("\\") && executor.model.utf8.count <= 200 &&
         ["approved", "starting", "running", "idle", "complete", "needs_review"].contains(state) &&
@@ -44,7 +47,8 @@ struct LocalImplementation: Codable, Equatable, Identifiable {
         Set(attempts.map(\.id)).count == attempts.count && Set(messages.map(\.id)).count == messages.count &&
         messages.reduce(0, { $0 + $1.text.utf8.count }) <= 8 << 20 &&
         attempts.allSatisfy { UUID(uuidString: $0.id) != nil && $0.prompt.utf8.count <= 65536 && $0.model.utf8.count <= 200 &&
-            ["starting", "running", "completed", "cancelled", "failed", "uncertain"].contains($0.state) }
+            ["starting", "running", "completed", "cancelled", "failed", "uncertain"].contains($0.state) &&
+            ($0.permissions?.valid(for: executor.session.provider) ?? true) && ($0.permissionFingerprint == nil || $0.permissionFingerprint?.count == 64) }
     }
     func session(id: String, title: String, updated: Double) -> CampSession {
         let source = executor.session
@@ -79,6 +83,7 @@ extension LocalPlanning {
         guard let plan = ticket(id), plan.current.number == expectedVersion, plan.current.state == "ready",
               plan.current.completedCount == plan.current.workflow.turnLimit, plan.implementation?.active != true,
               plan.selectedExecutor == executor.session.id, plan.executorChoices?[executor.session.id] == executor,
+              executor.permissions?.valid(for: executor.session.provider) ?? true,
               plan.implementation?.state != "needs_review" || reviewedUnknown,
               context.provider == executor.session.provider, context.fingerprint.count == 64,
               URL(fileURLWithPath: context.cwd).resolvingSymlinksInPath() == URL(fileURLWithPath: executor.session.cwd).resolvingSymlinksInPath(),
@@ -91,7 +96,7 @@ extension LocalPlanning {
         return modifyTicket(id) { $0.implementations = ($0.implementations ?? []) + [execution] }
     }
     @discardableResult
-    func beginImplementation(_ id: String, attempt: String, prompt: String, model: String, tuning: ModelTuning) -> Bool {
+    func beginImplementation(_ id: String, attempt: String, prompt: String, model: String, tuning: ModelTuning, permissions: PermissionSettings? = nil, permissionFingerprint: String? = nil) -> Bool {
         guard let plan = ticket(id), let execution = plan.implementation,
               ["approved", "idle", "complete"].contains(execution.state),
               !execution.attempts.contains(where: { $0.id == attempt }),
@@ -99,7 +104,7 @@ extension LocalPlanning {
               !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         return modifyImplementation(id, executionID: execution.id) { execution in
             execution.state = "starting"; execution.boardStage = nil
-            execution.attempts.append(ImplementationAttempt(id: attempt, prompt: prompt, model: model, tuning: tuning))
+            execution.attempts.append(ImplementationAttempt(id: attempt, prompt: prompt, model: model, tuning: tuning, permissions: permissions, permissionFingerprint: permissionFingerprint))
             execution.messages.append(Message(id: attempt, role: "user", text: prompt))
         }
     }
@@ -148,9 +153,11 @@ extension LocalPlanning {
 }
 
 extension CampStore {
-    func inspectExecution(_ source: CampSession) async throws -> ExecutionContext {
+    func inspectExecution(_ source: CampSession, permissions: PermissionSettings? = nil) async throws -> ExecutionContext {
         if let executionContextReader { return try await executionContextReader(source) }
-        let data = try await Bridge.call("execution-context", input: JSONSerialization.data(withJSONObject: ["session": object(source)]))
+        var input: [String: Any] = ["session": object(source)]
+        if let permissions { input["permissions"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(permissions)) }
+        let data = try await Bridge.call("execution-context", input: JSONSerialization.data(withJSONObject: input))
         return try JSONDecoder().decode(ExecutionContext.self, from: data)
     }
     func implementationReferences(_ session: CampSession, adding references: [SessionReference]) throws -> [SessionReference] {
@@ -169,13 +176,14 @@ extension CampStore {
             banner = "The selected plan or executor changed. Review the settings again."; return
         }
         do {
-            let context = try await inspectExecution(executor.session)
+            let context = try await inspectExecution(executor.session, permissions: executor.permissions)
             let contexts = try await resolveContexts(plan.current.sources, destination: executor.session)
             try mentions.record(plan.current.sources)
             guard planning.approveImplementation(id, expectedVersion: expectedVersion, executor: executor, context: context, reviewedUnknown: reviewedUnknown),
                   let approved = planning.ticket(id), let execution = approved.implementation else {
                 banner = "The plan changed or its implementation needs review"; return
             }
+            try sessionPermissions.save(nil, for: id)
             reviewingPlan = nil; open(approved.session)
             selectModel(approved.session, executor.model)
             tune(approved.session, effort: executor.tuning.effort, speed: executor.tuning.speed)

@@ -28,8 +28,8 @@ struct ImplementationSetupView: View {
                         selectModel: { model in planning.editExecutor(id) { p in p.tuningByModel[p.model] = p.tuning; p.model = model.isEmpty ? p.session.model : model; p.tuning = p.tuningByModel[p.model] ?? ModelTuning() } },
                         tune: { effort, speed in planning.editExecutor(id) { p in if let effort { p.tuning.effort = effort }; if let speed { p.tuning.speed = speed } } })
                     Label("This Mac · \(executor.session.cwd)", systemImage: "desktopcomputer").font(.system(size: 11)).foregroundStyle(campMuted).textSelection(.enabled)
-                    Text("Uses this profile’s CLI project rules. Requests for additional access appear in the chat.")
-                        .font(.system(size: 12)).foregroundStyle(campMuted)
+                    ImplementationPermissions(store: store, planning: planning, id: id, executor: executor)
+                        .disabled(busy || plan.implementation?.active == true)
                     if plan.implementation?.state == "needs_review" {
                         Text("The previous implementation has an unconfirmed outcome. A new implementation starts another provider session and may repeat work.").font(.system(size: 12)).foregroundStyle(.orange)
                         Toggle("I reviewed the previous implementation", isOn: $reviewedUnknown).toggleStyle(.checkbox)

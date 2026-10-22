@@ -18,7 +18,7 @@ A small native Mac app for your local Codex and Claude Code sessions. Find a con
 - Choose the model, effort and supported speed for the next reply
 - Discover new sessions automatically and follow open transcript changes as the CLI writes them
 
-This is a **chat-only preview**. Camp-started sessions have tools, hooks and MCP servers disabled. A session open in another app must be closed there before Camp can send into it. External terminal conversations update when their CLI saves text; they do not expose an independent live token stream to Camp.
+The public v0.0.1 release is a **chat-only preview**. Its Camp-started sessions have tools, hooks and MCP servers disabled. V1 development adds explicit [local session permissions](docs/session-permissions.md) and approved plan implementation. A session open in another app must be closed there before Camp can send into it. External terminal conversations update when their CLI saves text; they do not expose an independent live token stream to Camp.
 
 ## Requirements
 

@@ -18,6 +18,7 @@ struct LocalPlanner: Codable, Equatable {
     var model: String
     var tuning: ModelTuning
     var tuningByModel: [String: ModelTuning] = [:]
+    var permissions: PermissionSettings? = nil
 }
 
 struct LocalPlanStep: Codable, Equatable, Identifiable {

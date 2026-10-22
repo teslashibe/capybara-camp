@@ -225,8 +225,10 @@ def run(request, input_stream=None, emit=None, command=None):
         raise ValueError('Approve the implementation before enabling project tools')
     if implementing:
         from execution import execution_context
-        if request.get('executionContext') != execution_context(s)['fingerprint']:
+        if request.get('executionContext') != execution_context(s, request.get('permissions'))['fingerprint']:
             raise ValueError('The project or CLI settings changed. Review the implementation approval again.')
+    elif request.get('permissions'):
+        raise ValueError('Project permissions require explicit execution approval')
     if type(request.get('newSession', False)) is not bool:
         raise ValueError('Invalid session creation choice')
     if planning and s.get("provider") == "Claude":
@@ -271,7 +273,7 @@ def run(request, input_stream=None, emit=None, command=None):
         if command is None:
             if implementing:
                 from execution import execution_command
-                command = execution_command(s, native_command, request.get('newSession', False))
+                command = execution_command(s, native_command, request.get('newSession', False), request.get('permissions'))
                 if grant and s['provider'] == 'Claude':
                     command += ['--mcp-config', json.dumps({'mcpServers': {'camp_context': grant.server}}),
                                 '--append-system-prompt-file', str(grant.instructions_path), '--system-prompt-snapshot', 'off']
@@ -342,6 +344,11 @@ def codex_turn(c, s, request, controls, emit):
     implementing = request.get('mode') == 'implementation'
     if implementing:
         params = {'threadId': s['sessionID'], 'cwd': s['cwd']}
+        if request.get('permissions'):
+            from permissions import check_codex, codex_overrides
+            requirements = c.rpc('configRequirements/read', {}).get('requirements') or {}
+            check_codex(request['permissions'], merged, requirements)
+            params.update(codex_overrides(request['permissions']))
         if request.get('_camp_mcp'):
             params['config'] = {'mcp_servers': {**merged.get('mcp_servers', {}), 'camp_context': {**request['_camp_mcp'], 'enabled': True, 'required': True}}}
             params['developerInstructions'] = (merged.get('developer_instructions') or '') + request.get('_camp_context_instructions', '')
@@ -349,7 +356,8 @@ def codex_turn(c, s, request, controls, emit):
         params["model"] = request["model"]
     if implementing and request.get('newSession'):
         params.pop('threadId')
-        s['sessionID'] = c.rpc('thread/start', params)['thread']['id']
+        response = c.rpc('thread/start', params)
+        s['sessionID'] = response['thread']['id']
         emit({'type': 'session', 'sessionID': s['sessionID']})
     elif request.get("mode") == "planning":
         params.pop("threadId")
@@ -357,7 +365,14 @@ def codex_turn(c, s, request, controls, emit):
         params["developerInstructions"] += " This is one bounded planning step. Do not execute the plan or change project files."
         s["sessionID"] = c.rpc("thread/start", params)["thread"]["id"]
     else:
-        c.rpc("thread/resume", params)
+        response = c.rpc("thread/resume", params)
+    if implementing:
+        from permissions import codex_summary, codex_overrides, sandbox_mode
+        for key, value in codex_overrides(request.get('permissions')).items():
+            actual = (response.get('activePermissionProfile') or {}).get('id') if key == 'permissions' else sandbox_mode(response) if key == 'sandbox' else response.get(key)
+            if actual != value:
+                raise ValueError('Codex did not confirm the selected permission settings; no prompt was submitted')
+        emit({'type': 'permissions', 'text': codex_summary(response)})
     turn_params = {"threadId": s["sessionID"], "input": [{"type": "text", "text": request["prompt"]}], "approvalPolicy": "on-request"}
     if implementing:
         turn_params.pop('approvalPolicy')
@@ -505,6 +520,13 @@ def claude_turn(c, s, request, controls, emit):
             user(request['prompt'], str(uuid.uuid4()))
             continue
         if kind == "system" and event.get("subtype") == "init":
+            if implementing:
+                actual_mode = event.get('permissionMode')
+                selected_mode = (request.get('permissions') or {}).get('claudeMode')
+                if selected_mode and actual_mode not in (selected_mode, 'default' if selected_mode == 'manual' else selected_mode):
+                    emit({'type': 'error', 'message': 'Claude did not confirm the selected permission mode'})
+                    return
+                emit({'type': 'permissions', 'text': actual_mode or 'Claude project rules'})
             if request.get("_camp_mcp") and not any(server.get("name") == "camp_context" and server.get("status") == "connected" for server in event.get("mcp_servers", [])):
                 emit({"type": "error", "message": "The selected context tool did not connect. No context was supplied."})
                 return

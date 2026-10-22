@@ -10,6 +10,12 @@ struct ProviderQuestion: Codable, Equatable, Identifiable, Sendable {
     var allowText: Bool
 }
 
+struct ProviderApprovalDecision: Codable, Equatable, Identifiable, Sendable {
+    var id: String
+    var label: String
+    var allows: Bool
+}
+
 struct ProviderApproval: Codable, Equatable, Identifiable, Sendable {
     var id: String
     var kind: String
@@ -18,11 +24,14 @@ struct ProviderApproval: Codable, Equatable, Identifiable, Sendable {
     var questions: [ProviderQuestion]
     var canApprove: Bool
     var acceptLabel: String
+    var decisions: [ProviderApprovalDecision]? = nil
 
     var valid: Bool {
         UUID(uuidString: id) != nil && ["command", "file", "permissions", "tool", "question"].contains(kind) &&
         detail.utf8.count <= 65536 && title.utf8.count <= 512 && questions.count <= 8 &&
-        Set(questions.map(\.id)).count == questions.count && questions.allSatisfy { $0.options.count <= 16 && $0.prompt.utf8.count <= 8192 }
+        Set(questions.map(\.id)).count == questions.count && questions.allSatisfy { $0.options.count <= 16 && $0.prompt.utf8.count <= 8192 } &&
+        (decisions ?? []).count <= 16 && Set((decisions ?? []).map(\.id)).count == (decisions ?? []).count &&
+        (decisions ?? []).allSatisfy { !$0.id.isEmpty && $0.id.utf8.count <= 200 && !$0.label.isEmpty && $0.label.utf8.count <= 256 }
     }
 }
 
@@ -82,9 +91,24 @@ struct ProviderApprovalView: View {
             HStack {
                 if !approval.canApprove { Text("The full action is unavailable for review").font(.caption).foregroundStyle(campMuted) }
                 Spacer()
-                Button(approval.kind == "question" ? "Cancel" : "Decline") { conversation.answer(approval.id, allow: false) }
-                Button(sending ? "Sending…" : approval.acceptLabel) { conversation.answer(approval.id, allow: true, answers: answers) }
-                    .buttonStyle(.borderedProminent).tint(campGreen).disabled(!approval.canApprove || !ready)
+                if let decisions = approval.decisions, !decisions.isEmpty {
+                    ForEach(decisions.filter { !$0.allows }) { decision in
+                        Button(decision.label) { conversation.answer(approval.id, allow: false, decision: decision.id) }
+                    }
+                    let allowed = decisions.filter(\.allows)
+                    if allowed.count == 1, let decision = allowed.first {
+                        Button(sending ? "Sending…" : decision.label) { conversation.answer(approval.id, allow: true, decision: decision.id) }
+                            .buttonStyle(.borderedProminent).tint(campGreen).disabled(!approval.canApprove)
+                    } else if !allowed.isEmpty {
+                        Menu(sending ? "Sending…" : "Allow…") {
+                            ForEach(allowed) { decision in Button(decision.label) { conversation.answer(approval.id, allow: true, decision: decision.id) } }
+                        }.disabled(!approval.canApprove)
+                    }
+                } else {
+                    Button(approval.kind == "question" ? "Cancel" : "Decline") { conversation.answer(approval.id, allow: false) }
+                    Button(sending ? "Sending…" : approval.acceptLabel) { conversation.answer(approval.id, allow: true, answers: answers) }
+                        .buttonStyle(.borderedProminent).tint(campGreen).disabled(!approval.canApprove || !ready)
+                }
             }.disabled(sending).fixedSize(horizontal: false, vertical: true)
         }.padding(12).background(campGreen.opacity(0.06)).clipShape(RoundedRectangle(cornerRadius: 9))
     }

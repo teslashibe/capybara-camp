@@ -41,9 +41,18 @@ elif action == 'codex-activity-watch':
 elif action == 'execution-context':
     request = json.load(sys.stdin)['session']
     emit(dict(fingerprint='a'*64, cwd=request['cwd'], profile=request['root'], provider=request['provider'], permissionSummary='Synthetic CLI rules'))
+elif action == 'permissions':
+    provider = json.load(sys.stdin)['session']['provider']
+    emit(dict(provider=provider, modes=['manual','acceptEdits','plan','auto','dontAsk','bypassPermissions'] if provider=='Claude' else [],
+              profiles=[':read-only',':workspace',':danger-full-access'] if provider=='Codex' else [],
+              sandboxes=['read-only','workspace-write','danger-full-access'] if provider=='Codex' else [],
+              approvals=['on-request','never'] if provider=='Codex' else [], reviewers=['user','auto_review'] if provider=='Codex' else [],
+              inherited='Synthetic CLI profile settings', note='Synthetic permission catalog'))
 elif action == 'transcript':
     request = json.load(sys.stdin)
     messages = [dict(id='fixture-context', role='assistant', text='Synthetic context: preserve the same ticket and show both provider plans')] if request['session']['sessionID'] in ('Codex', 'Claude') else []
+    history = root / ('history-' + hashlib.sha256(request['session']['sessionID'].encode()).hexdigest() + '.json')
+    if history.exists(): messages = json.loads(history.read_text())
     emit(dict(messages=messages, total=len(messages)))
 elif action == 'export-page':
     request = json.load(sys.stdin)
@@ -58,6 +67,7 @@ elif action == 'conversation':
         assert request['executionApproved'] and request['executionContext'] == 'a' * 64
         if request['newSession']:
             emit(dict(type='session', sessionID=request['session']['sessionID']))
+        emit(dict(type='permissions',text='Synthetic permissions · '+str(request.get('permissions',{}))))
         emit(dict(type='started'))
         ident = str(uuid.uuid4())
         emit(dict(type='approval', id=ident, kind='file', title='Write the implementation test result',
@@ -70,9 +80,15 @@ elif action == 'conversation':
             if control.get('type') == 'approval' and control.get('id') == ident:
                 if control.get('allow'):
                     time.sleep(min(10, max(0, float(os.environ.get('CAMP_FIXTURE_COMPLETION_DELAY', '0')))))
-                    (root/'implementation-proof.txt').write_text('Implemented with '+request['model'])
+                    model = request['model'] or request['session'].get('model','Session default')
+                    (root/'implementation-proof.txt').write_text('Implemented with '+model)
                     emit(dict(type='approvalResolved', requestID=ident))
-                    emit(dict(type='text', text='Implementation completed with '+request['model']+'\n\nThe synthetic change was approved and the original planning history is retained'))
+                    text = 'Implementation completed with '+model+'\n\nThe synthetic change was approved and the original planning history is retained'
+                    history = root / ('history-' + hashlib.sha256(request['session']['sessionID'].encode()).hexdigest() + '.json')
+                    messages = json.loads(history.read_text()) if history.exists() else []
+                    messages += [dict(id=str(uuid.uuid4()),role='user',text=request['prompt']),dict(id=str(uuid.uuid4()),role='assistant',text=text)]
+                    history.write_text(json.dumps(messages))
+                    emit(dict(type='text', text=text))
                     emit(dict(type='done')); sys.exit(0)
                 emit(dict(type='cancelled')); sys.exit(0)
     assert request['mode'] == 'planning'

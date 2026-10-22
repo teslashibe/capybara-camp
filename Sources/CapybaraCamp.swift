@@ -78,6 +78,7 @@ struct QueuedPrompt: Codable, Identifiable {
     let speed: String
     var state = "waiting"
     var sources: [SessionReference]? = nil
+    var permissionRevision: String? = nil
 }
 struct Transcript: Codable { let messages: [Message]; let total: Int }
 enum Stage: String, CaseIterable, Codable {
@@ -88,6 +89,7 @@ enum Stage: String, CaseIterable, Codable {
 }
 private struct SessionStateSnapshot {
     let running: Set<String>
+    let waiting: Set<String>
     let activity: [String: LiveState]
     let remote: [String: CloudSession]
     let requests: Set<String>
@@ -98,6 +100,7 @@ private struct SessionStateSnapshot {
         return activity[session.id]?.state == "running"
     }
     func stage(_ session: CampSession) -> Stage {
+        if waiting.contains(session.id) || remote[session.id]?.state == "waiting" { return .attention }
         if busy(session) { return .progress }
         if let live = activity[session.id], ["waiting", "unknown"].contains(live.state) { return .attention }
         return stages[session.id] ?? (session.archived ? .done : .ready)
@@ -261,6 +264,8 @@ final class TranscriptWatch {
     @Published var banner = ""
     @Published var sourceSheet = false
     @Published var projectSheet = false
+    @Published var permissionSheet: CampSession?
+    let sessionPermissions: LocalPermissions
     @Published var projectFilter = "all" { didSet { filterRevision += 1 } }
     let projects: LocalProjects
     private(set) var cloudProjectIndex: [String:CampProject] = [:]
@@ -344,12 +349,14 @@ final class TranscriptWatch {
     }
     private func stateSnapshot() -> SessionStateSnapshot {
         var running = Set(conversations.keys)
+        var waiting = Set(conversations.filter { !$0.value.approvals.isEmpty }.keys)
         running.formUnion(planning.tickets.filter { $0.stage == .progress }.map(\.id))
         running.formUnion(sharedPlanning.tickets.filter { $0.stage == .progress }.map { "camp-plan:" + $0.id })
         var observed = activity
         for plan in planning.tickets { if let state = activityFor(plan.session) { observed[plan.id] = state } }
         for share in sharing.shares where running.contains(share.local.id) { running.insert("camp:" + share.id) }
-        return SessionStateSnapshot(running: running, activity: observed, remote: cloudSessions,
+        for share in sharing.shares where waiting.contains(share.local.id) { waiting.insert("camp:" + share.id) }
+        return SessionStateSnapshot(running: running, waiting: waiting, activity: observed, remote: cloudSessions,
             requests: Set(cloud.requests.filter { !$0.isPlanning && ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId)), stages: stages)
     }
     func boardSessions(_ stage: Stage) -> [CampSession] {
@@ -366,6 +373,7 @@ final class TranscriptWatch {
         self.mentions = SessionMentions(directory: stateDirectory)
         self.planning = LocalPlanning(directory: stateDirectory, makeProcess: conversationProcess)
         self.notifications = CampNotifications(directory: stateDirectory)
+        self.sessionPermissions = LocalPermissions(directory: stateDirectory)
         self.conversationProcess = conversationProcess
         #if CAMP_DEVELOPMENT
         cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"), vault: ProcessInfo.processInfo.environment["CAMP_DEV_EPHEMERAL_CREDENTIALS"] == "1" ? MemoryCampCredentials() : CampKeychain(), allowLoopback: true)
@@ -401,7 +409,8 @@ final class TranscriptWatch {
         sharing.localStatus = { [weak self] local in
             guard let self else { return LocalShareStatus(model: local.model, state: "unknown", stage: "Ready", externalOwner: false) }
             let live = self.activity[local.id]
-            return LocalShareStatus(model: self.effectiveModel(local), state: self.conversations[local.id] != nil ? "running" : live?.state ?? "idle", stage: self.stage(local).rawValue, externalOwner: live != nil)
+            let run = self.conversations[local.id]
+            return LocalShareStatus(model: self.effectiveModel(local), state: run != nil ? (run!.approvals.isEmpty ? "running" : "waiting") : live?.state ?? "idle", stage: self.stage(local).rawValue, externalOwner: live != nil)
         }
         sharing.changed = { [weak self] in
             guard let self else { return }
@@ -562,6 +571,7 @@ final class TranscriptWatch {
         return activity[execution.executor.session.sourceID + ":" + execution.providerSessionID]
     }
     func stage(_ session: CampSession) -> Stage {
+        if stateSnapshot().waiting.contains(session.id) || cloudSessions[session.id]?.state == "waiting" { return .attention }
         if stateSnapshot().busy(session) { return .progress }
         if let plan = planning.ticket(session.id) { return plan.stage }
         return stateSnapshot().stage(session)
@@ -962,6 +972,13 @@ final class TranscriptWatch {
                history: [Message]? = nil, contexts: [SessionContext] = [], references: [SessionReference] = [], notifyCompletion: Bool = true, completion: ((ConversationResult) -> Void)? = nil) -> Bool {
         let s = planning.ticket(s.id)?.session ?? s
         let execution = planning.ticket(s.id)?.implementation
+        let grant = sessionPermissions.grants[s.id]
+        let permissions = grant?.settings ?? execution?.executor.permissions
+        let fingerprint = grant?.context.fingerprint ?? execution?.context.fingerprint ?? ""
+        guard sessionPermissions.error.isEmpty else { banner = sessionPermissions.error; return false }
+        if let queuedID, let queued = queuedPrompts.first(where: { $0.id == queuedID }), queued.permissionRevision != permissionRevision(s) {
+            banner = "Permissions changed after this prompt was queued. Review and queue it again."; return false
+        }
         guard !s.isCloud, s.provider != "Planning", conversations[s.id] == nil else { banner = "This session already has a running turn"; return false }
         guard conversations.count + planning.activeCount + cloud.worker.activePlanningCount < 4, !planning.uses(s.provider), !cloud.worker.usesPlanningProvider(s.provider), !conversations.values.contains(where: { $0.session.provider == s.provider && $0.session.root == s.root }) else {
             banner = "This profile is busy. Queue the prompt or wait for its current turn"; return false
@@ -970,7 +987,7 @@ final class TranscriptWatch {
         do { try mentions.record(references) } catch { banner = error.localizedDescription; return false }
         let attempt = UUID().uuidString
         let prior = history ?? (selectedID == s.id && !messages.isEmpty ? messages : execution.map { Array($0.messages.suffix(240)) } ?? [])
-        if execution != nil && !planning.beginImplementation(s.id, attempt: attempt, prompt: prompt, model: model, tuning: tuning) {
+        if execution != nil && !planning.beginImplementation(s.id, attempt: attempt, prompt: prompt, model: model, tuning: tuning, permissions: permissions, permissionFingerprint: fingerprint) {
             banner = "Review the implementation before starting another turn"; return false
         }
         let run = LocalConversation(session: s, history: prior, prompt: prompt, queueID: queuedID, references: references, promptID: execution == nil ? nil : attempt)
@@ -980,8 +997,16 @@ final class TranscriptWatch {
                 if !self.planning.bindImplementationSession(s.id, attempt: attempt, providerID: id) { run?.stop() }
             }
         }
+        var waitingForApproval = false
+        var notifiedApprovals = Set<String>()
         run.changed = { [weak self, weak run] in
             guard let self, let run, self.conversations[s.id]?.id == run.id else { return }
+            let waiting = !run.approvals.isEmpty
+            if waiting != waitingForApproval { waitingForApproval = waiting; self.filterRevision += 1; self.sharing.localChanged(); self.objectWillChange.send() }
+            for approval in run.approvals where notifiedApprovals.insert(approval.id).inserted {
+                self.notifications.record(key: "approval:" + approval.id, sessionID: s.id, title: s.title, kind: "attention")
+            }
+            notifiedApprovals.formIntersection(run.approvals.map(\.id))
             if !run.steering, let restored = run.takePendingSteer() { self.restoreDraft(restored, for: s.id) }
             if self.view == "Chat", let selected = self.selected, self.conversation(selected)?.id == run.id {
                 if self.messages != run.messages { self.messages = run.messages }
@@ -1022,9 +1047,9 @@ final class TranscriptWatch {
         }
         do {
             try run.start(prompt: prompt, model: model, tuning: tuning, contexts: contexts,
-                mode: execution == nil ? .chat : .implementation, executionApproved: execution != nil,
+                mode: execution == nil && grant == nil ? .chat : .implementation, executionApproved: execution != nil || grant != nil,
                 newSession: execution.map { !$0.providerSessionCreated } ?? false,
-                executionContext: execution?.context.fingerprint ?? "", makeProcess: conversationProcess)
+                executionContext: fingerprint, permissions: permissions, makeProcess: conversationProcess)
             conversations[s.id] = run; drafts[s.id] = nil; filterRevision += 1
             sharing.localChanged()
             if selectedID == s.id { readGeneration = UUID(); loading = false; historyRequestID = nil; historyDirty = false; messages = run.messages; banner = "" }
@@ -1054,7 +1079,7 @@ final class TranscriptWatch {
         if s.isCloud { send(); return }
         let choice = tuning(s)
         let references = mentions.references(for: s.id)
-        queuedPrompts.append(QueuedPrompt(id: UUID().uuidString, sessionID: s.id, text: draft, model: modelChoices[s.id] ?? (s.isPlan ? s.model : ""), effort: choice.effort, speed: choice.speed, sources: references))
+        queuedPrompts.append(QueuedPrompt(id: UUID().uuidString, sessionID: s.id, text: draft, model: modelChoices[s.id] ?? (s.isPlan ? s.model : ""), effort: choice.effort, speed: choice.speed, sources: references, permissionRevision: permissionRevision(s)))
         guard saveQueue() else { queuedPrompts.removeLast(); return }
         draft = ""; queuePaused = runningID != s.id
         do { try mentions.clear(references, for: s.id) } catch { banner = error.localizedDescription }
@@ -1090,6 +1115,7 @@ final class TranscriptWatch {
     func runNextQueued(sessionID: String? = nil, history: [Message]? = nil) {
         guard let id = sessionID ?? selectedID, enabledQueues.contains(id), let s = sessions.first(where: { $0.id == id }), conversation(s) == nil, let item = queued(s).first else { return }
         guard item.state == "waiting" else { pauseQueue(s.id, true); banner = "Check the transcript before editing and resubmitting the unconfirmed prompt"; return }
+        guard item.permissionRevision == permissionRevision(s) else { pauseQueue(s.id, true); banner = "Permissions changed after this prompt was queued. Review and queue it again."; return }
         guard activityFor(s) == nil else { pauseQueue(s.id, true); banner = "Close this session in \(s.provider) before resuming its Camp queue"; return }
         if let index = queuedPrompts.firstIndex(where: { $0.id == item.id }) { queuedPrompts[index].state = "sending"; guard saveQueue() else { return } }
         guard enabledQueues.contains(s.id) else { return }
@@ -1114,6 +1140,7 @@ final class TranscriptWatch {
             queuedPrompts[index].state = "waiting"; pauseQueue(s.id, true); saveQueue()
         }
     }
+    func pausePermissionQueue(_ id: String) { pauseQueue(id, true) }
     func addSource() {
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.showsHiddenFiles = true
         panel.message = "Choose a Codex home or Claude config folder containing saved sessions"
@@ -1162,6 +1189,7 @@ struct RootView: View {
         .onChange(of: store.view) { _, value in store.observeHistory(); if value == "Chat" { store.loadHistory() } }
         .sheet(isPresented: $store.sourceSheet) { SourcesView(store: store) }
         .sheet(isPresented: $store.projectSheet) { CampProjectsView(store: store, local: store.projects, cloud: store.cloud) }
+        .sheet(item: $store.permissionSheet) { SessionPermissionsView(store: store, session: $0) }
         .sheet(isPresented: $showCamp) { CampConnectionView(cloud: store.cloud) }
         .sheet(item: $store.shareSheet) { session in CampShareView(store: store, cloud: store.cloud, sharing: store.sharing, session: session) }
         .sheet(item: $store.contextInspection) { value in ContextInspectionView(store: store, inspection: value) }
@@ -1273,7 +1301,9 @@ struct SessionCard: View {
     let session: CampSession
     var live: LiveState? { store.activityFor(session) }
     var running: Bool { store.isBusy(session) }
+    var waiting: Bool { store.conversation(session)?.approvals.isEmpty == false || store.cloudSessions[session.id]?.state == "waiting" || live?.state == "waiting" }
     var statusText: String {
+        if waiting { return session.isCloud ? "Waiting for the owner" : "Waiting for your approval" }
         guard let live else { return "Running in Camp" }
         return live.state == "running" ? "Running in \(live.owner)" : live.state == "idle" ? "Open in \(live.owner)" : "\(live.owner) · \(live.state)"
     }
@@ -1287,6 +1317,7 @@ struct SessionCard: View {
                 Menu {
                     ForEach(Stage.allCases, id: \.self) { dest in Button("Move to \(dest.rawValue)") { store.move(session.id, dest) } }
                     ProjectAssignmentMenu(store:store,session:session)
+                    if !session.isCloud && session.provider != "Planning" { Button("Permissions…") { store.permissionSheet = session } }
                     if let local = store.shareSource(session) { Divider(); Button("Share with Camp…") { store.shareSheet = local } }
                 } label: { Image(systemName: "ellipsis").frame(width: 24, height: 20) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Move \(session.title)")
@@ -1307,7 +1338,8 @@ struct SessionCard: View {
             HStack(alignment: .center, spacing: 6) {
                 if running || live != nil {
                     HStack(spacing: 7) {
-                        if running { ProgressView().controlSize(.mini).frame(width: 12, height: 12).accessibilityLabel("Session running") }
+                        if waiting { Image(systemName: "hand.raised").frame(width: 12, height: 12) }
+                        else if running { ProgressView().controlSize(.mini).frame(width: 12, height: 12).accessibilityLabel("Session running") }
                         else { Circle().fill(campGreen).frame(width: 5, height: 5) }
                         Text(statusText).lineLimit(1)
                     }.foregroundStyle(campGreen).font(.system(size: 10))
@@ -1400,6 +1432,7 @@ struct ChatView: View {
                         Label(s.isPlan ? "Implementation" : "Main chat", systemImage: "bubble.left").font(.system(size: 11)); Spacer()
                         if let local = store.shareSource(s) { Button { store.shareSheet = local } label: { Image(systemName: "person.2") }.buttonStyle(.plain).help("Share with Camp").accessibilityLabel("Share with Camp") }
                         ModelMenu(store: store, session: s)
+                        if !s.isCloud && s.provider != "Planning" { Button { store.permissionSheet = s } label: { Image(systemName: "lock.shield") }.buttonStyle(.plain).frame(width: 28, height: 28).help("Permissions").accessibilityLabel("Permissions") }
                     }.padding(.horizontal, 22).padding(.vertical, 8)
                     if let live = store.activityFor(s) { Text("\(live.owner) · \(live.state) · Model choice applies to the next Camp reply").font(.system(size: 11)).foregroundStyle(campGreen).padding(.bottom, 8) }
                     HStack { Text(s.sourceLabel).font(.system(size: 10, weight: .medium)); if !s.accountID.isEmpty { Text("· author \(s.accountID.prefix(8))").font(.system(size: 10)).foregroundStyle(campMuted) }; Spacer(); Menu(store.stage(s).rawValue) { ForEach(Stage.allCases, id: \.self) { stage in Button(stage.rawValue) { store.move(s.id, stage) } } }.fixedSize() }.padding(.horizontal, 22).padding(.vertical, 10)
@@ -1438,7 +1471,7 @@ struct ChatView: View {
                         SessionContextComposer(store: store, mentions: store.mentions, destination: s)
                         TextEditor(text: $store.draft).font(.system(size: 13)).scrollContentBackground(.hidden).frame(minHeight: 55, maxHeight: 100).padding(8).background(.white).clipShape(RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(campInk.opacity(0.13)))
                         HStack(spacing: 10) {
-                            Text(s.isCloud ? "Saved to Camp · Runs on the session owner's Mac after approval" : store.runningID == s.id ? "Steer now or queue for after this turn" : store.activityFor(s) != nil ? "Open in \(s.provider) · Camp queue waits until it is closed" : s.isPlan ? "Uses \(s.sourceLabel) login · CLI project permissions" : "Uses \(s.sourceLabel) login · Chat-only local preview")
+                            Text(s.isCloud ? "Saved to Camp · Runs on the session owner's Mac after approval" : store.runningID == s.id ? "Steer now or queue for after this turn" : store.activityFor(s) != nil ? "Open in \(s.provider) · Camp queue waits until it is closed" : s.isPlan || store.sessionPermissions.grants[s.id] != nil ? "Uses \(s.sourceLabel) login · \(store.permissionSettings(s).summary)" : "Uses \(s.sourceLabel) login · Chat-only local preview")
                                 .font(.system(size: 10)).foregroundStyle(campMuted).fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 8)
                             if store.runningID == s.id || store.activityFor(s) != nil {

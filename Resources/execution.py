@@ -6,7 +6,7 @@ import hashlib
 from pathlib import Path
 
 
-def execution_context(session):
+def execution_context(session, permissions=None):
     """Bind approval to the project/profile and local CLI configuration bytes."""
     if session.get('provider') not in ('Codex', 'Claude'):
         raise ValueError('Choose a supported implementation provider')
@@ -24,6 +24,10 @@ def execution_context(session):
         for parent in [cwd, *cwd.parents]:
             files.update(parent / '.claude' / name for name in ['settings.json', 'settings.local.json'])
     digest = hashlib.sha256(json.dumps([session['provider'], str(root), str(cwd)]).encode())
+    from permissions import normalize
+    selection = normalize(session['provider'], permissions)
+    if selection:
+        digest.update(json.dumps(selection, sort_keys=True, separators=(',', ':')).encode())
     for path in sorted(files):
         digest.update(str(path).encode())
         if not path.exists():
@@ -114,10 +118,31 @@ class ApprovalRelay:
         request = copy.deepcopy(request)
         request['questions'] = normalized
         request['can_approve'] = can_approve
+        decisions = []
+        if self.provider == 'Codex' and kind == 'command':
+            offered = params.get('availableDecisions')
+            offered = ['accept', 'decline'] if offered is None else offered
+            if not isinstance(offered, list) or len(offered) > 16:
+                self.deny(request)
+                return
+            labels = {'accept': 'Allow once', 'acceptForSession': 'Allow for this session',
+                      'decline': 'Decline', 'cancel': 'Decline and stop'}
+            for choice in offered:
+                if isinstance(choice, str) and choice in labels:
+                    decisions.append({'id': choice, 'label': labels[choice], 'allows': choice in ('accept', 'acceptForSession'), 'value': choice})
+                elif isinstance(choice, dict) and set(choice) == {'acceptWithExecpolicyAmendment'}:
+                    decisions.append({'id': str(uuid.uuid4()), 'label': 'Save command rule and allow', 'allows': True, 'value': copy.deepcopy(choice)})
+                elif isinstance(choice, dict) and set(choice) == {'applyNetworkPolicyAmendment'}:
+                    action = choice['applyNetworkPolicyAmendment'].get('network_policy_amendment', {}).get('action')
+                    if action in ('allow', 'deny'):
+                        decisions.append({'id': str(uuid.uuid4()), 'label': 'Save network ' + action + ' rule', 'allows': action == 'allow', 'value': copy.deepcopy(choice)})
+            request['can_approve'] = can_approve = any(d['allows'] for d in decisions)
+        request['decisions'] = decisions
         key = str(uuid.uuid4())
         self.pending[key] = request
         self.emit({'type': 'approval', 'id': key, 'kind': kind, 'title': title,
                    'detail': detail_text, 'questions': normalized, 'canApprove': can_approve,
+                   'decisions': [{k: d[k] for k in ('id', 'label', 'allows')} for d in decisions],
                    'acceptLabel': 'Allow for this turn' if kind == 'permissions' else 'Submit answers' if kind == 'question' else 'Allow once'})
 
     def deny(self, value):
@@ -136,6 +161,17 @@ class ApprovalRelay:
             self.emit({'type': 'approvalRejected', 'requestID': key, 'message': 'This approval is no longer pending'})
             return
         allow = control.get('allow') is True
+        decision = None
+        if control.get('decision') is not None:
+            decision = next((d for d in value['decisions'] if d['id'] == control['decision']), None)
+            if decision is None or decision['allows'] != allow:
+                self.emit({'type': 'approvalRejected', 'requestID': key, 'message': 'Choose an offered approval decision'})
+                return
+        elif value['decisions']:
+            decision = next((d for d in value['decisions'] if d['id'] == ('accept' if allow else 'decline')), None)
+            if decision is None:
+                self.emit({'type': 'approvalRejected', 'requestID': key, 'message': 'Choose an offered approval decision'})
+                return
         answers = control.get('answers', {})
         if allow and not value['can_approve']:
             self.emit({'type': 'approvalRejected', 'requestID': key, 'message': 'The full action cannot be approved from this preview'})
@@ -152,7 +188,9 @@ class ApprovalRelay:
                         (q['options'] and not q['allowText'] and x not in q['options']) for x in selected)):
                     self.emit({'type': 'approvalRejected', 'requestID': key, 'message': 'Choose a valid answer for each question'})
                     return
-        if not allow:
+        if decision is not None:
+            self.connection.write({'id': value['request_id'], 'result': {'decision': decision['value']}})
+        elif not allow:
             self.deny(value)
         elif self.provider == 'Codex':
             kind, params = value['kind'], value['params']
@@ -169,7 +207,9 @@ class ApprovalRelay:
         self.emit({'type': 'approvalResolved', 'requestID': key})
 
 
-def execution_command(session, validated_command, new_session=False):
+def execution_command(session, validated_command, new_session=False, permissions=None):
+    from permissions import normalize
+    selection = normalize(session['provider'], permissions)
     if session['provider'] == 'Codex':
         return ['codex', 'app-server', '--stdio']
     command = list(validated_command)
@@ -181,4 +221,6 @@ def execution_command(session, validated_command, new_session=False):
     if new_session:
         uuid.UUID(session['sessionID'])
         command += ['--session-id', session['sessionID']]
+    if selection.get('claudeMode'):
+        command += ['--permission-mode', selection['claudeMode']]
     return command + ['--permission-prompt-tool', 'stdio', '--input-format', 'stream-json', '--replay-user-messages']
