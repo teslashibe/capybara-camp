@@ -81,7 +81,7 @@ memory and skills are still in development. These features are not included in v
 [cloud execution scope](docs/cloud-execution.md), and [self-hosting](docs/self-hosting.md)
 for the current implementation boundary and [the V1 epic](https://github.com/teslashibe/capybara-camp/issues/1)
 for release acceptance.
-The next [iteration sprint](docs/iteration-2.md) adds single-model planning, client projects, GitHub workspaces, live Codex status and session permission controls.
+V1 also includes a [Codex activity observer](docs/codex-activity.md), with live daemon events and verified desktop turn tracking. The [iteration sprint](docs/iteration-2.md) covers single-model planning, client projects, GitHub workspaces and session permission controls.
 
 In a V1 development build, connect your Camp from the header, then choose
 **Share with Camp** on a session card. Select its project and whether teammates

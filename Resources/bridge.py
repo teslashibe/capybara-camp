@@ -510,13 +510,16 @@ def chat(s, prompt, model="", effort="", speed=""):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("action", choices=["scan", "transcript", "export-page", "chat", "conversation", "execution-context", "add-source", "activity", "children"])
+    p.add_argument("action", choices=["scan", "transcript", "export-page", "chat", "conversation", "execution-context", "add-source", "activity", "codex-activity-watch", "children"])
     args = p.parse_args()
     if args.action == "scan":
         emit(scan())
     elif args.action == "activity":
         from activity import collect
         emit(collect(json.load(sys.stdin)))
+    elif args.action == "codex-activity-watch":
+        from codex_activity import watch
+        watch(json.loads(sys.stdin.readline()), emit)
     elif args.action == "children":
         from activity import children_for
         value = json.load(sys.stdin)

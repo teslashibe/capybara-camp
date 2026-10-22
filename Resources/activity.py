@@ -231,6 +231,9 @@ def collect(request):
 def assert_available(s):
     if s.get('isSubagent'):
         raise ValueError('Subagents are read-only in Camp. Continue their parent session.')
+    if s.get('provider') == 'Codex':
+        from codex_activity import assert_available as assert_codex_available
+        assert_codex_available(s)
     if s.get('provider') == 'Claude':
         # Check immediately before spawning as well as in the UI. Never resume
         # into an independently owned live session and accidentally fork it.

@@ -49,7 +49,7 @@ struct LiveState: Codable, Equatable {
     let owner: String
     let pid: Int
 }
-struct ModelOption: Codable, Identifiable {
+struct ModelOption: Codable, Identifiable, Equatable {
     let id: String
     let label: String
     var efforts: [String] = []
@@ -270,6 +270,9 @@ final class TranscriptWatch {
     @Published var children: [ChildSession] = []
     @Published var childrenLoading = false
     private var observing = false
+    private let codexWatch = CodexActivityWatch()
+    private var polledActivity = ActivityResult(activity: [], sessions: [], models: [:], errors: [:])
+    private var codexActivity = CodexActivityUpdate(activity: [], sessions: [], errors: [:])
     private var scanning = false
     private var refreshPending = false
     private var nextImportCheck = Date.distantPast
@@ -423,6 +426,9 @@ final class TranscriptWatch {
             return self.conversations[local.id]
         }
         cloud.worker.requestUpdated = { [weak cloud] value in Task { await cloud?.acceptWorkerRequest(value) } }
+        codexWatch.changed = { [weak self] value in
+            self?.applyCodexActivity(value)
+        }
         cloud.requestChanged = { [weak self] value in
             self?.cloud.worker.changed(value)
             if value.isPlanning { self?.sharedPlanning.refresh() }
@@ -600,10 +606,12 @@ final class TranscriptWatch {
         } catch { banner = "Could not save model settings: " + error.localizedDescription }
     }
     func pollUpdates() {
+        codexWatch.observe(sources)
         pollActivity()
         observeHistory()
         if Date() >= nextImportCheck { refresh(background: true) }
     }
+    func stopRuntimeObservation() { codexWatch.stop() }
     func startBackgroundObservation() {
         guard backgroundPoll == nil else { return }
         Task { [weak self] in await self?.restoreCloudAndNotification() }
@@ -654,12 +662,26 @@ final class TranscriptWatch {
                 let result = try decoder.decode(ActivityResult.self, from: await Bridge.call("activity", input: input))
                 applyActivity(result)
             } catch {
-                activityError = "Live status unavailable: " + error.localizedDescription
-                for id in activity.keys { activity[id]?.state = "unknown" }
+                applyActivity(ActivityResult(activity: [], sessions: [], models: modelCatalogs,
+                    errors: Dictionary(uniqueKeysWithValues: sources.filter { $0.provider == "Claude" }.map { ($0.id, "Live status unavailable: " + error.localizedDescription) })))
             }
         }
     }
     func applyActivity(_ result: ActivityResult) {
+        polledActivity = result
+        applyCombinedActivity()
+    }
+    func applyCodexActivity(_ result: CodexActivityUpdate) {
+        codexActivity = result
+        applyCombinedActivity()
+    }
+    private func applyCombinedActivity() {
+        let allowed = Set(sources.map(\.id))
+        let result = ActivityResult(
+            activity: polledActivity.activity + codexActivity.activity.filter { allowed.contains($0.sourceID) },
+            sessions: polledActivity.sessions + codexActivity.sessions.filter { allowed.contains($0.sourceID) },
+            models: polledActivity.models,
+            errors: polledActivity.errors.merging(codexActivity.errors.filter { allowed.contains($0.key) }) { _, new in new })
         var next = Dictionary(result.activity.map { ($0.id, $0) }, uniquingKeysWith: { first, second in second.state == "running" ? second : first })
         for (id, var old) in activity where result.errors[old.sourceID] != nil { old.state = "unknown"; next[id] = old }
         for (id, run) in conversations {
@@ -682,11 +704,16 @@ final class TranscriptWatch {
             }
         }
         externalRuns = externalRuns.filter { next[$0.key]?.state == "running" }
-        modelCatalogs = result.models
-        activityError = result.errors.values.sorted().joined(separator: " · ")
+        if modelCatalogs != result.models { modelCatalogs = result.models }
+        let currentError = result.errors.values.sorted().joined(separator: " · ")
+        if activityError != currentError { activityError = currentError }
         var indexes = Dictionary(uniqueKeysWithValues: sessions.enumerated().map { ($0.element.id, $0.offset) })
         for item in result.sessions {
-            if let index = indexes[item.id] { sessions[index].title = item.title; sessions[index].model = item.model }
+            if let index = indexes[item.id] {
+                if sessions[index].title != item.title || sessions[index].model != item.model {
+                    sessions[index].title = item.title; sessions[index].model = item.model
+                }
+            }
             else { indexes[item.id] = sessions.count; sessions.append(item) }
         }
         if let selected = selected, let live = activityFor(sharing.native(for: selected.id) ?? selected) { children = live.children }
@@ -697,6 +724,9 @@ final class TranscriptWatch {
     func loadChildren(_ s: CampSession) {
         guard !s.isCloud else { banner = "Subagent transcripts have not been shared for this session"; return }
         subagentsParent = s; children = activity[s.id]?.children ?? []; childrenLoading = true
+        if s.provider == "Codex", let live = activityFor(s) {
+            children = live.children; childrenLoading = false; return
+        }
         Task {
             defer { childrenLoading = false }
             do {
@@ -748,6 +778,7 @@ final class TranscriptWatch {
         }
         importError = result.errors.joined(separator: " · ")
         checkPlanningSources(); planning.drain()
+        codexWatch.observe(sources)
         if selectedID == nil { selectedID = sessions.first?.id }
         observeHistory()
         if notifications.pendingOpen != nil { Task { await openPendingNotification() } }
@@ -1115,7 +1146,7 @@ struct RootView: View {
         .onAppear {
             store.refresh(); store.startBackgroundObservation()
             AppDelegate.reopen = { openWindow(id: "camp") }
-            AppDelegate.prepareToQuit = { [weak store] in await store?.notifications.flush(); await store?.sharedPlanning.flush() }
+            AppDelegate.prepareToQuit = { [weak store] in store?.stopRuntimeObservation(); await store?.notifications.flush(); await store?.sharedPlanning.flush() }
         }
         .sheet(isPresented: $store.notificationSheet) { CampNotificationsView(store: store, notices: store.notifications) }
         .overlay(alignment: .topTrailing) { CampNotificationToast(store: store, notices: store.notifications).padding(22) }
