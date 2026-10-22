@@ -8,6 +8,12 @@ import (
 )
 
 func (a *API) accountRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/provider-accounts/{account}", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		out, err := a.Camps.ProviderAccountStatus(r.Context(), u, r.PathValue("account"))
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
 	mux.HandleFunc("GET /v1/provider-accounts", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		out, err := a.Camps.ProviderAccounts(r.Context(), u)
 		if !fail(w, err) {

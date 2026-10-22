@@ -2,17 +2,20 @@ import SwiftUI
 import AppKit
 
 enum CampSetupStep: Int, Codable, CaseIterable {
-    case profiles, camp, project, ready
+    // Retain existing persisted values when inserting the optional account step.
+    case profiles = 0, camp = 1, accounts = 4, project = 2, ready = 3
+    var number: Int { (Self.allCases.firstIndex(of: self) ?? 0) + 1 }
     var title: String {
         switch self {
         case .profiles: return "Bring your sessions to camp"
         case .camp: return "Connect with your team"
+        case .accounts: return "Connect your cloud accounts"
         case .project: return "Make room for your work"
         case .ready: return "Your camp is ready"
         }
     }
     var shortTitle: String {
-        switch self { case .profiles: return "Sessions"; case .camp: return "Camp"; case .project: return "Project"; case .ready: return "Ready" }
+        switch self { case .profiles: return "Sessions"; case .camp: return "Camp"; case .accounts: return "Accounts"; case .project: return "Project"; case .ready: return "Ready" }
     }
 }
 
@@ -64,12 +67,12 @@ enum CampSetupStep: Int, Codable, CaseIterable {
         save(); presented = false
     }
     func next() {
-        guard !savingProject, let value = CampSetupStep(rawValue: step.rawValue + 1) else { return }
-        step = value; save()
+        guard !savingProject, step.number < CampSetupStep.allCases.count else { return }
+        step = CampSetupStep.allCases[step.number]; save()
     }
     func back() {
-        guard !savingProject, let value = CampSetupStep(rawValue: step.rawValue - 1) else { return }
-        step = value; save()
+        guard !savingProject, step.number > 1 else { return }
+        step = CampSetupStep.allCases[step.number - 2]; save()
     }
     func finish() {
         guard step == .ready, !savingProject else { return }
@@ -103,6 +106,7 @@ struct CampOnboardingView: View {
     @ObservedObject var store: CampStore
     @ObservedObject var setup: CampOnboarding
     @ObservedObject var cloud: CampConnection
+    @ObservedObject var accounts: CampProviderAccounts
     @ObservedObject var projects: LocalProjects
     @ObservedObject var notices: CampNotifications
     @State private var connectCamp = false
@@ -110,7 +114,7 @@ struct CampOnboardingView: View {
     @State private var projectName = ""
     @State private var repositories = ""
     @State private var showProfileFallback = false
-    private var busy: Bool { setup.savingProject || cloud.busy }
+    private var busy: Bool { setup.savingProject || cloud.busy || accounts.working }
     private var canContinue: Bool {
         if busy { return false }
         if setup.step == .camp && connectCamp { return cloud.scope != nil && cloud.status == "Connected to Camp" }
@@ -123,7 +127,7 @@ struct CampOnboardingView: View {
                 Mascot(size: 58)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(setup.step.title).font(.system(size: 24, weight: .semibold))
-                    Text("Step \(setup.step.rawValue + 1) of \(CampSetupStep.allCases.count)").font(.system(size: 12)).foregroundStyle(campMuted)
+                    Text("Step \(setup.step.number) of \(CampSetupStep.allCases.count)").font(.system(size: 12)).foregroundStyle(campMuted)
                 }
                 Spacer()
                 Button { setup.pause() } label: { Image(systemName: "xmark").frame(width: 32, height: 32) }
@@ -132,16 +136,17 @@ struct CampOnboardingView: View {
             HStack(spacing: 8) {
                 ForEach(CampSetupStep.allCases, id: \.rawValue) { step in
                     VStack(alignment: .leading, spacing: 6) {
-                        Capsule().fill(step.rawValue <= setup.step.rawValue ? campGreen : campInk.opacity(0.1)).frame(height: 3)
+                        Capsule().fill(step.number <= setup.step.number ? campGreen : campInk.opacity(0.1)).frame(height: 3)
                         Text(step.shortTitle).font(.system(size: 11, weight: step == setup.step ? .semibold : .regular)).foregroundStyle(step == setup.step ? campInk : campMuted)
                     }
                 }
-            }.accessibilityElement(children: .ignore).accessibilityLabel("Setup step \(setup.step.rawValue + 1) of 4, \(setup.step.shortTitle)")
+            }.accessibilityElement(children: .ignore).accessibilityLabel("Setup step \(setup.step.number) of \(CampSetupStep.allCases.count), \(setup.step.shortTitle)")
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     switch setup.step {
                     case .profiles: profiles
                     case .camp: camp
+                    case .accounts: CampProviderAccountsView(cloud: cloud)
                     case .project: project
                     case .ready: ready
                     }
@@ -154,7 +159,7 @@ struct CampOnboardingView: View {
                     Button { setup.back() } label: { Label("Back", systemImage: "chevron.left").frame(minHeight: 24) }.disabled(busy)
                 } else { Button("Finish later") { setup.pause() }.disabled(busy) }
                 Spacer()
-                if setup.step == .camp || setup.step == .project {
+                if setup.step == .camp || setup.step == .accounts || setup.step == .project {
                     Button("Skip this step") { setup.next() }.disabled(busy)
                 }
                 Button(action: advance) {

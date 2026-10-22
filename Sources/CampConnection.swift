@@ -28,6 +28,7 @@ import SwiftUI
     private(set) var cache: CampCache?
     private(set) var client: CampHTTP?
     lazy var worker = CampLocalWorker(cache: cache)
+    lazy var providerAccounts = CampProviderAccounts(cache: cache)
     private let vault: any CampCredentialStore
     private let allowLoopback: Bool
     private var generation = UUID()
@@ -57,6 +58,7 @@ import SwiftUI
             guard let saved = try vault.read(origin: endpoint.origin) else { return }
             credential = saved; email = saved.actor.email; signedIn = true
             client = CampHTTP(endpoint: endpoint)
+            providerAccounts.attach(transport: client, credential: saved)
             if let data = try await cache?.metadata("selected:" + saved.actor.userId), let value = String(data: data, encoding: .utf8) { selectedCampId = value }
             if !selectedCampId.isEmpty {
                 let selected = CloudScope(origin: endpoint.origin, userId: saved.actor.userId, campId: selectedCampId)
@@ -88,6 +90,7 @@ import SwiftUI
             let saved = CloudCredential(origin: endpoint.origin, actor: login.actor, token: login.token, expiresAt: login.expiresAt)
             try vault.save(saved)
             credential = saved; signedIn = true; codeRequested = false; code = ""; error = ""
+            providerAccounts.attach(transport: client, credential: saved)
             try await cache?.setMetadata("server", Data(endpoint.origin.utf8))
             await refresh()
         } catch { self.error = error.localizedDescription }
@@ -512,6 +515,7 @@ import SwiftUI
             if let scope { try await cache?.clear(scope) }
             generation = UUID(); streamTask?.cancel(); flushTask?.cancel(); publishTask?.cancel(); notificationTask?.cancel(); notificationTask = nil
             self.credential = nil; self.scope = nil; signedIn = false; camps = []; status = "Local on this Mac"; error = ""; clearVisible()
+            providerAccounts.attach(transport: nil, credential: nil)
         } catch { self.error = "Could not revoke the Camp login. Reconnect and try signing out again" }
     }
 }

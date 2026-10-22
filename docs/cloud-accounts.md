@@ -3,8 +3,9 @@
 The Go service stores owner-bound accounts, installation grants and login
 attempts. Go sign-in adapters now drive the official CLIs inside disposable
 private profiles. An auth-only Go worker now claims those attempts, relays codes
-and persists recovery state. The native account setup screen, workload
-provisioning and cloud execution are still required. These endpoints alone do
+and persists recovery state. Native account setup uses these endpoints in Manage
+sources and onboarding. Workload provisioning and cloud execution are still
+required. These endpoints alone do
 not start a cloud chat session.
 
 ## Ownership and storage
@@ -44,6 +45,7 @@ All routes require the person's Camp device token. Writes require an
 | Method and path | Behavior |
 | --- | --- |
 | `GET /v1/provider-accounts` | List only this person's accounts |
+| `GET /v1/provider-accounts/{account}` | Read the account and its latest sign-in attempt after opening or relaunching the app |
 | `POST /v1/provider-accounts` | Add `{provider, label}` where provider is Codex or Claude |
 | `POST /v1/provider-accounts/{account}/runner-grants` | Create one installation token, replacing its previous grant |
 | `POST /v1/provider-accounts/{account}/logins` | Queue one login attempt for its current runner |
@@ -114,7 +116,8 @@ an already-submitted code from being rebound to another browser flow. Completion
 failure, cancellation, expiry, grant replacement and account disconnect all erase
 any pending code. Every take and acknowledgment rechecks ownership, grant, claim,
 epoch and attempt state under the account lock. The auth-only worker implements
-this delivery protocol. Native code entry still requires onboarding integration.
+this delivery protocol. The native form keeps code entry in memory and does not
+save it in its setup journal.
 
 Waiting reports contain only an allowlisted HTTPS provider URL and optional
 device code. Codex uses the official device verification route. Claude URLs must
@@ -212,3 +215,27 @@ one-time-code delivery, lost acknowledgments, durable result retries, interrupte
 login recovery, cancellation and cleanup ordering. The provider calls in these
 tests are fakes. Real cloud sign-in and runtime/container isolation acceptance
 remain release gates.
+
+## Native account setup
+
+Manage sources separates Local profiles and Cloud accounts. The account form is
+also the optional Accounts step in onboarding. Camp sign-in identifies the owner;
+each provider account still requires its own provider consent. The native client
+checks account ownership, installation identity, provider URLs and bounded
+response shapes before displaying them. It never opens an arbitrary URL returned
+by the server.
+
+Creating an account records a stable request ID in the owner's private cache
+before sending it. A lost response or relaunch can recover that same account.
+The form waits for a runner before beginning sign-in, and recovers the current
+attempt through the owner-only status endpoint. Pending starts and the selected
+account survive relaunch. The journal contains no Camp token, provider credential
+or authorization code. Signing out clears the visible account state, and late
+responses from an older owner or connection cannot restore it.
+
+Only the visible account form polls for status. It shows queued, waiting,
+cancelled, expired, failed and connected states. Disconnect remains pending until
+the runner acknowledges erasure; unavailable usage is labeled explicitly. A
+server without cloud account storage shows that configuration is unavailable.
+The provisioning controller is still required to prepare runners automatically;
+the native form does not manufacture a connected state while waiting for one.

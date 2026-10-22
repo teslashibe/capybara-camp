@@ -20,6 +20,10 @@ import Foundation
         precondition(resumed.presented, "Only the last step completes setup")
         resumed.next(); resumed.back()
         precondition(resumed.step == .camp)
+        resumed.next()
+        precondition(resumed.step == .accounts && resumed.step.number == 3 && resumed.step.rawValue == 4,
+                     "Cloud accounts fit between Camp and Project without changing saved step values")
+        resumed.back()
         resumed.next(); resumed.next(); resumed.next()
         precondition(resumed.step == .ready)
         resumed.finish()

@@ -75,6 +75,8 @@ func TestCloudAccountHTTPSeparatesPeopleAndRunnerGrants(t *testing.T) {
 	if err = json.Unmarshal(raw, &account); err != nil {
 		t.Fatal(err)
 	}
+	call("GET", "/v1/provider-accounts/"+account.ID, tokens[0], "", 200)
+	call("GET", "/v1/provider-accounts/"+account.ID, tokens[1], "", 404)
 	call("POST", "/v1/provider-accounts", tokens[0], `{"provider":"Codex","label":"x","owner_user_id":"spoof"}`, 400)
 	call("POST", "/v1/provider-accounts/"+account.ID+"/runner-grants", tokens[1], "", 404)
 	raw = call("POST", "/v1/provider-accounts/"+account.ID+"/runner-grants", tokens[0], "", 201)
@@ -91,6 +93,11 @@ func TestCloudAccountHTTPSeparatesPeopleAndRunnerGrants(t *testing.T) {
 	var login camp.ProviderLogin
 	if err = json.Unmarshal(raw, &login); err != nil {
 		t.Fatal(err)
+	}
+	raw = call("GET", "/v1/provider-accounts/"+account.ID, tokens[0], "", 200)
+	var accountStatus camp.ProviderAccountStatus
+	if json.Unmarshal(raw, &accountStatus) != nil || accountStatus.Login == nil || accountStatus.Login.ID != login.ID {
+		t.Fatal("account did not recover current login")
 	}
 	call("GET", "/v1/provider-accounts/"+account.ID+"/logins/"+login.ID, tokens[1], "", 404)
 	claim := uuid.NewString()

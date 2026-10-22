@@ -11,9 +11,9 @@ and acceptance are separate milestones.
 | Local sessions | Automatic multi-profile import, board/chat, model/effort/speed controls, sub-agents, streaming, dictation, steering and queues | Finish live provider/recovery and performance validation after the Go migration; complete the final design comparison below |
 | Planning and projects | Single-model plan, provider comparison, saved versions, same-ticket local implementation, project assignment across repositories | Shared implementation and owner-routed approval completion; cross-device validation |
 | Shared Camps | Go/PostgreSQL auth, membership, sessions, events, requests, native cache/outbox and owner-Mac worker | Real independent users on two Macs, remaining permission/recovery cases, production deployment |
-| Onboarding | Automatic profile discovery before full import, optional Camp sign-in, projects, notifications, skip/resume | Integrate verified cloud account, default execution target and Git connection steps as those services land |
+| Onboarding | Automatic profile discovery before full import, optional Camp sign-in, owner-only cloud account setup, projects, notifications, skip/resume | Default execution target and Git connection steps; final onboarding validation after remaining services land |
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
-| Cloud execution | Owner-only accounts/installations, scoped grants, expiring login attempts, credential encryption, private Claude code delivery, cancellation/disconnect fencing, Go sign-in adapters and an auth-only worker with recovery journals | Native account flow, workload provisioning, isolated execution runtime, local/cloud defaults and transfers, usage states, disconnected-Mac execution |
+| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, expiring login attempts, credential encryption, private Claude code delivery, cancellation/disconnect fencing, Go sign-in adapters and an auth-only worker with recovery journals | Workload provisioning and disconnected-account reactivation, isolated execution runtime, local/cloud defaults and transfers, usage states, real cloud sign-in and disconnected-Mac execution |
 | Git | Project repository links and local CLI project execution | Independent member authorization, isolated cloud workspaces, Git actor attribution, branch/push/PR recovery |
 | Memory and skills | Approved Cortex/shared Markdown design | Actual native and Go integrations, provider/model consolidation, memory inspection, skill editing/version rollout and permission tests |
 | Hosting and release | Public Kubernetes/K3s base and local development builds | Runner/Cortex deployment templates, Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, Developer ID/notarization, universal V1 release and recorded website demo |
@@ -23,6 +23,12 @@ contracts, then memory/skills and shared execution. Validate the full workflow
 locally before the owner provisions the Hetzner box with us. Cloud sign-in and
 the two-Mac acceptance run follow that deployment. Hardware has not been bought
 or provisioned for this goal.
+
+The native account form and synthetic provider walkthrough now pass locally.
+The next cloud slice must provision/reconcile isolated workloads and grants,
+including explicit reactivation of a fully disconnected account after its old
+runner confirms erasure. The current form preserves disconnected records but
+does not yet restart them. This remains an open implementation requirement.
 
 Automatic discovery finds local profile stores without asking for paths. It
 does not prove that every historical account is still signed in, or that six

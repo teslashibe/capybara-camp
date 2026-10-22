@@ -103,7 +103,7 @@ struct CampSignInForm: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Connect to your shared Camp").font(.headline)
-            Text("Sign in to your team's server to share selected sessions. Your Codex and Claude logins stay on this Mac.")
+            Text("Sign in to your team's server to share selected sessions. Your local Codex and Claude logins stay on this Mac.")
                 .font(.system(size: 12)).foregroundStyle(campMuted)
             TextField("Camp server", text: $cloud.server).textContentType(.URL)
                 .accessibilityLabel("Camp server address").disabled(cloud.codeRequested || cloud.busy)

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -48,7 +49,10 @@ func TestNativeFixtureServer(t *testing.T) {
 	}
 	pool := testdb.Open(t)
 	ctx := context.Background()
-	store := camp.New(pool, "synthetic-native-fixture-receipt-key")
+	store, err := camp.NewWithProviderKey(pool, "synthetic-native-fixture-receipt-key", bytes.Repeat([]byte{31}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
 	actors := []auth.Actor{
 		{UserID: uuid.NewString(), DeviceID: uuid.NewString(), Email: "owner@example.com", Name: "Camp owner"},
 		{UserID: uuid.NewString(), DeviceID: uuid.NewString(), Email: "k@example.com", Name: "K"},
@@ -100,6 +104,10 @@ func TestNativeFixtureServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Log("Native fixture API ready on loopback")
+	fixtureContext, stopFixture := context.WithCancel(ctx)
+	fixtureDone := make(chan struct{})
+	go func() { defer close(fixtureDone); serveFixtureProviderAccounts(fixtureContext, store, actors[0]) }()
+	defer func() { stopFixture(); <-fixtureDone }()
 	stopped := make(chan os.Signal, 1)
 	signal.Notify(stopped, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(stopped)

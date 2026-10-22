@@ -1,6 +1,6 @@
 # First-run setup
 
-V1 development adds a four-step native setup sheet. It opens for a new local
+V1 development adds a five-step native setup sheet. It opens for a new local
 installation. Existing installations keep their board; anyone can reopen setup
 from **Capybara Camp → Set up Capybara Camp**.
 
@@ -17,18 +17,23 @@ from **Capybara Camp → Set up Capybara Camp**.
    controls and operations as Camp settings. A failed connection stays on the
    sheet with an error and can be corrected or skipped. No sessions are shared
    automatically. Connecting a Camp does not provision cloud execution.
-3. **Project** starts in Inbox, selects an existing local project or creates one.
+3. **Accounts** optionally adds separate cloud Codex and Claude accounts. It uses
+   the same form as Manage sources, including provider sign-in, code entry,
+   cancellation and reconnect. The server must enable cloud accounts and prepare
+   an isolated runner. Until then, the form shows unavailable or waiting state.
+   Local profiles stay independent; the form never copies their credentials.
+4. **Project** starts in Inbox, selects an existing local project or creates one.
    It uses the existing project fields, validation and SQLite store. Repository
    links are optional and do not grant Git access. Creation saves before moving
    forward; an invalid name, unsafe URL or failed write leaves the inputs intact.
    Shared projects remain available in Camp settings.
-4. **Ready** shows the current import, connection and project state, offers
+5. **Ready** shows the current import, connection and project state, offers
    optional desktop notifications through the existing macOS permission flow,
    and opens the board. New projects appear in the sidebar; setup keeps imported
    sessions visible and does not assign historical sessions automatically.
 
 Back preserves local project fields while the sheet is open. Skip this step advances past
-optional Camp/project setup. Finish later closes the sheet and saves its current
+optional Camp/account/project setup. Finish later closes the sheet and saves its current
 step and chosen local project. It does not reappear on every launch; the menu resumes it. A completed flow
 can be revisited from the beginning. Relaunch restores the step, not unsaved form
 text, email codes or invitation tokens. Successfully added sources and projects
@@ -39,9 +44,14 @@ existing application-support directory. It contains the step, completion/deferra
 flags and chosen local project ID, and is written atomically with owner-only permissions. It stores
 no provider credentials or Camp authentication material. Unknown or corrupt
 setup records do not interrupt an existing board; reopening setup repairs them.
-The sheet adds no polling loop, background task or second import cache. The
-source list is lazy, and the existing source, connection and project components
-are shared with their settings screens.
+The source list is lazy, and the existing source, connection, account and project
+components are shared with their settings screens. Cloud account status polls
+only while its form is visible. Closing or skipping it stops that view task; a
+server-side sign-in attempt remains cancellable and expires after ten minutes.
+The account setup journal stores only request IDs, account names and selections,
+scoped to the signed-in owner and server. Return codes and provider credentials
+never enter it. Existing saved step values retain their meaning after insertion
+of the account step.
 
 The initial discovery pass reads directory/store markers rather than transcript
 contents. The UI shows these profiles while the full import runs and preserves
@@ -59,9 +69,9 @@ folder picker cancellation, optional connection failures, project creation,
 notification choice, restart and the setup menu. A real second-user cloud test
 and provider account provisioning remain part of the overall V1 release gates.
 
-Cloud provider account sign-in, Local/Cloud execution defaults, Git grants and
-skill installation will extend this flow when their underlying V1 services are
-implemented. They must show verified outcomes from those services; importing a
+Local/Cloud execution defaults, Git grants and skill installation will extend
+this flow when their underlying V1 services are implemented. They must show
+verified outcomes from those services; importing a
 folder or completing the sheet must never fabricate a connected account.
 
 ### October 21 local verification
@@ -86,3 +96,32 @@ symlinks and reads no transcript content. Native computer use verified that the
 real build shows three discovered profile stores while their histories are
 still importing. No folder picker was used; the custom-path control stayed
 collapsed. These three stores are not a count of verified provider accounts.
+
+### Cloud account regression checks
+
+The account form uses the real owner-only API. Native tests cover a lost account
+creation response, relaunch while waiting for a runner, single-attempt startup,
+Claude code entry, reconnect cancellation, account isolation and stale replies
+after sign-out. A delayed-start test checks that Cancel waits for an in-flight
+start result and then cancels that attempt. Existing native suites passed before
+that fix; the account and onboarding suites passed again after it.
+
+For computer-use QA, `tools/native-fixture.sh` runs a disposable local API and
+database. Its provider worker is synthetic: Claude accepts
+`demo-authorization-code`, while Codex exposes a cancellable test challenge.
+Do not use its provider links to authenticate a real account. A development
+build can use `CAMP_DEV_PROFILE_ROOT` to keep profile discovery inside a private
+fixture directory containing `home/` and `users/`. Production helpers ignore
+that variable. This permits recording the native interface without reading real
+session histories. `CAMP_DEV_EPHEMERAL_CREDENTIALS=1` keeps the fixture's Camp
+login out of Keychain.
+
+Computer use verified the five-step setup flow, Camp email sign-in, separate
+Claude and Codex account creation, the waiting/device-code screens, synthetic
+Claude completion, reconnect cancellation preserving the connected account,
+account switching and confirmed disconnect. Relaunching and signing in again
+restored the selected account. The same form worked in Manage sources. A
+truncated provider picker was widened and rechecked with both provider names.
+This used an arm64 development build signed with the existing Apple Development
+identity, not a notarized V1 release. The normal app and its profiles were not
+used for the synthetic sign-in checks.

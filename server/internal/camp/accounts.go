@@ -75,6 +75,42 @@ type ProviderLogin struct {
 	ExpiresAt      time.Time `json:"expires_at"`
 }
 
+type ProviderAccountStatus struct {
+	Account ProviderAccount `json:"account"`
+	Login   *ProviderLogin  `json:"login,omitempty"`
+}
+
+func (s *Store) ProviderAccountStatus(ctx context.Context, actor auth.Actor, id string) (ProviderAccountStatus, error) {
+	if err := s.cloudEnabled(); err != nil {
+		return ProviderAccountStatus{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ProviderAccountStatus{}, err
+	}
+	defer tx.Rollback(ctx)
+	a, err := s.lockAccount(ctx, tx, actor.UserID, id)
+	if err != nil {
+		return ProviderAccountStatus{}, err
+	}
+	if err = s.expireLogins(ctx, tx, a.InstallationID); err != nil {
+		return ProviderAccountStatus{}, err
+	}
+	out := ProviderAccountStatus{Account: a}
+	var attempt string
+	err = tx.QueryRow(ctx, `SELECT id FROM provider_login_attempts WHERE installation_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1`, a.InstallationID).Scan(&attempt)
+	if err == nil {
+		login, e := s.readLogin(ctx, tx, a, attempt)
+		if e != nil {
+			return out, e
+		}
+		out.Login = &login
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return out, err
+	}
+	return out, tx.Commit(ctx)
+}
+
 const accountColumns = `a.id,a.owner_user_id,a.provider,a.label,COALESCE(a.verified_subject,''),a.revision,i.id,i.location,i.state,i.epoch,i.credential_expires_at`
 
 func scanAccount(row pgx.Row) (ProviderAccount, error) {

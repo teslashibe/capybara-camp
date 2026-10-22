@@ -1212,7 +1212,7 @@ struct RootView: View {
         .onChange(of: store.view) { _, value in store.observeHistory(); if value == "Chat" { store.loadHistory() } }
         .sheet(isPresented: $store.sourceSheet) { SourcesView(store: store) }
         .sheet(isPresented: Binding(get: { onboarding.presented }, set: { if !$0 { onboarding.pause() } })) {
-            CampOnboardingView(store: store, setup: onboarding, cloud: store.cloud, projects: store.projects, notices: store.notifications)
+            CampOnboardingView(store: store, setup: onboarding, cloud: store.cloud, accounts: store.cloud.providerAccounts, projects: store.projects, notices: store.notifications)
         }
         .onChange(of: onboarding.presented) { _, showing in if !showing && !onboarding.error.isEmpty { store.banner = onboarding.error } }
         .sheet(isPresented: $store.projectSheet) { CampProjectsView(store: store, local: store.projects, cloud: store.cloud) }
@@ -1654,14 +1654,22 @@ struct MessageView: View {
 }
 struct SourcesView: View {
     @ObservedObject var store: CampStore
+    @State private var location = "Local"
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            HStack { Mascot(); VStack(alignment: .leading, spacing: 4) { Text("Bring your sessions to camp").font(.title2); Text("Local folders only · Credentials stay with each CLI").foregroundStyle(campMuted).font(.caption) } }
-            ScrollView { LocalProfileList(sources: store.sources) }.frame(maxHeight: 280)
-            Text("Add another account’s CODEX_HOME or CLAUDE_CONFIG_DIR folder. Cloud-only chats and unreadable macOS user folders are not imported. A saved chat’s author may differ from the account currently logged into that profile.").font(.system(size: 12)).foregroundStyle(campMuted)
-            if !store.sourceError.isEmpty { Text(store.sourceError).font(.system(size: 12)).foregroundStyle(.orange) }
-            HStack { Button("Add profile folder") { store.addSource() }; Spacer(); Button("Done") { store.sourceSheet = false }.keyboardShortcut(.defaultAction) }
-        }.padding(28).frame(width: 600)
+            HStack { Mascot(); VStack(alignment: .leading, spacing: 4) { Text("Bring your sessions to camp").font(.title2); Text(location == "Local" ? "Local folders only · Credentials stay with each CLI" : "Separate provider sign-ins on your Camp server").foregroundStyle(campMuted).font(.caption) } }
+            Picker("Source location", selection: $location) { Text("Local profiles").tag("Local"); Text("Cloud accounts").tag("Cloud") }.pickerStyle(.segmented)
+            ScrollView {
+                if location == "Local" {
+                    VStack(alignment: .leading, spacing: 14) {
+                        LocalProfileList(sources: store.sources)
+                        Text("Add another account’s CODEX_HOME or CLAUDE_CONFIG_DIR folder. Cloud-only chats and unreadable macOS user folders are not imported. A saved chat’s author may differ from the account currently logged into that profile.").font(.system(size: 12)).foregroundStyle(campMuted)
+                        if !store.sourceError.isEmpty { Text(store.sourceError).font(.system(size: 12)).foregroundStyle(.orange) }
+                    }
+                } else { CampProviderAccountsView(cloud: store.cloud) }
+            }.frame(maxHeight: .infinity)
+            HStack { if location == "Local" { Button("Add profile folder") { store.addSource() } }; Spacer(); Button("Done") { store.sourceSheet = false }.keyboardShortcut(.defaultAction) }
+        }.padding(28).frame(width: 640, height: 640)
     }
 }
 

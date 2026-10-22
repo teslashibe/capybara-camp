@@ -14,7 +14,16 @@ swiftc -parse-as-library -emit-library -emit-module -enable-testing -D CAMP_TEST
   -o build/test-support/libCampTestSupport.dylib
 WORK="$(mktemp -d "$ROOT/build/.camp-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-for suite in CampStateTests CampCloudTests CampSharingTests LocalConversationTests CampWorkerTests SessionMentionsTests LocalPlanningTests ExecutionApprovalTests ImplementationFlowTests CampNotificationTests CampPlanningTests CodexActivityTests CampProjectsTests PermissionSettingsTests CampOnboardingTests; do
+SUITES=(CampStateTests CampCloudTests CampSharingTests LocalConversationTests CampWorkerTests SessionMentionsTests LocalPlanningTests ExecutionApprovalTests ImplementationFlowTests CampNotificationTests CampPlanningTests CodexActivityTests CampProjectsTests PermissionSettingsTests CampOnboardingTests CampProviderAccountTests)
+if [ "$#" -gt 0 ]; then
+  for requested in "$@"; do
+    found=false
+    for known in "${SUITES[@]}"; do if [ "$requested" = "$known" ]; then found=true; break; fi; done
+    if [ "$found" != true ]; then echo "Unknown test suite: $requested" >&2; exit 2; fi
+  done
+  SUITES=("$@")
+fi
+for suite in "${SUITES[@]}"; do
   printf '%s\n' '@testable import CampTestSupport' > "$WORK/$suite.swift"
   cat Tests/FixtureProcess.swift >> "$WORK/$suite.swift"
   cat "Tests/$suite.swift" >> "$WORK/$suite.swift"

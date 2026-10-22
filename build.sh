@@ -4,9 +4,10 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
 SWIFT_FLAGS=()
+GO_LDFLAGS='-s -w'
 case "${1:-}" in
   --universal) ARCHS="arm64 x86_64" ;;
-  --development) ARCHS="$(uname -m)"; SWIFT_FLAGS=(-D CAMP_DEVELOPMENT) ;;
+  --development) ARCHS="$(uname -m)"; SWIFT_FLAGS=(-D CAMP_DEVELOPMENT); GO_LDFLAGS="$GO_LDFLAGS -X github.com/teslashibe/capybara-camp/server/internal/config.developmentBuild=1" ;;
   "") ARCHS="$(uname -m)" ;;
   *) echo "Usage: ./build.sh [--universal | --development]" >&2; exit 2 ;;
 esac
@@ -33,7 +34,7 @@ for arch in $ARCHS; do
   BINARIES+=("$binary")
   case "$arch" in arm64) goarch=arm64 ;; x86_64) goarch=amd64 ;; *) echo "Unsupported architecture: $arch" >&2; exit 1 ;; esac
   helper="$WORK/camp-local-$arch"
-  GOOS=darwin GOARCH="$goarch" CGO_ENABLED=0 go -C "$ROOT/server" build -trimpath -buildvcs=false -ldflags='-s -w' -o "$helper" ./cmd/camp-local
+  GOOS=darwin GOARCH="$goarch" CGO_ENABLED=0 go -C "$ROOT/server" build -trimpath -buildvcs=false -ldflags="$GO_LDFLAGS" -o "$helper" ./cmd/camp-local
   HELPERS+=("$helper")
 done
 if [ "${#BINARIES[@]}" -eq 1 ]; then
