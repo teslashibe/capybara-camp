@@ -138,6 +138,12 @@ enum Bridge {
     }()
     static func process(_ action: String) throws -> Process {
         let p = Process()
+        if ["scan", "transcript", "export-page", "add-source", "children"].contains(action) {
+            let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/camp-local")
+            guard FileManager.default.isExecutableFile(atPath: helper.path) else { throw CampError.message("The bundled Go session helper is missing. Rebuild the app.") }
+            p.executableURL = helper; p.arguments = [action]
+            return p
+        }
         guard let script = Bundle.main.url(forResource: "bridge", withExtension: "py") else { throw CampError.message("The local session adapter is missing. Rebuild the app.") }
         guard FileManager.default.isExecutableFile(atPath: python) else { throw CampError.message("Install Python 3.11 or newer to read local sessions") }
         p.executableURL = URL(fileURLWithPath: python)

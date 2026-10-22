@@ -162,6 +162,15 @@ execution does not depend on a Mac remaining online.
 
 ## Release checks
 
+The operator handoff for the Hetzner server happens after a locally tested Go
+runner and deployable container images are ready, with account isolation,
+streamed output/approvals and restart recovery exercised. At that point the
+owner and agent select and provision the box together, configure its domain
+and TLS, and complete real cloud provider sign-in and disconnected-Mac tests.
+The current shared-history service alone is not that handoff point. The owner
+wants an initial cloud trial as soon as these prerequisites pass; that trial
+does not waive the final V1 release checks below.
+
 - Four Codex and two Claude accounts coexist; reconnect, cancel and restart never
   cross-bind identities. K cannot read or execute with another owner's account
 - Local/Cloud defaults persist, apply only to new work, and fail visibly when the

@@ -118,6 +118,7 @@ Verified multi-account login management, a usage dashboard, automatic credential
 - `Sources/CampConnection.swift`, `CampHTTP.swift`, `CampCache.swift` — native Camp connection, event stream and durable local cache
 - `Sources/CampCredentials.swift` — origin-bound native Camp device credentials
 - `server/` — Go API, PostgreSQL migrations and permission/lifecycle tests
+- `server/cmd/camp-local/` — bundled Go session reader; [migration status](docs/go-local-helper.md)
 - `deploy/` — public Kubernetes and Hetzner K3s templates
 - `Resources/bridge.py` — local imports and transcript readers
 - `Resources/activity.py` — activity, subagents and model capabilities

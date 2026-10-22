@@ -5,6 +5,7 @@ cd "$ROOT"
 export PYTHONDONTWRITEBYTECODE=1
 python3 -c 'import sys; sys.exit("Python 3.11 or newer is required") if sys.version_info < (3, 11) else None'
 mkdir -p build/test-support
+(cd server && go test -race ./internal/localcli ./internal/config ./cmd/camp-local)
 python3 -m unittest discover -s Tests -v
 
 # Compile the shared app code once; every suite exercises that same module.
