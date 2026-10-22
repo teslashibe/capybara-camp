@@ -40,6 +40,7 @@ func claudeTurn(connection turnConnection, request conversationRequest, controls
 	}
 	var pending *claudeSteer
 	text, reportedSpeed := "", ""
+	reported := runtimeSettings{}
 	ready := false
 	for {
 		select {
@@ -137,6 +138,17 @@ func claudeTurn(connection turnConnection, request conversationRequest, controls
 			continue
 		}
 		if kind == "system" && str(event["subtype"]) == "init" {
+			reported.Model = observedModel(event["model"])
+			reported.Effort = observedEffort(event["effort"])
+			if reported.Effort == "" {
+				reported.Effort = request.Effort
+			}
+			switch str(event["fast_mode_state"]) {
+			case "on":
+				reported.Speed = "fast"
+			case "off":
+				reported.Speed = "standard"
+			}
 			if implementation {
 				actual, selected := str(event["permissionMode"]), request.Permissions["claudeMode"]
 				if selected != "" && actual != selected && !(selected == "manual" && actual == "default") {
@@ -160,6 +172,9 @@ func claudeTurn(connection turnConnection, request conversationRequest, controls
 				}
 			}
 			if !ready {
+				if err := emitSettings(emit, reported); err != nil {
+					return err
+				}
 				ready = true
 				if err := emit(map[string]any{"type": "started"}); err != nil {
 					return err
@@ -210,7 +225,19 @@ func claudeTurn(connection turnConnection, request conversationRequest, controls
 				}
 			case "assistant":
 				message := object(event["message"])
+				if model := observedModel(message["model"]); model != "" {
+					reported.Model = model
+				}
+				if effort := observedEffort(event["effort"]); effort != "" {
+					reported.Effort = effort
+				}
 				speed := str(object(message["usage"])["speed"])
+				if value := observedSpeed(speed); value != "" {
+					reported.Speed = value
+				}
+				if err := emitSettings(emit, reported); err != nil {
+					return err
+				}
 				if (speed == "standard" || speed == "fast") && speed != reportedSpeed {
 					reportedSpeed = speed
 					if request.Speed != "" && speed != request.Speed {

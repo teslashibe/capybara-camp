@@ -141,6 +141,18 @@ func run(scenario string, args []string) error {
 		return err
 	}
 	switch scenario {
+	case "reported-settings":
+		_ = emit(message{"type": "settings", "model": "actual-model", "effort": "ultra", "speed": "ultrafast"})
+		_ = emit(message{"type": "started"})
+		for {
+			control, err := i.request()
+			if err != nil {
+				return err
+			}
+			if text(control["type"]) == "stop" {
+				return emit(message{"type": "cancelled"})
+			}
+		}
 	case "gated-reply":
 		if len(args) != 1 {
 			return errors.New("Missing gate folder")

@@ -83,10 +83,11 @@ func (o *codexObserver) snapshot(ctx context.Context, writers []rolloutWriter, d
 			continue
 		}
 		s, kind := o.resolve(ctx, source, index.sessionID, writer.Path, nil)
+		index.settings.current.apply(&s)
 		if !codexChild(kind) {
 			sessions[s.ID] = s
 		}
-		byID[s.ID] = LiveState{ID: s.ID, SourceID: source.ID, State: state, Model: s.Model, Children: []Child{}, Owner: "Codex", PID: writer.PID}
+		byID[s.ID] = LiveState{ID: s.ID, SourceID: source.ID, State: state, Model: s.Model, Effort: s.Effort, Speed: s.Speed, Children: []Child{}, Owner: "Codex", PID: writer.PID}
 	}
 	for path := range o.indexes {
 		if !paths[path] {
@@ -111,7 +112,10 @@ func (o *codexObserver) snapshot(ctx context.Context, writers []rolloutWriter, d
 				continue
 			}
 			s, kind := o.resolve(ctx, source, id, "", row)
-			byID[s.ID] = LiveState{ID: s.ID, SourceID: source.ID, State: state, Model: s.Model, Children: []Child{}, Owner: "Codex"}
+			if writer, ok := byID[s.ID]; ok {
+				s.Model, s.Effort, s.Speed = writer.Model, writer.Effort, writer.Speed
+			}
+			byID[s.ID] = LiveState{ID: s.ID, SourceID: source.ID, State: state, Model: s.Model, Effort: s.Effort, Speed: s.Speed, Children: []Child{}, Owner: "Codex"}
 			if !codexChild(kind) {
 				sessions[s.ID] = s
 			}

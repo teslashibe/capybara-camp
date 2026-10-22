@@ -418,6 +418,7 @@ func claudeSessions(ctx context.Context, source Source, cache map[string]cacheEn
 				continue
 			}
 			s := makeSession(source, id, title, cwd, path, float64(stat.ModTime().UnixNano())/1e9)
+			lastSettings(ctx, "Claude", path).apply(&s)
 			cache[path] = cacheEntry{sig, s}
 			result = append(result, s)
 		}
@@ -501,7 +502,9 @@ func (a *App) Scan(ctx context.Context) (ImportResult, error) {
 				if value := str(meta["title"]); value != "" {
 					sessions[j].Title = titleFor(value)
 				}
-				sessions[j].Model = str(meta["model"])
+				if sessions[j].Model == "" {
+					sessions[j].Model = str(meta["model"])
+				}
 			}
 		}
 		for _, s := range sessions {

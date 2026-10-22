@@ -174,9 +174,16 @@ type rolloutIndex struct {
 	partial                []byte
 	discard                bool
 	state, turn, sessionID string
+	settings               settingsReader
 }
 
 func (r *rolloutIndex) consume(data []byte) {
+	if bytes.Contains(data, []byte(`"turn_context"`)) || bytes.Contains(data, []byte(`"thread_settings"`)) {
+		var record map[string]any
+		if json.Unmarshal(data, &record) == nil {
+			r.settings.consume("Codex", record)
+		}
+	}
 	if r.sessionID == "" {
 		var v map[string]any
 		if json.Unmarshal(data, &v) == nil && str(v["type"]) == "session_meta" {
@@ -330,6 +337,7 @@ func codexSession(ctx context.Context, source Source, id, path string, metadata 
 	}
 	s := makeSession(source, id, title, str(row["cwd"]), path, updated)
 	s.Model = str(row["model"])
+	lastSettings(ctx, "Codex", path).apply(&s)
 	s.Archived = boolean(row["archived"])
 	kind := row["source"]
 	if kind == nil {

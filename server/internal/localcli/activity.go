@@ -20,6 +20,8 @@ type LiveState struct {
 	SourceID string  `json:"sourceID"`
 	State    string  `json:"state"`
 	Model    string  `json:"model"`
+	Effort   string  `json:"effort,omitempty"`
+	Speed    string  `json:"speed,omitempty"`
 	Children []Child `json:"children"`
 	Owner    string  `json:"owner"`
 	PID      int     `json:"pid"`
@@ -127,9 +129,7 @@ func (a *App) Activity(ctx context.Context, request ActivityRequest) (ActivityRe
 			}
 			s := makeSession(source, id, title, str(row["cwd"]), path, float64(info.ModTime().UnixNano())/1e9)
 			s.Model = str(meta["model"])
-			if s.Model == "" {
-				s.Model = lastModel(ctx, path)
-			}
+			lastSettings(ctx, "Claude", path).apply(&s)
 			children := []Child{}
 			if state == "running" || s.ID == request.SelectedID {
 				children, err = childrenFor(ctx, s, state == "running")
@@ -141,7 +141,7 @@ func (a *App) Activity(ctx context.Context, request ActivityRequest) (ActivityRe
 					// parent's live state returned by the CLI.
 				}
 			}
-			result.Activity = append(result.Activity, LiveState{ID: s.ID, SourceID: source.ID, State: state, Model: s.Model, Children: children, Owner: "Claude Code", PID: int(number(row["pid"]))})
+			result.Activity = append(result.Activity, LiveState{ID: s.ID, SourceID: source.ID, State: state, Model: s.Model, Effort: s.Effort, Speed: s.Speed, Children: children, Owner: "Claude Code", PID: int(number(row["pid"]))})
 			result.Sessions = append(result.Sessions, s)
 		}
 	}

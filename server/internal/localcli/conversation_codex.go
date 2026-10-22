@@ -113,6 +113,7 @@ func codexTurn(connection turnConnection, request conversationRequest, controls 
 		}
 	}
 	turnParams := map[string]any{"threadId": session.SessionID, "input": []any{map[string]any{"type": "text", "text": request.Prompt}}}
+	reported := runtimeSettings{Model: observedModel(response["model"]), Effort: observedEffort(response["reasoningEffort"]), Speed: observedSpeed(response["serviceTier"])}
 	if !implementation {
 		turnParams["approvalPolicy"] = "on-request"
 	}
@@ -136,6 +137,18 @@ func codexTurn(connection turnConnection, request conversationRequest, controls 
 	turnID := str(object(response["turn"])["id"])
 	if !validSessionID(turnID) {
 		return errors.New("Codex did not return a valid turn identity")
+	}
+	if request.Model != "" {
+		reported.Model = request.Model
+	}
+	if request.Effort != "" {
+		reported.Effort = request.Effort
+	}
+	if request.Speed != "" {
+		reported.Speed = observedSpeed(request.Speed)
+	}
+	if err := emitSettings(emit, reported); err != nil {
+		return err
 	}
 	var relay *approvalRelay
 	if implementation {

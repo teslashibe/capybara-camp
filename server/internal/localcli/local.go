@@ -45,6 +45,8 @@ type Session struct {
 	AccountID   string  `json:"accountID"`
 	Archived    bool    `json:"archived"`
 	Model       string  `json:"model"`
+	Effort      string  `json:"effort,omitempty"`
+	Speed       string  `json:"speed,omitempty"`
 	IsSubagent  bool    `json:"isSubagent,omitempty"`
 }
 

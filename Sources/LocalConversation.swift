@@ -45,6 +45,7 @@ struct ConversationResult: Sendable {
     private(set) var providerSessionID: String?
     private(set) var activity = ""
     private(set) var effectivePermissions = ""
+    private(set) var reportedSettings = ReportedModelSettings()
     var changed: (() -> Void)?
     var completed: ((ConversationResult) -> Void)?
     var didAccept: (() -> Void)?
@@ -122,6 +123,10 @@ struct ConversationResult: Sendable {
                             await self?.createdSession(id)
                             continue
                         }
+                        if type == "settings" {
+                            await self?.receiveSettings(value)
+                            continue
+                        }
                         let usage = ConversationUsage(inputTokens: Self.tokenCount(value["inputTokens"]), outputTokens: Self.tokenCount(value["outputTokens"]))
                         await self?.receive(type, text: value["text"] as? String ?? value["message"] as? String ?? "", requestID: value["requestID"] as? String, usage: usage)
                     }
@@ -141,6 +146,15 @@ struct ConversationResult: Sendable {
         let count = number.doubleValue
         guard count.isFinite, count >= 0, count <= 9_007_199_254_740_991, count.rounded() == count else { return nil }
         return number.int64Value
+    }
+    private func receiveSettings(_ value: [String: Any]) {
+        guard !finished else { return }
+        func text(_ key: String) -> String? {
+            guard let s = value[key] as? String, !s.isEmpty, s.utf8.count <= 160, !s.contains(where: { $0.isNewline || $0.asciiValue == 0 }) else { return nil }
+            return s
+        }
+        reportedSettings = ReportedModelSettings(model: text("model"), effort: text("effort"), speed: text("speed"))
+        changed?()
     }
     private func receive(_ type: String, text value: String, requestID: String?, usage: ConversationUsage = ConversationUsage()) {
         guard !finished, terminal != "failed" else { return }

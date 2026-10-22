@@ -139,7 +139,7 @@ func TestCodexSteeringAndPreviewToolRejection(t *testing.T) {
 	if steer.method != "turn/steer" || steer.params["expectedTurnId"] != "active" || steer.params["clientUserMessageId"] != "steering" || len(f.sent) != 2 || f.sent[1]["error"] == nil {
 		t.Fatal(f.calls, f.sent)
 	}
-	if (*events)[1]["type"] != "steerAccepted" {
+	if (*events)[2]["type"] != "steerAccepted" {
 		t.Fatal(*events)
 	}
 }
@@ -210,7 +210,7 @@ func TestClaudeSteeringWaitsForBothAcknowledgments(t *testing.T) {
 		for _, event := range *events {
 			kinds = append(kinds, str(event["type"]))
 		}
-		if !reflect.DeepEqual(kinds, []string{"started", "boundary", "steerAccepted", "text", "done"}) {
+		if !reflect.DeepEqual(kinds, []string{"settings", "started", "boundary", "steerAccepted", "text", "done"}) {
 			t.Fatal(kinds)
 		}
 	}

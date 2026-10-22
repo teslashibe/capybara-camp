@@ -16,6 +16,8 @@ struct CampSession: Codable, Identifiable, Equatable, Sendable {
     let accountID: String
     let archived: Bool
     var model: String = ""
+    var effort: String? = nil
+    var speed: String? = nil
     var project: String { URL(fileURLWithPath: cwd).lastPathComponent }
     var isSharedPlan: Bool { id.hasPrefix("camp-plan:") || id.hasPrefix("camp-plan-draft:") }
     var isCloud: Bool { (id.hasPrefix("camp:") || isSharedPlan) && root.isEmpty }
@@ -48,6 +50,13 @@ struct LiveState: Codable, Equatable {
     let children: [ChildSession]
     let owner: String
     let pid: Int
+    var effort: String? = nil
+    var speed: String? = nil
+}
+struct ReportedModelSettings: Equatable {
+    var model: String? = nil
+    var effort: String? = nil
+    var speed: String? = nil
 }
 struct ModelOption: Codable, Identifiable, Equatable {
     let id: String
@@ -569,6 +578,12 @@ final class TranscriptWatch {
         return stateSnapshot().stage(session)
     }
     func modelLabel(_ s: CampSession) -> String { modelChoices[s.id] ?? (s.model.isEmpty ? "Session default" : s.model) }
+    func reportedSettings(_ s: CampSession) -> ReportedModelSettings? {
+        if let run = conversation(s) { return run.reportedSettings }
+        let native = sharing.native(for: s.id) ?? s
+        guard let live = activityFor(native), ["running", "waiting"].contains(live.state) else { return nil }
+        return ReportedModelSettings(model: live.model.isEmpty ? nil : live.model, effort: live.effort, speed: live.speed)
+    }
     func selectModel(_ s: CampSession, _ model: String) {
         guard conversation(s) == nil else { return }
         modelChoices[s.id] = model.isEmpty ? nil : model
@@ -721,8 +736,9 @@ final class TranscriptWatch {
         var indexes = Dictionary(uniqueKeysWithValues: sessions.enumerated().map { ($0.element.id, $0.offset) })
         for item in result.sessions {
             if let index = indexes[item.id] {
-                if sessions[index].title != item.title || sessions[index].model != item.model {
+                if sessions[index].title != item.title || sessions[index].model != item.model || sessions[index].effort != item.effort || sessions[index].speed != item.speed {
                     sessions[index].title = item.title; sessions[index].model = item.model
+                    sessions[index].effort = item.effort; sessions[index].speed = item.speed
                 }
             }
             else { indexes[item.id] = sessions.count; sessions.append(item) }
@@ -1553,7 +1569,7 @@ struct ModelMenu: View {
     var body: some View {
         ModelSettingsMenu(provider: session.provider, title: session.title, sessionModel: session.model,
             modelLabel: store.modelLabel(session), models: store.availableModels(session), caps: store.capabilities(session),
-            choice: store.tuning(session), locked: store.conversation(session) != nil,
+            choice: store.tuning(session), locked: store.conversation(session) != nil, reported: store.reportedSettings(session),
             selectModel: { store.selectModel(session, $0) }, tune: { store.tune(session, effort: $0, speed: $1) })
     }
 }
@@ -1566,10 +1582,13 @@ struct ModelSettingsMenu: View {
     let caps: ModelOption
     let choice: ModelTuning
     let locked: Bool
+    var reported: ReportedModelSettings? = nil
     var context = "Model for the next Camp reply"
     let selectModel: (String) -> Void
     let tune: (String?, String?) -> Void
-    var effortTitle: String { Self.effortName(choice.effort) }
+    var effortTitle: String { reported.map { $0.effort.map(Self.effortName) ?? "Not reported" } ?? Self.effortName(choice.effort) }
+    var speedTitle: String { reported.map { $0.speed.map(Self.speedName) ?? "Speed not reported" } ?? Self.speedName(choice.speed) }
+    var displayedModel: String { reported == nil ? modelLabel : reported?.model ?? "Model not reported" }
     static func effortName(_ value: String) -> String {
         switch value { case "": return "Default"; case "xhigh": return "Extra high"; default: return value.capitalized }
     }
@@ -1579,9 +1598,9 @@ struct ModelSettingsMenu: View {
             if locked {
                 modelLabelView.accessibilityElement(children: .ignore)
                     .accessibilityLabel("Model settings for \(title)")
-                    .accessibilityValue("\(modelLabel), \(effortTitle) effort, \(Self.speedName(choice.speed)) speed, fixed for this run")
+                    .accessibilityValue("\(displayedModel), \(effortTitle) effort, \(speedTitle), current run")
             } else { settingsMenu }
-            Text("\(effortTitle) effort · \(Self.speedName(choice.speed))")
+            Text("\(effortTitle) effort · \(speedTitle)")
                 .font(.system(size: 9)).foregroundStyle(campMuted).lineLimit(1)
         }
     }
@@ -1594,7 +1613,7 @@ struct ModelSettingsMenu: View {
                 Button(option.label) { selectModel(option.id) }
             }
             Divider()
-            Menu("Effort · \(effortTitle)") {
+            Menu("Effort · \(Self.effortName(choice.effort))") {
                 Text("More reasoning can take longer and use more tokens")
                 Button { tune("", nil) } label: { row("Default", checked: choice.effort.isEmpty) }
                 ForEach(caps.efforts, id: \.self) { level in
@@ -1614,10 +1633,10 @@ struct ModelSettingsMenu: View {
         }
         .menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true)
         .disabled(locked).accessibilityLabel("Model settings for \(title)")
-        .accessibilityValue("\(modelLabel), \(effortTitle) effort, \(Self.speedName(choice.speed)) speed")
+        .accessibilityValue("\(displayedModel), \(effortTitle) effort, \(speedTitle)")
     }
     private var modelLabelView: some View {
-        HStack(spacing: 6) { ProviderMark(provider: provider, size: 14); Text(modelLabel).font(.system(size: 10)).foregroundStyle(campInk).lineLimit(1) }
+        HStack(spacing: 6) { ProviderMark(provider: provider, size: 14); Text(displayedModel).font(.system(size: 10)).foregroundStyle(campInk).lineLimit(1) }
     }
     @ViewBuilder func row(_ title: String, checked: Bool) -> some View {
         if checked { Label(title, systemImage: "checkmark") } else { Text(title) }

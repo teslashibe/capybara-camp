@@ -45,6 +45,16 @@ import Foundation
         let external = LiveState(id: b.id, sourceID: b.sourceID, state: "running", model: "opus", children: [], owner: "Claude Code", pid: 123)
         store.applyActivity(ActivityResult(activity: [external], sessions: [], models: [:], errors: [:]))
         precondition(store.stage(b) == .progress)
+        var actual = external; actual.effort = "max"; actual.speed = "fast"
+        store.selectModel(b, "next-model")
+        store.modelTuning[b.id] = ["next-model": ModelTuning(effort: "low", speed: "standard")]
+        store.applyActivity(ActivityResult(activity: [actual], sessions: [], models: [:], errors: [:]))
+        precondition(store.reportedSettings(b) == ReportedModelSettings(model: "opus", effort: "max", speed: "fast"))
+        precondition(store.tuning(b).effort == "low", "Observing a run must not overwrite the next reply's settings")
+        let reportedMenu = ModelSettingsMenu(provider: "Claude", title: b.title, sessionModel: b.model, modelLabel: "next-model", models: [], caps: ModelOption(id: "next-model", label: "Next"), choice: store.tuning(b), locked: false, reported: store.reportedSettings(b), selectModel: { _ in }, tune: { _, _ in })
+        precondition(reportedMenu.displayedModel == "opus" && reportedMenu.effortTitle == "Max")
+        store.applyActivity(ActivityResult(activity: [external], sessions: [], models: [:], errors: [:]))
+        precondition(store.reportedSettings(b)?.effort == nil, "Missing runtime metadata must stay unknown")
         store.move(b.id, .done)
         precondition(store.stage(b) == .progress)
         store.sourceFilter = "active"; store.search = ""

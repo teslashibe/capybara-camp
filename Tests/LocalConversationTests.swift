@@ -46,6 +46,13 @@ import Foundation
         precondition(!store.isBusy(a) && !store.isBusy(b))
         precondition(Bridge.activeProcesses.isEmpty)
 
+        let reported = LocalConversation(session: a, history: [], prompt: "settings")
+        try reported.start(prompt: "settings", model: "requested-model", tuning: ModelTuning(effort: "low", speed: "standard"), makeProcess: { fixtureProcess("reported-settings") })
+        try await until { reported.ready }
+        precondition(reported.reportedSettings == ReportedModelSettings(model: "actual-model", effort: "ultra", speed: "ultrafast"))
+        reported.stop()
+        try await until { Bridge.activeProcesses.isEmpty }
+
         var result: ConversationResult?
         let cancel = LocalConversation(session: a, history: [], prompt: "cancel")
         cancel.completed = { result = $0 }
