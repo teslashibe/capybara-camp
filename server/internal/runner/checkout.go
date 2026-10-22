@@ -84,12 +84,19 @@ func (c *checkout) remove(w camp.Workspace) error {
 	if !validWorkspace(w) {
 		return ErrState
 	}
-	if _, err := c.root.Lstat("used-workspace-" + w.ID + ".json"); err == nil {
+	return c.removeUnused(w.ID)
+}
+
+func (c *checkout) removeUnused(id string) error {
+	if _, err := uuid.Parse(id); err != nil {
+		return ErrState
+	}
+	if _, err := c.root.Lstat("used-workspace-" + id + ".json"); err == nil {
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return ErrState
 	}
-	return c.root.RemoveAll("workspace-" + w.ID)
+	return c.root.RemoveAll("workspace-" + id)
 }
 
 func (c *checkout) entries() ([]os.DirEntry, error) {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -241,6 +242,80 @@ func TestRunnerApprovalChannelsBothProviders(t *testing.T) {
 				return e == nil && r.State == "completed"
 			})
 			stopWorker(t, cancel, done)
+		})
+	}
+}
+
+func TestRunnerSchedulesMultipleTicketsAndRecoversTerminalReceipt(t *testing.T) {
+	for _, provider := range []string{"Codex", "Claude"} {
+		t.Run(provider, func(t *testing.T) {
+			var dropped atomic.Bool
+			f, g, first, record := turnFixture(t, provider, "complete", func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if strings.HasSuffix(r.URL.Path, "/actions") {
+						raw, _ := io.ReadAll(r.Body)
+						r.Body = io.NopCloser(bytes.NewReader(raw))
+						var input camp.RequestAction
+						_ = json.Unmarshal(raw, &input)
+						if input.Action == "finish" && dropped.CompareAndSwap(false, true) {
+							next.ServeHTTP(discardResponse{}, r)
+							w.WriteHeader(503)
+							return
+						}
+					}
+					next.ServeHTTP(w, r)
+				})
+			})
+			second := siblingWorkspace(t, f, g, first)
+			cancel, done := startWorker(t, f.worker)
+			eventually(t, func() bool {
+				w, err := g.Workspace(t.Context(), f.owner, second.CampID, second.ID)
+				return err == nil && w.State == "ready"
+			})
+			stopWorker(t, cancel, done)
+			var err error
+			second, err = g.Workspace(t.Context(), f.owner, second.CampID, second.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = f.store.AssignExecution(t.Context(), f.owner, second.CampID, second.SessionID, uuid.NewString(), camp.ExecutionInput{Location: "cloud", WorkspaceID: second.ID, ExpectedEpoch: 1, ExpectedSessionRevision: second.SourceRevision, ExpectedWorkspaceRevision: second.Revision}); err != nil {
+				t.Fatal(err)
+			}
+			requests := []camp.Request{}
+			for _, w := range []camp.Workspace{second, first, second} {
+				r, err := f.store.CreateRequest(t.Context(), f.owner, w.CampID, w.SessionID, uuid.NewString(), camp.RequestInput{Prompt: "Run ticket " + w.ID})
+				if err != nil {
+					t.Fatal(err)
+				}
+				requests = append(requests, r)
+			}
+			cancel, done = startWorker(t, f.worker)
+			eventually(t, func() bool {
+				for _, r := range requests {
+					current, err := f.store.Request(t.Context(), f.owner, r.CampID, r.ID)
+					if err != nil || current.State != "completed" {
+						return false
+					}
+				}
+				return true
+			})
+			stopWorker(t, cancel, done)
+			raw, err := os.ReadFile(record)
+			if err != nil || strings.Count(string(raw), "turn\n") != 3 || !dropped.Load() {
+				t.Fatal("lost receipt duplicated or stalled work", string(raw), err)
+			}
+			var histories int
+			if err = f.api.Pool.QueryRow(t.Context(), `SELECT count(DISTINCT provider_session_id) FROM workspace_runtime WHERE workspace_id=ANY($1::uuid[])`, []string{first.ID, second.ID}).Scan(&histories); err != nil || histories != 2 {
+				t.Fatal("ticket histories were mixed", histories, err)
+			}
+			if provider == "Codex" && strings.Count(string(raw), "thread/resume\n") != 1 {
+				t.Fatal("existing ticket did not resume its own provider history", string(raw))
+			}
+			for _, w := range []camp.Workspace{first, second} {
+				if err = f.worker.checkout.verify(t.Context(), w); err != nil {
+					t.Fatal("ticket checkout not retained", err)
+				}
+			}
 		})
 	}
 }

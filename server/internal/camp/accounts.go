@@ -285,6 +285,13 @@ func (s *Store) BeginProviderLogin(ctx context.Context, actor auth.Actor, id, ke
 	if busy {
 		return out, ErrTransition
 	}
+	busy, err = installationOccupied(ctx, tx, a.InstallationID)
+	if err != nil {
+		return out, err
+	}
+	if busy {
+		return out, ErrTransition
+	}
 	var grant string
 	err = tx.QueryRow(ctx, `SELECT id FROM runner_grants WHERE installation_id=$1 AND epoch=$2 AND revoked_at IS NULL AND NOT cleanup_only AND expires_at>clock_timestamp()+interval '10 minutes' ORDER BY created_at DESC LIMIT 1`, a.InstallationID, a.Epoch).Scan(&grant)
 	if errors.Is(err, pgx.ErrNoRows) {

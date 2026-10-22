@@ -86,6 +86,11 @@ schema compatibility, and re-create the completed migration job using the new
 image. Do not blindly downgrade a migrated database. Restore or use the documented
 compatible application image if rollback is needed.
 
+Schema 17 changes workspace scheduling to retain multiple ready tickets per
+account. Stop older runner workloads before enabling the matching API and
+controller image: older workers assume one retained checkout and may clean up
+another unused ticket. Deploy the matching runner image before admitting work.
+
 ## Storage and recovery
 
 The example uses one 20 GiB persistent volume. Size it for your retained shared

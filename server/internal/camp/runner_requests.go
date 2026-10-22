@@ -77,6 +77,13 @@ func (g *GitStore) ClaimRunnerRequest(ctx context.Context, token, workspaceID, c
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
+	busy, err := installationOccupied(ctx, tx, l.value.ProviderInstallationID)
+	if err != nil {
+		return nil, err
+	}
+	if busy {
+		return nil, tx.Commit(ctx)
+	}
 	err = tx.QueryRow(ctx, `SELECT r.id FROM prompt_requests r WHERE r.session_id=$1 AND r.execution_location='cloud' AND r.execution_workspace_id=$2 AND r.execution_epoch=$3 AND r.state='queued'
  AND `+eligiblePlanningRequestSQL+`
  AND NOT EXISTS(SELECT 1 FROM prompt_requests active WHERE active.session_id=r.session_id AND active.state IN ('claimed','started','cancel_requested','outcome_unknown'))

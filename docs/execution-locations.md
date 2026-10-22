@@ -35,6 +35,9 @@ Returning an unused cloud workspace to the Mac retires that preparation slot
 in the same transaction. The account can then prepare another ticket. The
 ticket retains its Camp project while connected, and its unsent draft remains
 in the composer. A used workspace still requires the transfer protocol below.
+An account can also retain multiple ready cloud tickets. Its worker schedules
+their prompts one at a time and keeps each checkout and provider history
+separate; see [provider turns](runner-turns.md#multiple-tickets-on-one-account).
 
 ## API additions
 

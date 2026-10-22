@@ -39,6 +39,34 @@ are bounded. The worker cancels and joins provider processes on cancellation,
 authority loss and deadline. Modified workspaces survive normal worker recovery;
 preparation does not delete a used working tree.
 
+## Multiple tickets on one account
+
+Each ticket retains its own checkout, branch and provider conversation ID. One
+installation worker processes them serially. A ready checkout does not reserve
+the worker; queued preparation and eligible prompts compete by their creation
+time. An active request or preparation is resumed before selecting another
+ticket. Login, preparation and provider execution cannot overlap on that account.
+
+The database account lock fences competing claims, including requests for
+different tickets. A started request with an unknown outcome blocks more work
+on the installation until it is reconciled. The worker recovers its saved turn
+and terminal receipt before consulting the scheduler, so switching tickets
+cannot strand a completion or repeat a provider turn.
+
+Checkout cleanup asks `POST /v1/runner/workspaces/retired` about batches of at
+most 64 local workspace IDs. Only an authenticated successful reply can retire
+an unused checkout. Queued, preparing and ready workspaces are retained;
+unavailable or malformed replies do not delete anything. A used checkout stays
+on disk for reviewed transfer or account erasure even after its server record
+is retired. The endpoint returns no other account's workspace metadata.
+
+Schema 17 permits multiple ready workspaces per installation while retaining a
+unique preparing workspace. It adds request/workspace scheduling indexes and
+preserves existing prepared checkouts. Upgrade the API and every runner with
+the matching schema; older runners assume only one retained checkout and must
+be stopped before enabling multiple tickets. Review [self-hosting](self-hosting.md)
+before deployment. Live multi-ticket cloud acceptance remains a release gate.
+
 ## Provider credentials
 
 The official CLI renews its own OAuth credentials. The runner restores only the
@@ -66,8 +94,8 @@ Kubernetes runtime and live provider behavior remain release gates. See
 [process isolation](process-isolation.md) for the exact boundary and required checks.
 
 The native [Run on controls](execution-locations.md) now prepare and assign a
-private cloud copy. Also pending: execution defaults, multiple active tickets
-per account and native cloud steering, reviewed transfers, cloud usage
+private cloud copy. Also pending: execution defaults and native cloud steering,
+reviewed transfers, cloud usage
 presentation, Git publication and actor attribution,
 real provider logins/turns with the Mac offline, and two-user cloud acceptance.
 
@@ -76,3 +104,10 @@ race suite and vet against disposable PostgreSQL 17. Follow-up subprocess tests
 also passed two sequential requests for each provider, with Codex resuming the
 saved provider thread. Native regression results and UI evidence are recorded
 in `docs/ui-audit.md`. These results do not satisfy the live isolation gate.
+
+The multi-ticket regression runs three synthetic turns across two checkouts
+for each provider. It checks distinct provider session IDs, continuation on the
+right ticket and a dropped completion response without an extra provider turn.
+Additional tests cover retained unused checkouts across restart, explicit
+retirement, malformed cleanup replies, competing claims and unknown-outcome
+fencing. PostgreSQL migration tests preserve existing ready workspace metadata.

@@ -66,16 +66,20 @@ runner reports ready only after checking out and validating the pinned commit.
 Only an active installation grant can use `/v1/runner/workspaces/next` or the
 `claim`, `heartbeat`, `token`, `status` and `report` POST routes beneath
 `/v1/runner/workspaces/{workspace}`. Human Camp tokens cannot use these routes.
-All POST requests carry the same worker-generated `claim_id`. Each installation
-has at most one preparing or ready workspace; other tickets remain queued.
+These preparation POST requests carry the same worker-generated `claim_id`.
+Each installation has at most one preparing workspace or active provider turn.
+It may retain several ready ticket checkouts. [The scheduler](runner-turns.md#multiple-tickets-on-one-account)
+selects queued work across those tickets without mixing their provider histories.
 
 A claim leases preparation for 90 seconds with a fixed ten-minute deadline.
 Heartbeats extend the lease within that deadline. A different claim or a
 replacement runner grant cannot adopt it. The worker saves its claim ID before
 submitting a claim and reconciles a lost reply using that same ID. The status
 route returns metadata only to the grant and claim that own the preparation.
-The next-work route also returns the installation's ready workspace so a
-restarted worker can verify its retained files without another checkout.
+The next-work route also returns ready workspaces so a restarted worker can
+verify retained files without another checkout. Cleanup checks small batches
+of local IDs through the separate `/v1/runner/workspaces/retired` route; a ready
+workspace is not deleted when another ticket is selected.
 
 The token route revalidates Camp membership, source/project revisions, account
 epochs, and the selected GitHub installation/repository. It then requests a
@@ -96,7 +100,8 @@ erase the cached token and make its revocation due. A revocation is also queued
 for its permitted expiry when the token is first saved. The existing bounded
 Git cleanup worker performs those calls. Reaping closes stale leases and
 workspaces whose membership, source, project, account or Git authority changed.
-Cloud inference and publication still need their own execution protocol.
+Cloud inference uses the separate [provider-turn protocol](runner-turns.md).
+Git publication and live execution acceptance remain unfinished.
 
 Schema 14 adds these claims and retains older preparation records. New records
 also retain their installation/repository page selections. Older records use

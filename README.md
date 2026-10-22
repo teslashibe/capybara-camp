@@ -176,8 +176,9 @@ uncommitted files are not included by this preparation flow.
 Cloud assignment stops the local publisher from overwriting the cloud session.
 Returning an unused checkout to Local preserves the local draft and project.
 A used checkout requires the reviewed transfer feature, which is still pending;
-the current app blocks that move. Defaults, multiple cloud tickets on one
-account, cloud steering and other unfinished behavior are tracked in
+the current app blocks that move. The local runner implementation retains a
+separate checkout and provider history for each ticket and schedules work
+serially per account. Defaults, cloud steering and other unfinished behavior are tracked in
 [execution locations](docs/execution-locations.md) and the delivery status.
 
 For operators, start with [self-hosting](docs/self-hosting.md), then the

@@ -59,6 +59,18 @@ func (a *API) gitRoutes(mux *http.ServeMux) {
 			}
 		}
 	}))
+	mux.HandleFunc("POST /v1/runner/workspaces/retired", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
+		var in struct {
+			IDs []string `json:"ids"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := a.Git.RetiredRunnerWorkspaces(r.Context(), token(r), in.IDs)
+		if !fail(w, err) {
+			write(w, 200, out)
+		}
+	}))
 	mux.HandleFunc("POST /v1/runner/workspaces/{workspace}/requests/claim", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
 		var in struct {
 			ClaimID string `json:"claim_id"`

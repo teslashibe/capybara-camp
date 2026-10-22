@@ -173,6 +173,15 @@ func TestWorkspaceHTTPRequiresOwnerAndReplaysReceipt(t *testing.T) {
 	claimJSON, _ := json.Marshal(map[string]string{"claim_id": claimID})
 	call("POST", runnerPath+"/claim", tokens[0], "", claimJSON, 401)
 	call("GET", "/v1/runner/workspaces/next", grant.Token, "", nil, 200)
+	unknownWorkspace := uuid.NewString()
+	retentionJSON, _ := json.Marshal(map[string]any{"ids": []string{workspace.ID, unknownWorkspace}})
+	call("POST", "/v1/runner/workspaces/retired", tokens[0], "", retentionJSON, 401)
+	retiredRaw := call("POST", "/v1/runner/workspaces/retired", grant.Token, "", retentionJSON, 200)
+	var retiredIDs []string
+	if err = json.Unmarshal(retiredRaw, &retiredIDs); err != nil || len(retiredIDs) != 1 || retiredIDs[0] != unknownWorkspace {
+		t.Fatal("retention endpoint removed active workspace", string(retiredRaw), err)
+	}
+	call("POST", "/v1/runner/workspaces/retired", grant.Token, "", []byte(`{"ids":[]}`), 400)
 	raw = call("POST", runnerPath+"/claim", grant.Token, "", claimJSON, 200)
 	var claimResult camp.RunnerWorkspaceClaim
 	if err = json.Unmarshal(raw, &claimResult); err != nil || claimResult.Workspace.State != "preparing" {

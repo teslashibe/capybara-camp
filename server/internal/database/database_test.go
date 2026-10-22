@@ -111,6 +111,14 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO prompt_requests(id,camp_id,session_id,requester_user_id,owner_user_id,owner_device_id,permission_revision,prompt,model,effort,speed,state) VALUES($1,$2,$3,$4,$4,$5,1,'Preserved queued prompt','fixture-model','high','standard','queued')`, request, camp, session, id, device); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = provider.UpTo(ctx, 16); err != nil {
+		t.Fatal(err)
+	}
+	workspace := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO ticket_workspaces(id,camp_id,session_id,project_id,owner_user_id,provider_account_id,provider_installation_id,provider_epoch,git_connection_id,git_epoch,github_user_id,github_login,github_installation_id,repository_id,repository_name,requested_ref,base_commit,branch,purpose,source_revision,project_revision,state)
+ VALUES($1,$2,$3,$4,$5,$6,$7,3,$8,5,123,'preserved-user',7,5,'fixture/repo','main',$9,$10,'planning',1,1,'ready')`, workspace, camp, session, project, id, account, installation, connection, strings.Repeat("a", 40), "camp/"+session+"/"+workspace); err != nil {
+		t.Fatal(err)
+	}
 	if err = Migrate(ctx, u.String()); err != nil {
 		t.Fatal(err)
 	}
@@ -119,6 +127,10 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	}
 	if err = Ready(ctx, pool); err != nil {
 		t.Fatal(err)
+	}
+	var preparedState, preparedCommit string
+	if err = pool.QueryRow(ctx, `SELECT state,base_commit FROM ticket_workspaces WHERE id=$1`, workspace).Scan(&preparedState, &preparedCommit); err != nil || preparedState != "ready" || preparedCommit != strings.Repeat("a", 40) {
+		t.Fatal("scheduling migration lost prepared checkout", err)
 	}
 	var name string
 	if err = pool.QueryRow(ctx, `SELECT display_name FROM users WHERE id=$1`, id).Scan(&name); err != nil || name != "Preserved user" {

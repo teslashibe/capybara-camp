@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -252,4 +254,93 @@ func TestWorkerCheckoutCancellationStopsGitBeforeCleanup(t *testing.T) {
 		t.Fatal("cancel retained checkout")
 	}
 	stopWorker(t, cancel, done)
+}
+
+func siblingWorkspace(t *testing.T, f fixture, g *camp.GitStore, first camp.Workspace) camp.Workspace {
+	t.Helper()
+	source, err := f.store.Session(t.Context(), f.owner, first.CampID, first.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := f.store.PublishSession(t.Context(), f.owner, first.CampID, uuid.NewString(), camp.SessionInput{ID: uuid.NewString(), ProjectID: first.ProjectID, ProfileID: source.ProfileID, LocalSessionID: uuid.NewString(), Title: "Second ticket", State: "idle", Stage: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := g.CreateWorkspace(t.Context(), f.owner, first.CampID, session.ID, uuid.NewString(), camp.WorkspaceInput{ProviderAccountID: first.ProviderAccountID, GitConnectionID: first.GitConnectionID, GitHubInstallationID: first.GitHubInstallationID, RepositoryID: first.RepositoryID, InstallationPage: 1, RepositoryPage: 1, Purpose: first.Purpose, ExpectedSessionRevision: session.Revision, ExpectedProjectRevision: first.ProjectRevision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+func TestWorkerRetainsReadyCheckoutsAndRemovesOnlyRetiredUnusedWork(t *testing.T) {
+	remote, sha, _ := gitFixtureServer(t, nil, nil)
+	f, g, _, first := workerWorkspaceFixture(t, remote, sha, nil)
+	cancel, done := startWorker(t, f.worker)
+	eventually(t, func() bool {
+		w, err := g.Workspace(t.Context(), f.owner, first.CampID, first.ID)
+		return err == nil && w.State == "ready"
+	})
+	stopWorker(t, cancel, done)
+	second := siblingWorkspace(t, f, g, first)
+	cancel, done = startWorker(t, f.worker)
+	eventually(t, func() bool {
+		w, err := g.Workspace(t.Context(), f.owner, second.CampID, second.ID)
+		return err == nil && w.State == "ready"
+	})
+	stopWorker(t, cancel, done)
+	for _, w := range []camp.Workspace{first, second} {
+		if err := f.worker.checkout.verify(t.Context(), w); err != nil {
+			t.Fatal("another ticket removed this checkout", w.ID, err)
+		}
+	}
+	current, err := g.Workspace(t.Context(), f.owner, second.CampID, second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = g.CancelWorkspace(t.Context(), f.owner, second.CampID, second.ID, uuid.NewString(), camp.WorkspaceCancel{ExpectedRevision: current.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	cancel, done = startWorker(t, f.worker)
+	eventually(t, func() bool {
+		_, err := os.Stat(f.worker.checkout.workdir(second))
+		return errors.Is(err, os.ErrNotExist)
+	})
+	stopWorker(t, cancel, done)
+	if err = f.worker.checkout.verify(t.Context(), first); err != nil {
+		t.Fatal("retiring another ticket removed active checkout", err)
+	}
+}
+
+func TestWorkspaceCleanupRejectsUnavailableOrUnrequestedRetirement(t *testing.T) {
+	c, err := openCheckout(privateTemp(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.close()
+	id := uuid.NewString()
+	if err = os.Mkdir(filepath.Join(c.dir, "workspace-"+id), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var unavailable atomic.Bool
+	unavailable.Store(true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if unavailable.Load() {
+			w.WriteHeader(503)
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]string{id, uuid.NewString()})
+	}))
+	defer server.Close()
+	worker := &Worker{checkout: c, client: &client{origin: server.URL, http: server.Client()}}
+	if err = worker.cleanupRetiredWorkspaces(t.Context()); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("unavailable response became retirement", err)
+	}
+	unavailable.Store(false)
+	if err = worker.cleanupRetiredWorkspaces(t.Context()); !errors.Is(err, ErrState) {
+		t.Fatal("unrequested retirement accepted", err)
+	}
+	if _, err = os.Stat(filepath.Join(c.dir, "workspace-"+id)); err != nil {
+		t.Fatal("cleanup removed a checkout before validating all IDs", err)
+	}
 }

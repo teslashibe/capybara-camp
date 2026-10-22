@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 
@@ -118,19 +119,34 @@ func (w *Worker) workspaceTick(ctx context.Context, account camp.RunnerAccountSt
 		return err
 	}
 	if r == nil {
+		// Reconcile the saved turn before asking the scheduler for another
+		// ticket. A lost terminal receipt must not strand the previous turn.
+		turn, err := w.checkout.loadTurn()
+		if err != nil {
+			return err
+		}
+		if turn != nil {
+			if turn.Workspace.ProviderInstallationID != account.InstallationID || turn.Workspace.ProviderEpoch != account.Epoch {
+				return w.checkout.holdTurn(turn)
+			}
+			if err = w.checkout.verify(ctx, turn.Workspace); err != nil {
+				return err
+			}
+			return w.turnTick(ctx, account, turn.Workspace)
+		}
+		if err = w.cleanupRetiredWorkspaces(ctx); err != nil {
+			return err
+		}
 		next, err := w.client.nextWorkspace(ctx)
 		if err != nil {
 			return err
 		}
 		if next == nil {
 			w.readyWorkspace = ""
-			return w.checkout.cleanAll()
+			return nil
 		}
 		if !validWorkspace(*next) || next.ProviderInstallationID != account.InstallationID || next.ProviderEpoch != account.Epoch {
 			return ErrState
-		}
-		if err = w.checkout.keepWorkspace(next.ID); err != nil {
-			return err
 		}
 		if next.State == "ready" {
 			if w.readyWorkspace != next.ID {
@@ -224,6 +240,52 @@ func (w *Worker) workspaceTick(ctx context.Context, account camp.RunnerAccountSt
 		return err
 	}
 	return w.journal.clearWorkspace()
+}
+
+// Keep every active ticket's checkout. Only an authenticated server response
+// may retire an unused directory, and used work stays until a reviewed transfer
+// or account erasure handles it. Process/network failures never mean deletion.
+func (w *Worker) cleanupRetiredWorkspaces(ctx context.Context) error {
+	entries, err := w.checkout.entries()
+	if err != nil {
+		return err
+	}
+	ids := []string{}
+	for _, entry := range entries {
+		id, ok := strings.CutPrefix(entry.Name(), "workspace-")
+		if !ok {
+			continue
+		}
+		if _, err = uuid.Parse(id); err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	for len(ids) > 0 {
+		n := min(64, len(ids))
+		batch := ids[:n]
+		var retired []string
+		if err = w.client.call(ctx, "POST", "/v1/runner/workspaces/retired", map[string]any{"ids": batch}, &retired); err != nil {
+			return err
+		}
+		allowed := map[string]bool{}
+		for _, id := range batch {
+			allowed[id] = true
+		}
+		for _, id := range retired {
+			if !allowed[id] {
+				return ErrState
+			}
+			delete(allowed, id)
+		}
+		for _, id := range retired {
+			if err = w.checkout.removeUnused(id); err != nil {
+				return err
+			}
+		}
+		ids = ids[n:]
+	}
+	return nil
 }
 
 func (w *Worker) reconcileWorkspace(ctx context.Context, r *workspaceRecord) error {

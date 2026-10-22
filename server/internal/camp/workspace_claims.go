@@ -92,7 +92,23 @@ func (g *GitStore) NextRunnerWorkspace(ctx context.Context, token string) (*Work
 		return nil, nil
 	}
 	var id string
-	err = g.store.pool.QueryRow(ctx, `SELECT w.id FROM ticket_workspaces w WHERE w.provider_installation_id=$1 AND w.provider_epoch=$2 AND (w.state IN ('preparing','ready') OR (w.state='queued' AND NOT EXISTS(SELECT 1 FROM ticket_workspaces active WHERE active.provider_installation_id=w.provider_installation_id AND active.state IN ('preparing','ready')))) ORDER BY (w.state IN ('preparing','ready')) DESC,w.created_at,w.id LIMIT 1`, state.InstallationID, state.Epoch).Scan(&id)
+	err = g.store.pool.QueryRow(ctx, `SELECT w.id FROM ticket_workspaces w
+ JOIN sessions s ON s.id=w.session_id JOIN projects p ON p.id=w.project_id
+ JOIN git_connections g ON g.id=w.git_connection_id
+ JOIN memberships m ON m.camp_id=w.camp_id AND m.user_id=w.owner_user_id
+ LEFT JOIN LATERAL (
+ SELECT EXISTS(SELECT 1 FROM prompt_requests r WHERE r.execution_workspace_id=w.id
+ AND r.execution_epoch=s.execution_epoch AND r.state IN ('claimed','started','cancel_requested','outcome_unknown')) AS active,
+ (SELECT r.created_at FROM prompt_requests r WHERE r.execution_workspace_id=w.id
+ AND r.execution_epoch=s.execution_epoch AND r.state='queued' AND `+eligiblePlanningRequestSQL+`
+ ORDER BY r.created_at,r.id LIMIT 1) AS queued_at
+ ) requests ON true
+ WHERE w.provider_installation_id=$1 AND w.provider_epoch=$2 AND w.state IN ('queued','preparing','ready')
+ AND s.revision=w.source_revision AND s.project_id=w.project_id AND p.revision=w.project_revision AND NOT p.archived
+ AND g.state='connected' AND g.epoch=w.git_epoch AND m.role<>'viewer'
+ ORDER BY CASE WHEN requests.active THEN 0 WHEN w.state='preparing' THEN 1
+ WHEN w.state='queued' OR requests.queued_at IS NOT NULL THEN 2 ELSE 3 END,
+ COALESCE(requests.queued_at,w.created_at),w.id LIMIT 1`, state.InstallationID, state.Epoch).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -152,9 +168,15 @@ func (g *GitStore) ClaimRunnerWorkspace(ctx context.Context, token, id, claim st
 		}
 	} else if lease.value.State == "queued" {
 		var busy bool
-		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM ticket_workspaces WHERE provider_installation_id=$1 AND state IN ('preparing','ready')) OR EXISTS(SELECT 1 FROM provider_login_attempts WHERE installation_id=$1 AND state IN ('queued','running','waiting') AND expires_at>clock_timestamp())`, lease.value.ProviderInstallationID).Scan(&busy)
+		busy, err = installationOccupied(ctx, tx, lease.value.ProviderInstallationID)
 		if err != nil {
 			return out, err
+		}
+		if !busy {
+			err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_login_attempts WHERE installation_id=$1 AND state IN ('queued','running','waiting') AND expires_at>clock_timestamp())`, lease.value.ProviderInstallationID).Scan(&busy)
+			if err != nil {
+				return out, err
+			}
 		}
 		if busy {
 			return out, ErrTransition
