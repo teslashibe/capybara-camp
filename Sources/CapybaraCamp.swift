@@ -1408,11 +1408,12 @@ struct RootView: View {
                 ProjectSidebar(store: store, local: store.projects, cloud: store.cloud)
             }
             VStack(alignment: .leading, spacing: 10) {
-                HStack { Text("LOCAL PROFILES").font(.system(size: 10, weight: .semibold)).tracking(1.4).foregroundStyle(campMuted); Spacer(); Button { store.sourceSheet = true } label: { Image(systemName: "plus") }.buttonStyle(.plain) }
+                HStack { Text("LOCAL PROFILES").font(.system(size: 10, weight: .semibold)).tracking(1.4).foregroundStyle(campMuted); Spacer(); Button { store.sourceSheet = true } label: { CampIconLabel(symbol: "plus") }.buttonStyle(.plain).accessibilityLabel("Add profile") }
                 ForEach(store.sources) { source in
                     Button { store.sourceFilter = source.id } label: {
                         HStack(alignment: .top, spacing: 7) { Circle().fill(source.provider == "Codex" ? campGreen : Color(hex: 0xBD815C)).frame(width: 6, height: 6).padding(.top, 5); VStack(alignment: .leading, spacing: 3) { Text(source.label).lineLimit(1); Text("\(source.count.formatted()) sessions").font(.system(size: 10)).foregroundStyle(campMuted) } }
                             .frame(maxWidth: .infinity, alignment: .leading).padding(7).background(store.sourceFilter == source.id ? campGreen.opacity(0.10) : .clear).clipShape(RoundedRectangle(cornerRadius: 7))
+                            .contentShape(Rectangle())
                     }.buttonStyle(.plain).font(.system(size: 12))
                 }
             }
@@ -1433,6 +1434,7 @@ struct RootView: View {
                 Text(title); Spacer(); Text(count.formatted()).font(.system(size: 10)).foregroundStyle(campMuted)
             }
                 .font(.system(size: 12, weight: .medium)).padding(10).background(store.sourceFilter == id ? .white.opacity(0.9) : .clear).clipShape(RoundedRectangle(cornerRadius: 8))
+                .contentShape(Rectangle())
         }.buttonStyle(.plain)
     }
     var header: some View {
@@ -1529,7 +1531,7 @@ struct SessionCard: View {
                     if store.planning.ticket(session.id) != nil { Button("Save to Camp", systemImage: "icloud.and.arrow.up") { store.planPromotionSheet = session } }
                     if !session.isCloud && session.provider != "Planning" { Button("Permissions…") { store.permissionSheet = session } }
                     if let local = store.shareSource(session) { Divider(); Button("Share with Camp…") { store.shareSheet = local } }
-                } label: { Image(systemName: "ellipsis").foregroundStyle(campMuted).frame(width: 28, height: 28) }
+                } label: { CampIconLabel(symbol: "ellipsis").foregroundStyle(campMuted) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Move \(session.title)")
             }
         } models: {
@@ -1571,10 +1573,9 @@ struct RecentSessionsList: View {
                     Text("\(store.recentSessions.count)").font(.system(size: 10)).foregroundStyle(campMuted)
                 }.padding(.horizontal, 16).padding(.top, 10)
                 Menu { ForEach(["All types", "Planning", "Codex", "Claude"], id: \.self) { value in Button(value) { store.setRecentType(value) } } } label: {
-                    Label(store.recentType, systemImage: "line.3.horizontal.decrease")
-                }.menuStyle(.borderlessButton).menuIndicator(.visible).font(.system(size: 11)).controlSize(.small)
-                    .padding(.horizontal, 9).frame(maxWidth: .infinity).frame(height: 29)
-                    .background(.white.opacity(0.65)).clipShape(RoundedRectangle(cornerRadius: 6)).padding(.horizontal, 14)
+                    CampDropdownLabel(title: store.recentType, icon: "line.3.horizontal.decrease")
+                }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).font(.system(size: 11)).controlSize(.small)
+                    .padding(.horizontal, 14)
                     .help("Filter recent sessions").accessibilityLabel("Filter recent sessions").accessibilityValue(store.recentType)
                 ScrollView {
                 LazyVStack(spacing: 5) {
@@ -1589,6 +1590,7 @@ struct RecentSessionsList: View {
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 7).padding(.vertical, 8)
                             .background(store.selectedID == s.id ? Color(hex: 0xEEEEE7) : .clear).clipShape(RoundedRectangle(cornerRadius: 6))
+                            .contentShape(Rectangle())
                     }.buttonStyle(.plain) }
                     if store.recentSessions.isEmpty { Text("No recent \(store.recentType == "All types" ? "" : store.recentType.lowercased() + " ")sessions").font(.caption).foregroundStyle(campMuted).padding() }
                 }.padding(10)
@@ -1627,6 +1629,7 @@ struct ChatView: View {
                             Spacer(minLength: 0)
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
                             .background(pickedChild == nil ? Color(hex: 0xDFE5D8) : .clear).clipShape(RoundedRectangle(cornerRadius: 7))
+                            .contentShape(Rectangle())
                     }.buttonStyle(.plain).padding(.horizontal, 10).accessibilityLabel(session.isPlan ? "Implementation" : "Main chat")
                     Button { subagentsExpanded.toggle() } label: {
                         HStack(spacing: 6) {
@@ -1653,6 +1656,7 @@ struct ChatView: View {
                                         Text(child.status.capitalized).font(.system(size: 9)).foregroundStyle(campMuted).lineLimit(1)
                                     }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 5).padding(.vertical, 8)
                                         .background(pickedChild?.id == child.id ? Color(hex: 0xDFE5D8) : .clear).clipShape(RoundedRectangle(cornerRadius: 7))
+                                        .contentShape(Rectangle())
                                 }.buttonStyle(.plain).disabled(child.status=="syncing")
                             }
                             if store.children.isEmpty && !store.childrenLoading {
@@ -1678,12 +1682,7 @@ struct ChatView: View {
                 if let child = currentChild, let parent = store.selected {
                     ChildTranscriptView(store: store, parent: store.shareSource(parent) ?? parent, child: child, openMain: { pickedChild = nil }).id("\(parent.id):\(child.id)")
                 } else if let s = store.selected {
-                    HStack {
-                        HStack(spacing: 7) { ProviderMark(provider: s.provider, size: 16); Text(s.isPlan ? "Implementation" : "Main chat") }.font(.system(size: 11)); Spacer()
-                        if let local = store.shareSource(s) { Button { store.shareSheet = local } label: { Image(systemName: "person.2") }.buttonStyle(.plain).help("Share with Camp").accessibilityLabel("Share with Camp") }
-                        ModelMenu(store: store, session: s, expanded: true)
-                        if !s.isCloud && s.provider != "Planning" { Button { store.permissionSheet = s } label: { Image(systemName: "lock.shield") }.buttonStyle(.plain).frame(width: 28, height: 28).help("Permissions").accessibilityLabel("Permissions") }
-                    }.padding(.horizontal, 22).padding(.vertical, 8)
+                    chatHeader(s).padding(.horizontal, 22).padding(.vertical, 8)
                     if store.planning.ticket(s.id)?.implementation != nil { ImplementationStatusView(store: store, planning: store.planning, id: s.id) }
                     if let live = store.activityFor(s) { Text("\(live.owner) · \(live.state) · Model choice applies to the next Camp reply").font(.system(size: 11)).foregroundStyle(campGreen).padding(.bottom, 8) }
                     HStack { Text(s.sourceLabel).font(.system(size: 10, weight: .medium)); if !s.accountID.isEmpty { Text("· author \(s.accountID.prefix(8))").font(.system(size: 10)).foregroundStyle(campMuted) }; ExecutionLocationButton(store:store,session:s); Spacer(); Menu(store.stage(s).rawValue) { ForEach(Stage.allCases, id: \.self) { stage in Button(stage.rawValue) { store.move(s.id, stage) } } }.fixedSize() }.padding(.horizontal, 22).padding(.vertical, 10)
@@ -1724,7 +1723,9 @@ struct ChatView: View {
                             Text(store.chatRunning(s) ? "Steer now or queue for after this turn" : s.isCloud ? (store.executionSession(s)?.executionLocation == "cloud" ? "Saved to Camp · Runs in Cloud with the selected account" : "Saved to Camp · Runs on the session owner's Mac after approval") : store.activityFor(s) != nil ? "Open in \(s.provider) · Camp queue waits until it is closed" : s.isPlan || store.sessionPermissions.grants[s.id] != nil ? "Uses \(s.sourceLabel) login · \(store.permissionSettings(s).summary)" : "Uses \(s.sourceLabel) login · Chat-only local preview")
                                 .font(.system(size: 10)).foregroundStyle(campMuted).fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 8)
-                            Button("@ Context") { contextQuery = ""; contextPicking = true }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(campGreen)
+                            Button { contextQuery = ""; contextPicking = true } label: {
+                                Text("@ Context").padding(.horizontal, 6).frame(minHeight: 28).contentShape(Rectangle())
+                            }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(campGreen)
                                 .accessibilityLabel("Attach session context")
                                 .popover(isPresented: $contextPicking) { SessionContextPicker(store: store, destination: s, query: contextQuery) { contextPicking = false } }
                             if store.chatRunning(s) || store.activityFor(s) != nil {
@@ -1760,6 +1761,38 @@ struct ChatView: View {
             if let child = pickedChild, !ids.contains(child.id) { pickedChild = nil }
         }
     }
+    private func chatHeader(_ session: CampSession) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .bottom, spacing: 10) {
+                chatHeading(session).fixedSize().frame(height: 30)
+                Spacer(minLength: 8)
+                ModelMenu(store: store, session: session, expanded: true).frame(width: 396)
+                chatActions(session)
+            }
+            VStack(alignment: .trailing, spacing: 8) {
+                HStack { chatHeading(session); Spacer(); chatActions(session) }
+                ModelMenu(store: store, session: session, expanded: true).frame(maxWidth: 396)
+            }
+        }
+    }
+    private func chatHeading(_ session: CampSession) -> some View {
+        HStack(spacing: 7) {
+            ProviderMark(provider: session.provider, size: 16)
+            Text(session.isPlan ? "Implementation" : "Main chat")
+        }.font(.system(size: 11))
+    }
+    private func chatActions(_ session: CampSession) -> some View {
+        HStack(spacing: 4) {
+            if let local = store.shareSource(session) {
+                Button { store.shareSheet = local } label: { CampIconLabel(symbol: "person.2") }
+                    .buttonStyle(.plain).help("Share with Camp").accessibilityLabel("Share with Camp")
+            }
+            if !session.isCloud && session.provider != "Planning" {
+                Button { store.permissionSheet = session } label: { CampIconLabel(symbol: "lock.shield") }
+                    .buttonStyle(.plain).help("Permissions").accessibilityLabel("Permissions")
+            }
+        }
+    }
 }
 struct PromptQueueView: View {
     @ObservedObject var store: CampStore
@@ -1787,8 +1820,8 @@ struct PromptQueueView: View {
                                     if item.state == "needsReview" { Text("Unconfirmed delivery · Check the transcript before resubmitting").foregroundStyle(Color.orange) }
                                     else if item.state == "sending" { Text("Starting…").foregroundStyle(campMuted) }
                                 }
-                                Button { store.editQueued(item) } label: { Image(systemName: "pencil") }.help("Edit queued prompt").disabled(item.state == "sending")
-                                Button { store.removeQueued(item) } label: { Image(systemName: "xmark") }.help("Remove queued prompt").disabled(item.state == "sending")
+                                Button { store.editQueued(item) } label: { CampIconLabel(symbol: "pencil") }.help("Edit queued prompt").disabled(item.state == "sending")
+                                Button { store.removeQueued(item) } label: { CampIconLabel(symbol: "xmark") }.help("Remove queued prompt").disabled(item.state == "sending")
                             }.font(.system(size: 11)).buttonStyle(.plain)
                         }
                     }
@@ -1915,19 +1948,19 @@ struct ModelSettingsMenu: View {
     }
     private var modelField: some View {
         field("Model") {
-            Menu { modelOptions } label: { Text(displayedModel).lineLimit(1) }
+            Menu { modelOptions } label: { CampDropdownLabel(title: displayedModel) }
                 .accessibilityLabel("Model settings for \(title)").accessibilityValue(displayedModel)
         }
     }
     private var effortField: some View {
         field("Effort") {
-            Menu { effortOptions } label: { Text(effortTitle).lineLimit(1) }
+            Menu { effortOptions } label: { CampDropdownLabel(title: effortTitle) }
                 .accessibilityLabel("Effort for \(title)").accessibilityValue(effortTitle)
         }
     }
     private var speedField: some View {
         field("Speed") {
-            Menu { speedOptions } label: { Text(speedTitle).lineLimit(1) }
+            Menu { speedOptions } label: { CampDropdownLabel(title: speedTitle) }
                 .accessibilityLabel("Speed for \(title)").accessibilityValue(speedTitle)
         }
     }

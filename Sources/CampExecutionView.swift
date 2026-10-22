@@ -16,7 +16,7 @@ struct ExecutionLocationButton: View {
     var body: some View {
         if ["Codex", "Claude"].contains(session.provider) {
             Button { store.executionSheet = session } label: {
-                Image(systemName: location == "Cloud" ? "cloud" : "desktopcomputer").frame(width: 28, height: 28)
+                CampIconLabel(symbol: location == "Cloud" ? "cloud" : "desktopcomputer")
             }.buttonStyle(.plain).foregroundStyle(campMuted)
                 .help("Runs on \(location)").accessibilityLabel("Run on · \(location) · \(session.title)")
         }

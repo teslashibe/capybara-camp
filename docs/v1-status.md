@@ -629,6 +629,15 @@ click areas, keyboard navigation, scrolling and streaming behavior. Record
 differences, fix them, and repeat the affected computer-use flows before release.
 Passing unit tests alone does not satisfy this gate.
 
+The October 22 click-target pass corrected the stretched chat settings header
+and moved dropdown padding inside each clickable label. Model, effort and
+speed now share compact, left-aligned fields; the group moves below the title
+in narrow windows. Native wide/narrow checks, menu selection and pointer clicks
+near the model/effort field edges passed. Session/navigation rows and small
+action icons also have explicit hit areas. The remaining full pointer and
+keyboard inventory stays in the final UI gate; see UI-25 and UI-26 in
+`docs/ui-audit.md`.
+
 The native app has not passed this review. The approved interactive design is
 the visual reference for layout, wording, icons and shared controls. Capture
 the native and reference views at matching window sizes, track each discrepancy

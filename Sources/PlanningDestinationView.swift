@@ -22,7 +22,7 @@ struct PlanningRunOnMenu: View {
                 Button("This Mac", systemImage: "desktopcomputer") { choose("Local") }
                 Button("Cloud", systemImage: "cloud") { choose("Cloud") }
             } label: {
-                Label(execution?.location == "cloud" ? "Cloud" : execution == nil ? "Choose location" : localLabel, systemImage: execution?.location == "cloud" ? "cloud" : "desktopcomputer")
+                CampDropdownLabel(title: execution?.location == "cloud" ? "Cloud" : execution == nil ? "Choose location" : localLabel, icon: execution?.location == "cloud" ? "cloud" : "desktopcomputer")
             }
                 .accessibilityLabel("\(provider) plan location")
         }

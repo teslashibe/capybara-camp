@@ -125,7 +125,7 @@ struct PlanningCard: View {
                         ProjectAssignmentMenu(store:store,session:plan.session)
                         Button("Start over") { planning.restart(id); store.open(plan.session) }
                         Button("Cancel planning") { planning.cancel(id) }.disabled(plan.current.state == "ready" || plan.current.state == "cancelled")
-                    } label: { Image(systemName: "ellipsis").foregroundStyle(campMuted).frame(width: 28, height: 28) }
+                    } label: { CampIconLabel(symbol: "ellipsis").foregroundStyle(campMuted) }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Plan actions for \(plan.title)")
                 }
             } models: {
@@ -179,14 +179,14 @@ struct PlanningWorkspace: View {
                         Text(plan.current.workflow.title).font(.system(size: 12, weight: .medium))
                         Text("\(plan.current.completedCount) of \(plan.current.workflow.turnLimit) \(plan.current.workflow == .single ? "turn" : "turns")").font(.system(size: 11)).foregroundStyle(campMuted)
                         Spacer()
-                        Button { store.planPromotionSheet = plan.session } label: { Image(systemName: "icloud.and.arrow.up").frame(width: 28, height: 28) }
+                        Button { store.planPromotionSheet = plan.session } label: { CampIconLabel(symbol: "icloud.and.arrow.up") }
                             .help("Save this ticket to Camp").accessibilityLabel("Save this ticket to Camp")
                         Button {
                             if plan.current.state == "needs_review" && !reviewedUnknown { section = "History" }
                             else { planning.restart(id, reviewedUnknown: reviewedUnknown); section = "Plans" }
-                        } label: { Image(systemName: "arrow.counterclockwise").frame(width: 28, height: 28) }
+                        } label: { CampIconLabel(symbol: "arrow.counterclockwise") }
                             .help("Start over and keep history").accessibilityLabel("Start planning over")
-                        Button { store.view = "Board" } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }
+                        Button { store.view = "Board" } label: { CampIconLabel(symbol: "xmark") }
                             .help("Back to board").accessibilityLabel("Back to board")
                     }.buttonStyle(.plain).padding(.horizontal, 22).padding(.vertical, 10)
                     if plan.current.editable {

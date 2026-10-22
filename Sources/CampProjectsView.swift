@@ -29,7 +29,7 @@ struct ProjectSidebar: View {
             HStack {
                 Text("PROJECTS").font(.system(size:10,weight:.semibold)).tracking(1.4).foregroundStyle(campMuted)
                 Spacer()
-                Button { store.projectSheet=true } label: { Image(systemName:"plus").frame(width:24,height:24) }.buttonStyle(.plain).help("Manage projects").accessibilityLabel("Manage projects")
+                Button { store.projectSheet=true } label: { CampIconLabel(symbol: "plus") }.buttonStyle(.plain).help("Manage projects").accessibilityLabel("Manage projects")
             }
             entry("All projects",key:"all",icon:"square.stack")
             entry("Inbox",key:"inbox",icon:"tray")
@@ -46,6 +46,7 @@ struct ProjectSidebar: View {
         Button { store.projectFilter=key } label: {
             Label(title,systemImage:icon).font(.system(size:11)).lineLimit(1).frame(maxWidth:.infinity,alignment:.leading).padding(6)
                 .background(store.projectFilter==key ? campGreen.opacity(0.1):.clear).clipShape(RoundedRectangle(cornerRadius:6))
+                .contentShape(Rectangle())
         }.buttonStyle(.plain)
     }
 }

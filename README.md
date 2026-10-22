@@ -99,6 +99,9 @@ ten most recent sessions; use `@` to find older context. A saved sub-agent
 transcript alone is not evidence that it is currently running.
 
 Model, effort and supported speed controls apply to the next Camp turn.
+In the V1 chat header, they form a compact group; click anywhere inside a
+field to open its menu. At narrow window sizes the group moves below the chat
+title so the controls remain readable.
 Running activity uses settings reported by the provider when available. An
 external session remains under its original client's control. The native chat
 editor accepts macOS Dictation as live text.

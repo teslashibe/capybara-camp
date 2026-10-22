@@ -10,11 +10,38 @@ struct CampSettingsField<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.system(size: 10)).foregroundStyle(campMuted)
-            content.menuStyle(.borderlessButton).menuIndicator(.visible).font(.system(size: 11)).controlSize(.small)
-                .padding(.horizontal, 8).frame(maxWidth: .infinity).frame(height: 28).background(.white.opacity(locked ? 0.45 : 1))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(campInk.opacity(0.10))).disabled(locked)
+            content.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).font(.system(size: 11)).controlSize(.small)
+                .disabled(locked)
         }
+    }
+}
+
+// Keep the entire visible field inside Menu's label. Padding on the Menu itself
+// looks clickable but can leave space that does not open the native menu.
+struct CampDropdownLabel: View {
+    let title: String
+    var icon: String? = nil
+    @Environment(\.isEnabled) private var isEnabled
+    var body: some View {
+        HStack(spacing: 6) {
+            if let icon { Image(systemName: icon).foregroundStyle(campMuted).accessibilityHidden(true) }
+            Text(title).lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 4)
+            Image(systemName: "chevron.down").font(.system(size: 9)).foregroundStyle(campMuted).accessibilityHidden(true)
+        }.foregroundStyle(campInk).padding(.horizontal, 9)
+            .frame(maxWidth: .infinity, alignment: .leading).frame(height: 30)
+            .background(.white.opacity(isEnabled ? 1 : 0.45))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(campInk.opacity(0.10)).allowsHitTesting(false))
+            .contentShape(Rectangle())
+            .accessibilityElement(children: .ignore).accessibilityLabel(title)
+    }
+}
+
+struct CampIconLabel: View {
+    let symbol: String
+    var body: some View {
+        Image(systemName: symbol).frame(width: 28, height: 28).contentShape(Rectangle())
     }
 }
 import AppKit
@@ -149,6 +176,7 @@ struct CampSegmentedControl<Value: Hashable>: View {
                         .frame(maxWidth: .infinity).frame(minHeight: 26)
                         .background(selection == option.value ? Color(hex: 0xCDCCC6) : .clear)
                         .clipShape(RoundedRectangle(cornerRadius: 7))
+                        .contentShape(Rectangle())
                 }.buttonStyle(.plain).focusable().focused($focused, equals: option.value)
                     .accessibilityLabel(option.title)
                     .accessibilityValue(selection == option.value ? "Selected" : "")
@@ -203,6 +231,7 @@ struct PlanningNavigation: View {
                 }.padding(8).frame(maxWidth: .infinity, alignment: .leading)
                     .background((section == "Plans" || section == "Reviews") && focusedSlot == nil ? campGreen.opacity(0.10) : .clear)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .contentShape(Rectangle())
             }.buttonStyle(.plain).padding(.horizontal, 10)
             if mode == .comparison {
                 VStack(spacing: 5) {
@@ -219,6 +248,7 @@ struct PlanningNavigation: View {
                             }.padding(8).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(ProviderMark.wash(participant.provider).opacity(focusedSlot == participant.id && section == "Plans" ? 1 : 0.55))
                                 .clipShape(RoundedRectangle(cornerRadius: 7))
+                                .contentShape(Rectangle())
                         }.buttonStyle(.plain).accessibilityLabel("Open \(participant.provider) planner")
                     }
                 }.padding(.leading, 24).padding(.trailing, 10)
@@ -229,6 +259,7 @@ struct PlanningNavigation: View {
                           systemImage: value == "History" ? "clock.arrow.circlepath" : value == "Implementation" ? "play" : "lightbulb")
                         .font(.system(size: 11)).frame(maxWidth: .infinity, alignment: .leading).padding(8)
                         .background(section == value ? campGreen.opacity(0.10) : .clear).clipShape(RoundedRectangle(cornerRadius: 7))
+                        .contentShape(Rectangle())
                 }.buttonStyle(.plain).padding(.horizontal, 10).disabled(value == "Implementation" && !canImplement)
             }
             Divider().padding(.horizontal, 14).padding(.top, 8)
@@ -255,6 +286,7 @@ struct PlanningStageBar: View {
                             Text(mode == .single && value == "Plans" ? "Plan" : value).font(.system(size: 11))
                         }.padding(.horizontal, 10).frame(height: 30)
                             .background(section == value ? Color(hex: 0xE4E3DE) : .clear).clipShape(RoundedRectangle(cornerRadius: 6))
+                            .contentShape(Rectangle())
                     }.buttonStyle(.plain)
                         .accessibilityElement(children: .ignore)
                         .accessibilityAddTraits(.isButton)
