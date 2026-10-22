@@ -37,6 +37,18 @@ chunks, encrypted storage, owner-only access, stale source/account snapshots,
 cross-Camp quotas, HTTP limits and retained data during migration. The staged
 secret scan was clean. Native transfer and real destination acceptance remain open.
 
+The internal destination helper now verifies the pinned Git base and file
+preimages, applies reviewed files to a private checkout and journals partial
+progress for recovery. It rejects staged, untracked, ignored and conflicting
+work before the initial apply. This helper still needs the scoped runner
+claim/download path, source fence, history migration and assignment handoff;
+the native transfer action remains unavailable.
+Real-Git staging tests pass, including an abrupt child-process exit and resume,
+with no source changes. The full Go race suite and vet passed against disposable
+PostgreSQL 17; the final staging checks passed after cancellation and overlap
+handling were tightened. A Linux test binary compiles, while Linux runtime
+staging and native end-to-end transfer acceptance still need verification.
+
 The native account form and synthetic provider walkthrough now pass locally.
 The Go controller provisions per-installation workers, renews managed grants,
 and removes old Pods before deleting their storage and Secrets. It fences stale

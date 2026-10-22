@@ -1,8 +1,9 @@
 # Workspace transfer payload
 
 `server/internal/transfer` captures selected files for review. The Go Camp API
-stores resumable, encrypted uploads of that manifest. Neither component is
-connected to the native transfer UI yet. Upload completion means the payload
+stores resumable, encrypted uploads of that manifest. The internal staging
+helper applies it to an isolated destination checkout. These components are not
+connected to the native transfer UI or runner handoff yet. Upload completion means the payload
 passed validation and is ready for destination staging. It does not write a
 destination, move a session, or change its assignment. Used cloud workspaces
 remain protected by the existing transfer requirement.
@@ -30,7 +31,8 @@ bounded. The current format requires a 40-character Git commit ID.
 `Manifest.Digest()` binds the base, branch, paths, file hashes, executable bits
 and exclusion list. Reordering entries or formatting the JSON differently
 does not change that digest. `Decode` validates content hashes, rejects
-duplicate or case-colliding paths, unknown fields and versions, trailing JSON,
+duplicate, overlapping or case-colliding paths, including different spellings
+of a shared parent directory, unknown fields and versions, trailing JSON,
 traversal and ambiguous path forms.
 
 `VerifySource` rereads the working root, commit, branch and selected file
@@ -141,14 +143,60 @@ Schema 20 adds `session_transfers` and `transfer_chunks`. Existing sessions,
 assignments and queued work are retained. Upgrades use the normal migration
 command; destructive down-migration is refused.
 
+## Isolated destination staging
+
+`OpenStager(checkout, stateDirectory)` opens an existing private checkout and a
+separate private journal directory on the same filesystem. Both directories
+must belong to the current OS user, with no group or other permissions. Neither
+may contain the other. The helper locks the checkout directory and journal so
+two stagers cannot apply to the same destination, even with different journal
+paths. These are cooperative locks; callers must keep provider processes and
+other writers stopped until the destination handoff is accepted.
+Each apply has a two-minute deadline, shortened by the caller's context when
+applicable. Overlapping calls fail immediately. Directory scans and individual
+Git outputs are bounded.
+
+`Apply(ctx, manifest, reviewDigest, destinationBranch)` initially requires a
+clean checkout, including no staged, untracked or ignored files. It verifies
+the pinned Git commit and the caller's exact destination branch. The destination
+branch can differ from the source branch because the runner creates a separate
+ticket branch. Every selected base blob, executable bit and existing file must
+match the manifest before any file is changed. Known secret markers in selected
+base blobs are rejected. Whole-repository secret policy remains the checkout
+and final release audit's responsibility.
+
+The helper writes its journal before touching the checkout, applies only
+selected files, then verifies every desired hash, executable bit and deletion.
+Files are staged through private temporary files and renamed into place;
+journal, file and affected directory writes are synced. New parent directories
+are private. Link, hardlink and case-alias checks keep writes within the selected
+paths. Git reads disable repository monitors, external diff and text-conversion
+commands. The helper does not commit, fetch, push, change branches or run a
+provider.
+
+If the process exits during staging, successful file writes remain in that
+isolated checkout. Reopening the same journal permits the same reviewed
+manifest to resume: each file must still match either its base or desired state.
+Unexpected edits, staged changes or additional files return a conflict without
+discarding them. Abandoned helper temporary files are cleaned under the lock.
+There is no rollback over newer work. The caller must retain the source and keep
+the partial destination unavailable for execution until staging succeeds.
+
+The returned `StageReceipt` identifies the review digest, base commit,
+destination branch and file count. Replaying a completed stage rechecks the
+files before returning the same receipt. A receipt is evidence of local file
+verification, not permission to switch execution. Connecting it to scoped
+runner claims, server-side source fencing, history and assignment commit
+remains unfinished.
+
 ## Remaining integration
 
 The agreed transfer flow still requires:
 
 1. A source session lock and acknowledged terminal state, with unresolved
    provider outcomes and queued prompts held for explicit review
-2. Resumable destination staging using the uploaded payload, including
-   transcript, child-session and attachment provenance
+2. Connect the uploaded payload and staging helper to scoped destination
+   runner claims, including transcript, child-session and attachment provenance
 3. Destination validation of the pinned base, file preimages and final hashes,
    including the base repository's credential exclusions, with conflicts
    returned for review and no overwrite of a diverged worktree
@@ -178,3 +226,7 @@ detached commits, tampered payloads, input limits and disabled repository hooks.
 PostgreSQL and HTTP tests cover restart/resume, encrypted chunk substitution,
 owner-only access, source and account revisions, queued work, expiration,
 cancellation, concurrent cross-Camp quotas, body limits and migration retention.
+Staging tests use real Git checkouts and cover file/mode/deletion application,
+replay, partial writes, abrupt process exit, source retention, changed files,
+staged/untracked/ignored files, false preimages, links, path aliases, directory
+replacement, journal binding and disabled repository commands.

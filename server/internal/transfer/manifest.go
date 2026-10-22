@@ -103,7 +103,15 @@ func (m Manifest) Validate() error {
 			return false
 		}
 		for _, old := range seen {
-			if strings.EqualFold(name, old) {
+			left, right := strings.Split(name, "/"), strings.Split(old, "/")
+			common := 0
+			for common < len(left) && common < len(right) && strings.EqualFold(left[common], right[common]) {
+				if left[common] != right[common] {
+					return false
+				}
+				common++
+			}
+			if common == len(left) || common == len(right) {
 				return false
 			}
 		}

@@ -211,8 +211,9 @@ behavior are documented in [execution locations](docs/execution-locations.md)
 and the delivery status.
 
 The Go API includes encrypted, resumable uploads for reviewed file-transfer
-manifests. They are an internal part of the unfinished transfer flow: a ready
-upload does not move the session or apply files. See the [transfer contract](docs/transfer-payload.md)
+manifests, with a separate helper for staging files in a private checkout and
+recovering an interrupted apply. These are internal parts of the unfinished
+transfer flow: a ready upload does not move the session or apply files. See the [transfer contract](docs/transfer-payload.md)
 for ownership, limits, recovery, and the remaining destination/handoff work.
 
 For operators, start with [self-hosting](docs/self-hosting.md), then the

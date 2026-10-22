@@ -136,8 +136,8 @@ does not establish a real checkout. Remaining signed-in failure states and
 the deployed two-Mac test are still open. No live cloud provider run has been
 accepted yet.
 
-The [transfer payload](transfer-payload.md) has Go capture, validation and
-resumable encrypted upload storage. A completed upload is available for
-destination staging. Source locking, destination application, history migration,
-destination receipts and the assignment commit still need integration before
-the app can move a used workspace.
+The [transfer payload](transfer-payload.md) has Go capture, validation, resumable
+encrypted upload storage and an isolated file-staging helper with a private
+recovery journal. The runner and native app still need to connect these pieces.
+Source locking, history migration, server acceptance of destination receipts
+and the assignment commit remain open before the app can move a used workspace.
