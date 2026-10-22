@@ -2,6 +2,7 @@ package camp
 
 import (
 	"context"
+	"crypto/cipher"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -18,8 +19,9 @@ var ErrInput = errors.New("invalid input")
 var ErrCursor = errors.New("request an authorized snapshot")
 
 type Store struct {
-	pool   *pgxpool.Pool
-	secret []byte
+	pool           *pgxpool.Pool
+	secret         []byte
+	providerCipher cipher.AEAD
 }
 
 func New(pool *pgxpool.Pool, secret string) *Store { return &Store{pool: pool, secret: []byte(secret)} }

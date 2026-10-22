@@ -20,6 +20,7 @@ Use a dedicated PostgreSQL 17 database and environment configuration:
 | `CAMP_AUTH_SECRET` | At least 32 random characters; protect and back up |
 | `CAMP_RESEND_API_KEY` | Operator's Resend key for email-code delivery |
 | `CAMP_EMAIL_FROM` | Verified email sender |
+| `CAMP_PROVIDER_ENCRYPTION_KEY` | Optional base64-encoded 32 random bytes, separate from the auth secret; enables cloud account storage |
 
 Run `go run ./cmd/migrate` explicitly, then `go run ./cmd/camp-server`.
 The API never runs migrations during startup. `/health` is process liveness;
@@ -29,9 +30,16 @@ schemas stop startup. For Kubernetes, see [self-hosting](../docs/self-hosting.md
 ## Native API contract
 
 JSON bodies reject unknown fields and trailing documents, with a 64 KiB limit.
-Responses contain no token except the successful sign-in response and newly
-created invitation. Do not put credentials in URLs or logging middleware.
+Human responses contain secrets only for sign-in, invitation creation and an
+owner's runner-grant creation. The separate runner credential endpoint returns
+only that installation's encrypted-at-rest provider state. Do not put these
+responses, credentials or authorization headers in logging middleware.
 Use `Authorization: Bearer <device-token>` after sign-in.
+
+Cloud account endpoints and their unfinished runtime integration are described
+in [cloud accounts](../docs/cloud-accounts.md). Schema 9 adds their storage without
+changing existing profile or session rows. Run the migration before this binary;
+keep a compatible schema-9 build as the rollback floor.
 
 | Method and path | Input or result |
 | --- | --- |

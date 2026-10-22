@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 )
@@ -18,6 +19,21 @@ func TestConfigRefusesUnsafeOrigin(t *testing.T) {
 		}
 	}
 	if err := (Config{DatabaseURL: "postgres://example/camp"}).Validate(true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProviderKeyIsSeparateAndOptional(t *testing.T) {
+	base := Config{Address: "127.0.0.1:8096", DatabaseURL: "postgres://example/camp", PublicURL: "https://camp.example", AuthSecret: strings.Repeat("x", 32), ResendKey: "fixture", EmailFrom: "camp@example.com"}
+	for _, bad := range []string{"short", strings.Repeat("a", 32), strings.Repeat("=", 44)} {
+		c := base
+		c.ProviderEncryptionKey = bad
+		if c.Validate(false) == nil {
+			t.Fatal("invalid provider key accepted")
+		}
+	}
+	base.ProviderEncryptionKey = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
+	if err := base.Validate(false); err != nil {
 		t.Fatal(err)
 	}
 }

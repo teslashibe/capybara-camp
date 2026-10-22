@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"net"
 	"net/mail"
@@ -12,12 +13,14 @@ import (
 // Config is the only environment-reading boundary in the server.
 type Config struct {
 	Address, DatabaseURL, PublicURL, AuthSecret, ResendKey, EmailFrom string
+	ProviderEncryptionKey                                             string
 }
 
 func Load(migrateOnly bool) (Config, error) {
 	c := Config{Address: "127.0.0.1:8096", DatabaseURL: os.Getenv("CAMP_DATABASE_URL"),
 		PublicURL: os.Getenv("CAMP_PUBLIC_URL"), AuthSecret: os.Getenv("CAMP_AUTH_SECRET"),
 		ResendKey: os.Getenv("CAMP_RESEND_API_KEY"), EmailFrom: os.Getenv("CAMP_EMAIL_FROM")}
+	c.ProviderEncryptionKey = os.Getenv("CAMP_PROVIDER_ENCRYPTION_KEY")
 	if value := os.Getenv("CAMP_ADDRESS"); value != "" {
 		c.Address = value
 	}
@@ -31,6 +34,12 @@ func (c Config) Validate(migrateOnly bool) error {
 	}
 	if migrateOnly {
 		return nil
+	}
+	if c.ProviderEncryptionKey != "" {
+		key, err := base64.StdEncoding.Strict().DecodeString(c.ProviderEncryptionKey)
+		if err != nil || len(key) != 32 {
+			return errors.New("CAMP_PROVIDER_ENCRYPTION_KEY must be a base64-encoded 32-byte key")
+		}
 	}
 	if _, _, err := net.SplitHostPort(c.Address); err != nil {
 		return errors.New("CAMP_ADDRESS must contain host and port")

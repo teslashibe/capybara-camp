@@ -85,6 +85,7 @@ func (a *API) Handler() http.Handler {
 	a.requestRoutes(mux)
 	a.planningRoutes(mux)
 	a.notificationRoutes(mux)
+	a.accountRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -100,6 +101,9 @@ func (a *API) Handler() http.Handler {
 			}
 			if strings.HasSuffix(r.URL.Path, "/requests") {
 				maximum = 128 << 10
+			}
+			if strings.HasPrefix(r.URL.Path, "/v1/runner/logins/") && strings.HasSuffix(r.URL.Path, "/report") {
+				maximum = 384 << 10
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, maximum)
 			if r.ContentLength != 0 && strings.Split(r.Header.Get("Content-Type"), ";")[0] != "application/json" {
@@ -124,6 +128,8 @@ func fail(w http.ResponseWriter, err error) bool {
 		return false
 	}
 	switch {
+	case errors.Is(err, camp.ErrCloudUnavailable):
+		problem(w, 503, "cloud_accounts_unavailable")
 	case errors.Is(err, auth.ErrUnauthorized):
 		problem(w, 401, "sign_in_required")
 	case errors.Is(err, auth.ErrRateLimited):

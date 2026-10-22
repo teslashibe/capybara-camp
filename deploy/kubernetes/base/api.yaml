@@ -51,6 +51,9 @@ spec:
             - name: CAMP_RESEND_API_KEY
               valueFrom:
                 secretKeyRef: {name: camp-secrets, key: CAMP_RESEND_API_KEY}
+            - name: CAMP_PROVIDER_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_PROVIDER_ENCRYPTION_KEY, optional: true}
           ports:
             - name: http
               containerPort: 8096

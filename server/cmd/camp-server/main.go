@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"log"
 	"net"
 	"net/http"
@@ -43,7 +44,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	a := &httpapi.API{Pool: pool, Auth: auth.New(pool, cfg.AuthSecret, cfg.PublicURL, resend.New(cfg.ResendKey, cfg.EmailFrom)), Camps: camp.New(pool, cfg.AuthSecret), Origin: cfg.PublicURL}
+	camps := camp.New(pool, cfg.AuthSecret)
+	if cfg.ProviderEncryptionKey != "" {
+		key, _ := base64.StdEncoding.Strict().DecodeString(cfg.ProviderEncryptionKey)
+		camps, err = camp.NewWithProviderKey(pool, cfg.AuthSecret, key)
+		if err != nil {
+			return err
+		}
+	}
+	a := &httpapi.API{Pool: pool, Auth: auth.New(pool, cfg.AuthSecret, cfg.PublicURL, resend.New(cfg.ResendKey, cfg.EmailFrom)), Camps: camps, Origin: cfg.PublicURL}
 	maintenanceDone := make(chan struct{})
 	go func() {
 		defer close(maintenanceDone)
@@ -53,6 +62,9 @@ func run() error {
 			work, stop := context.WithTimeout(ctx, 5*time.Second)
 			if err := a.Camps.ReapRequests(work); err != nil && ctx.Err() == nil {
 				log.Print("Request recovery will retry")
+			}
+			if err := a.Camps.ReapProviderLogins(work); err != nil && ctx.Err() == nil {
+				log.Print("Provider login expiry will retry")
 			}
 			stop()
 			select {
