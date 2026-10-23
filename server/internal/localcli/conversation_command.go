@@ -79,10 +79,13 @@ func codexChatCommand(ctx context.Context, session Session, grant *contextGrant)
 	sort.Strings(names)
 	disabled := make([]string, 0, len(names))
 	for _, name := range names {
-		fields := "enabled=false"
+		// Codex rejects an entry without a transport ("invalid transport"),
+		// including names from layers it never loaded, such as an untrusted
+		// repository or a config above the Git root. Every disabled entry gets
+		// an inert one: a closed loopback port or a command that cannot serve.
+		fields := `enabled=false,command="/usr/bin/false"`
 		if _, hasURL := object(servers[name])["url"]; hasURL {
-			// Replace desktop-only URL placeholders before the CLI parses them.
-			fields += `,url="http://127.0.0.1:9"`
+			fields = `enabled=false,url="http://127.0.0.1:9"`
 		}
 		disabled = append(disabled, quoted(name)+"={"+fields+"}")
 	}

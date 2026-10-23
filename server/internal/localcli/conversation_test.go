@@ -302,6 +302,11 @@ func TestConversationConfigurationAndCommands(t *testing.T) {
 	if strings.Contains(joined, "app-only") || strings.Contains(joined, "outside") || !strings.Contains(joined, `"desktop.server"={enabled=false,url="http://127.0.0.1:9"}`) || !strings.Contains(joined, "features.multi_agent=false") {
 		t.Fatal(command)
 	}
+	// Codex rejects any entry without a transport, including stdio servers it
+	// never loaded from an untrusted or ancestor config.
+	if !strings.Contains(joined, `"external"={enabled=false,command="/usr/bin/false"}`) || !strings.Contains(joined, `"project"={enabled=false,url="http://127.0.0.1:9"}`) {
+		t.Fatal("disabled MCP entry lacks an inert transport", command)
+	}
 	s := Session{Provider: "Claude", SessionID: "00000000-0000-0000-0000-000000000001"}
 	validated, err := runtimeCommand(s, "", "", "")
 	requireApprovalOK(t, err)
