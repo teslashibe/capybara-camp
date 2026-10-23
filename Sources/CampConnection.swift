@@ -504,6 +504,12 @@ import SwiftUI
         let token=generation
         do { try await cache.acknowledge(item.id);let values=try await cache.outbox(scope,limit:1000);guard self.scope==scope,generation==token else{return};pending=values } catch { if generation==token { self.error=error.localizedDescription } }
     }
+    // A refused prompt or board move stays visible until the user dismisses it.
+    func discardSessionChange(_ item: CloudOutboxItem) async {
+        guard let scope,let cache,item.scope==scope.key,["failed","conflict"].contains(item.state),item.path.contains("/sessions/") else { return }
+        let token=generation
+        do { try await cache.acknowledge(item.id);let values=try await cache.outbox(scope,limit:1000);guard self.scope==scope,generation==token else{return};pending=values } catch { if generation==token { self.error=error.localizedDescription } }
+    }
     func invite(email: String, role: String) async -> String? {
         guard let scope, let client, let credential else { return nil }
         do {
@@ -520,6 +526,8 @@ import SwiftUI
     }
     func queuePrompt(session: CloudSession, text: String, model: String, tuning: ModelTuning, sources: [CloudSourceRef] = []) async throws {
         guard let scope, let cache else { throw CampCloudError.cacheUnavailable }
+        // The server refuses prompts over 64 KiB; never queue one it cannot accept.
+        guard text.trimmingCharacters(in: .whitespacesAndNewlines).utf8.count <= 65536 else { throw CampError.message("This prompt is too long to share. Camp prompts are limited to 64 KB") }
         let refs = try JSONSerialization.jsonObject(with: CampWire.encoder().encode(sources))
         let body = try CampWire.body(["prompt": text, "model": model, "effort": tuning.effort, "speed": tuning.speed, "sources": refs])
         _ = try await cache.enqueue(scope: scope, method: "POST", path: "/v1/camps/\(scope.campId)/sessions/\(session.id)/requests", body: body, expectedEpoch: cacheEpoch)
@@ -688,7 +696,9 @@ import SwiftUI
                             try await cache.markOutbox(item.id, state:"waiting")
                         } else { try await cache.acknowledge(item.id) }
                         if item.path == "/v1/camps/\(scope.campId)/notifications/actions", self?.generation == token { self?.scheduleNotifications(generation: token) }
-                    } catch CampCloudError.server(let status, let code) where status == 409 || status == 400 || status == 404 || status == 403 {
+                    } catch CampCloudError.server(let status, let code) where (400..<500).contains(status) && ![401, 408, 429].contains(status) {
+                        // A definitive refusal settles this item; retrying it would hold
+                        // every later write behind it.
                         try await cache.markOutbox(item.id, state: status == 409 ? "conflict" : "failed", error: item.controlRequestID == nil ? code : "Control acceptance could not be confirmed")
                         if item.path == "/v1/camps/\(scope.campId)/notifications/actions", self?.generation == token { self?.scheduleNotifications(generation: token) }
                     } catch CampCloudError.invalidResponse {

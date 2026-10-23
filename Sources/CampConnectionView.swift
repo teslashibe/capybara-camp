@@ -183,8 +183,15 @@ struct CloudRequestQueueView: View {
                     }
                 }
                 ForEach(pending) { item in
-                    Label(item.state == "pending" || item.state == "sending" ? "Saved on this Mac · Waiting to sync" : "Needs review · \(item.error)", systemImage: item.state == "pending" ? "clock" : "exclamationmark.circle")
-                        .foregroundStyle(campMuted)
+                    HStack(alignment: .top) {
+                        Label(item.state == "pending" || item.state == "sending" ? "Saved on this Mac · Waiting to sync" : "Needs review · \(item.error)", systemImage: item.state == "pending" ? "clock" : "exclamationmark.circle")
+                            .foregroundStyle(campMuted)
+                        Spacer()
+                        if ["failed", "conflict"].contains(item.state) {
+                            Button { Task { await cloud.discardSessionChange(item) } } label: { Image(systemName: "xmark").frame(width: 24, height: 24) }
+                                .help("Dismiss").accessibilityLabel("Dismiss unsent change")
+                        }
+                    }
                 }
             }.font(.system(size: 11)).padding(12).background(campInk.opacity(0.035)).clipShape(RoundedRectangle(cornerRadius: 9))
         }
