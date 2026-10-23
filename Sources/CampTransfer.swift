@@ -9,6 +9,15 @@ struct TransferChanges: Codable, Sendable {
     var baseCommit: String; var branch: String; var files: [TransferChange]
 }
 struct TransferCapture: Codable, Sendable {
+    struct CommitSummary: Codable, Sendable {
+        var baseCommit: String; var headCommit: String; var reviewSha256: String
+        var commits: Int; var objects: Int; var bytes: Int
+        var valid: Bool {
+            [baseCommit,headCommit].allSatisfy { $0.range(of:"^[a-f0-9]{40}$",options:.regularExpression) != nil } &&
+            baseCommit != headCommit && reviewSha256.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil &&
+            (1...256).contains(commits) && (1...4096).contains(objects) && (1...32*1024*1024).contains(bytes)
+        }
+    }
     struct File: Codable, Identifiable, Sendable {
         var path: String; var bytes: Int; var deleted: Bool; var beforeSha256: String?; var sha256: String?
         var id: String { path }
@@ -17,9 +26,11 @@ struct TransferCapture: Codable, Sendable {
     var payload: Data?; var payloadSha256: String; var reviewSha256: String
     var baseCommit: String; var branch: String; var files: [File]; var excluded: [Exclusion]
     var history:LocalHistoryBinding? = nil
+    var commits: CommitSummary? = nil
     var valid: Bool {
         [payloadSha256,reviewSha256].allSatisfy { $0.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil } &&
-        baseCommit.range(of:"^[a-f0-9]{40}$",options:.regularExpression) != nil && files.count+excluded.count <= 256
+        baseCommit.range(of:"^[a-f0-9]{40}$",options:.regularExpression) != nil && files.count+excluded.count <= 256 &&
+        (commits.map { $0.valid && $0.headCommit == baseCommit } ?? true)
     }
 }
 struct CloudTransfer: Codable, Sendable {

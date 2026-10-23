@@ -1125,8 +1125,10 @@ credentials or unselected working files are copied. New object bytes are checked
 against the transfer's known secret patterns, including earlier versions deleted
 before HEAD. New or changed policy-excluded paths in any transferred commit
 refuse the archive. They cannot be stripped without changing commit identity.
-Source capture refuses shallow history and grafts; ordinary linked worktrees
-are supported. Capture never fetches, pushes or modifies source history.
+Source capture refuses grafts. A shallow source is accepted only when its sole
+boundary is the authorized ancestor and every exported commit parent is either
+included or that ancestor. Ordinary linked worktrees are supported. Capture
+never fetches, pushes or modifies source history.
 
 The archive allows at most 256 commits and 4,096 objects, with the existing 4 MiB
 per-object bound. Commit objects and selected working-file bodies share the
@@ -1175,6 +1177,21 @@ Rollback refuses to discard retained ancestor fields; it succeeds only when none
 remain. Older ready payloads whose metadata lacks their archive ancestor require
 recapture, rather than guessing an authorization binding.
 
-Native ancestor discovery/review, cloud-source capture, local destination
-preparation, and full live handoff acceptance still need integration. The native
-UI does not offer unpublished-commit transfer at this checkpoint.
+Cloud-source capture includes commits above the workspace's authorized remote
+ancestor, including commits previously imported from a Mac. The API verifies the
+archive's workspace binding before accepting an export. Checkout-token issuance
+derives the reviewed head and remote ancestor from the encrypted payload; a cached
+grant with different bindings cannot be reused. Payload reconstruction uses the
+existing bounded validation slots and is released before provider token issuance.
+
+The native return review displays the unpublished commit count and ancestor/head
+revisions. Its checkout request binds the downloaded payload, review and grant.
+The Mac helper fetches the authorized ancestor into a private scratch checkout,
+validates and restores the archive, and checks out the reviewed head. Its durable
+receipt binds the archive digest. Retrying a published checkout never resets
+newer files. Working-file and transcript installation and explicit execution
+handoff follow through the existing return flow.
+
+Native ancestor selection for Local-to-Cloud transfers, attachment completion,
+and full live-provider handoff acceptance remain open. The return review uses
+synthetic native fixtures; these do not prove a live provider transfer.

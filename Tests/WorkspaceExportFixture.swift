@@ -14,7 +14,8 @@ actor ExportFixture: CampAccountTransport {
     var checkoutDevice = ""
     var checkoutMismatch = ""
     var checkoutRequests = 0
-    func checkout(device:String,mismatch:String="") { checkoutDevice=device; checkoutMismatch=mismatch }
+    var checkoutRemoteBase: String?
+    func checkout(device:String,mismatch:String="",remoteBase:String?=nil) { checkoutDevice=device; checkoutMismatch=mismatch; checkoutRemoteBase=remoteBase }
     func tokenRequests() -> Int { checkoutRequests }
     var historySession: CloudSession?
     func history(_ session:CloudSession) { historySession=session }
@@ -45,6 +46,7 @@ actor ExportFixture: CampAccountTransport {
             var result:[String:Any] = ["token":"ghu_"+String(repeating:"x",count:36),"expires_at":ISO8601DateFormatter().string(from:Date().addingTimeInterval(180)),
                 "export_id":value.id,"device_id":checkoutDevice,"workspace_id":value.workspaceId,
                 "repository":"fixture/repo","base_commit":String(repeating:"c",count:40),"branch":"main","sha256":value.resultSha256]
+            if let checkoutRemoteBase {result["remote_base_commit"]=checkoutRemoteBase}
             if !checkoutMismatch.isEmpty { result[checkoutMismatch]="wrong" }
             return try CampWire.body(result)
         }

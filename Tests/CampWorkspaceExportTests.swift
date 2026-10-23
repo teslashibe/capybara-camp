@@ -12,6 +12,31 @@ import Foundation
         let session=CloudSession(id:UUID().uuidString,campId:scope.campId,projectId:UUID().uuidString,profileId:UUID().uuidString,provider:"Codex",profileLabel:"Fixture",ownerUserId:scope.userId,ownerDeviceId:credential.actor.deviceId,localSessionId:UUID().uuidString,title:"Fixture",model:"fixture",state:"idle",stage:"Ready",shared:false,allowRequests:false,externalOwner:false,revision:4,transcriptRevision:3,permissionRevision:2,updatedAt:Date(),executionLocation:"cloud",executionEpoch:2,executionWorkspaceId:UUID().uuidString)
         let payload=Data(repeating:65,count:(256<<10)+29)
         let value=CloudWorkspaceExport(id:UUID().uuidString,campId:scope.campId,sessionId:session.id,ownerUserId:scope.userId,deviceId:credential.actor.deviceId,workspaceId:session.executionWorkspaceId!,workspaceRevision:3,sourceEpoch:2,sourceRevision:4,transcriptRevision:3,permissionRevision:2,kind:"capture",paths:["notes.txt"],state:"ready",resultSha256:PublishMessage.hash(payload),resultBytes:payload.count,expiresAt:Date().addingTimeInterval(600))
+        // The helper verifies Git objects; this boundary binds the reviewed
+        // bytes, ancestor, grant and returned receipt before publishing a checkout.
+        let commitPayload=try JSONSerialization.data(withJSONObject:["commits":["fixture":"reviewed objects"]])
+        let commitSummary=TransferCapture.CommitSummary(baseCommit:String(repeating:"b",count:40),headCommit:String(repeating:"c",count:40),reviewSha256:String(repeating:"d",count:64),commits:2,objects:6,bytes:500)
+        let commitReview=TransferCapture(payload:nil,payloadSha256:PublishMessage.hash(commitPayload),reviewSha256:String(repeating:"e",count:64),baseCommit:commitSummary.headCommit,branch:"camp/return",files:[],excluded:[],commits:commitSummary)
+        var commitExport=value;commitExport.resultSha256=commitReview.payloadSha256
+        let commitGrant=CloudExportCheckoutToken(token:"ghu_"+String(repeating:"n",count:36),expiresAt:Date().addingTimeInterval(300),exportId:value.id,deviceId:credential.actor.deviceId,workspaceId:value.workspaceId,repository:"fixture/repo",baseCommit:commitReview.baseCommit,branch:commitReview.branch,sha256:commitReview.payloadSha256,remoteBaseCommit:commitSummary.baseCommit)
+        let commitTransferID=UUID().uuidString.lowercased()
+        for violation in ["", "missing-payload", "changed-payload", "ancestor", "receipt"] {
+            var grant=commitGrant
+            if violation=="ancestor" {grant.remoteBaseCommit=String(repeating:"f",count:40)}
+            let checkedGrant=grant
+            let bytes:Data?=violation=="missing-payload" ? nil : violation=="changed-payload" ? Data("changed".utf8) : commitPayload
+            let prepare = {
+                try await CampTransferCheckout.prepare(scope:scope,deviceID:credential.actor.deviceId,transferID:commitTransferID,export:commitExport,review:commitReview,grant:checkedGrant,payload:bytes) { action,input in
+                    precondition(violation=="" || violation=="receipt","Invalid archive reached checkout")
+                    let body=try JSONSerialization.jsonObject(with:input) as! [String:Any]
+                    precondition(action=="transfer-checkout" && body["remoteBaseCommit"] as? String == commitSummary.baseCommit && body["commits"] != nil)
+                    let receipt=TransferCheckoutReceipt(version:1,scope:scope.key,transferID:commitTransferID,repository:checkedGrant.repository,baseCommit:commitReview.baseCommit,branch:commitReview.branch,destination:"/fixture/workspace-\(scope.key)-\(commitTransferID)",remoteBaseCommit:commitSummary.baseCommit,commitsSha256:violation=="receipt" ? String(repeating:"f",count:64) : commitSummary.reviewSha256)
+                    return try JSONEncoder().encode(receipt)
+                }
+            }
+            if violation=="" { _ = try await prepare() }
+            else { await rejects("Accepted commit checkout \(violation)") { _ = try await prepare() } }
+        }
         let cache=try CampCache(directory:root),fixture=ExportFixture(value,payload:payload)
         let epoch=try await cache.epoch(scope)
         func client() throws -> CampWorkspaceExport { try CampWorkspaceExport(cache:cache,scope:scope,credential:credential,transport:fixture,epoch:epoch) }

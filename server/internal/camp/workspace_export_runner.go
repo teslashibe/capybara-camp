@@ -262,6 +262,57 @@ func validateWorkspaceExportResult(e WorkspaceExport, raw []byte) error {
 	}
 	return nil
 }
+
+func (s *Store) exportPayload(ctx context.Context, tx pgx.Tx, e WorkspaceExport) ([]byte, error) {
+	if e.ResultBytes < 2 || e.ResultBytes > transfer.MaxWireBytes {
+		return nil, ErrInput
+	}
+	raw := make([]byte, 0, e.ResultBytes)
+	for i := 0; len(raw) < e.ResultBytes; i++ {
+		chunk, err := s.exportChunk(ctx, tx, e, i)
+		if err != nil {
+			return nil, err
+		}
+		if len(chunk.Data) == 0 || len(raw)+len(chunk.Data) > e.ResultBytes {
+			return nil, ErrInput
+		}
+		raw = append(raw, chunk.Data...)
+	}
+	if transferDigest(raw) != e.ResultSHA256 {
+		return nil, ErrInput
+	}
+	return raw, nil
+}
+
+func validateExportCommits(raw []byte, w Workspace) (transfer.Manifest, error) {
+	m, err := transfer.Decode(raw)
+	if err != nil || m.Branch != w.Branch {
+		return transfer.Manifest{}, ErrInput
+	}
+	remote := w.BaseCommit
+	if w.RemoteBaseCommit != "" {
+		remote = w.RemoteBaseCommit
+	}
+	if m.Commits == nil {
+		if m.BaseCommit != remote {
+			return transfer.Manifest{}, ErrInput
+		}
+	} else if m.Commits.BaseCommit != remote {
+		return transfer.Manifest{}, ErrInput
+	}
+	if w.BaseCommit != remote {
+		found := false
+		if m.Commits != nil {
+			for _, object := range m.Commits.Objects {
+				found = found || object.Kind == "commit" && object.ID == w.BaseCommit
+			}
+		}
+		if !found {
+			return transfer.Manifest{}, ErrInput
+		}
+	}
+	return m, nil
+}
 func (g *GitStore) FinishWorkspaceExport(ctx context.Context, token, id, claim string, failed bool) (WorkspaceExport, error) {
 	if failed {
 		return g.failWorkspaceExport(ctx, token, id, claim)
@@ -290,19 +341,21 @@ func (g *GitStore) FinishWorkspaceExport(ctx context.Context, token, id, claim s
 	if e.ResultBytes < 2 {
 		return e, ErrTransition
 	}
-	raw := make([]byte, 0, e.ResultBytes)
-	for i := 0; len(raw) < e.ResultBytes; i++ {
-		chunk, err := g.store.exportChunk(ctx, tx, e, i)
-		if err != nil {
-			return e, err
-		}
-		raw = append(raw, chunk.Data...)
-	}
-	if transferDigest(raw) != e.ResultSHA256 {
-		return e, ErrInput
+	raw, err := g.store.exportPayload(ctx, tx, e)
+	if err != nil {
+		return e, err
 	}
 	if err = validateWorkspaceExportResult(e, raw); err != nil {
 		return e, err
+	}
+	if e.Kind == "capture" {
+		workspace, err := readWorkspace(ctx, tx, auth.Actor{UserID: e.OwnerUserID}, e.CampID, e.WorkspaceID)
+		if err != nil {
+			return e, err
+		}
+		if _, err = validateExportCommits(raw, workspace); err != nil {
+			return e, err
+		}
 	}
 	e.State = "ready"
 	_, err = tx.Exec(ctx, `UPDATE workspace_exports SET state=$2 WHERE id=$1`, id, e.State)

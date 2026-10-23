@@ -22,8 +22,10 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: finish attachments and missing remote commits, then shared skills and Git
-publication. The native return review/adoption screen and duplicate-card
+Next: finish native remote-ancestor selection for Local-to-Cloud transfers and
+attachments, then shared skills and Git publication. Cloud-source commit capture
+and Mac restoration are implemented; live-provider transfer acceptance remains
+open. The native return review/adoption screen and duplicate-card
 suppression are implemented; the latest acceptance evidence is recorded below.
 Continue executor-setup acceptance and the
 native design audit as those surfaces are implemented. Validate the full workflow locally before the owner provisions
@@ -1303,3 +1305,43 @@ capture and local-destination preparation for unpublished commits, attachments,
 and live provider handoff acceptance. Shared skills, Git publication, complete
 UI/performance/review acceptance, joint Hetzner provisioning and the V1 release
 and native website demo remain open. Memory/Cortex remains excluded.
+
+### Cloud-to-Mac commit restoration checkpoint — October 22
+
+Cloud exports now include unpublished commits above the workspace's authorized
+remote ancestor, including previously imported commits. The server validates that
+binding before accepting the export and derives checkout-token revisions from
+the encrypted reviewed payload. It refuses cached credentials bound to an older
+head. Payload reconstruction uses the existing bounded validation slots.
+
+The Mac helper fetches the ancestor, verifies the archive in a temporary object
+store and restores the exact reviewed head into a private checkout. Its durable
+receipt includes the ancestor and archive digest. Retrying preserves newer local
+work. The native review displays commit counts and the ancestor/head pair before
+preparation; selected working changes and chat history use the existing installer
+and explicit continuation/permission approvals.
+
+Source capture supports a shallow checkout only when its sole boundary is the
+authorized ancestor and every exported commit parent is present or that ancestor.
+Destinations still fetch complete ancestor history. Grafts and other incomplete
+source histories remain unsupported.
+
+Focused real-Git checkout race tests pass in `build/return-commits-checkout.log`.
+The local API/PostgreSQL export and checkout-token race tests pass in
+`build/return-commits-api.log`; the runner case includes an unpublished cloud
+commit, selected working changes and lost responses. Three native suites pass in
+`build/return-commits-native.log`, including grant/payload/receipt mismatch
+rejection, restart, cancellation, adoption and explicit consent for both provider
+fixtures. The native audit build passes signature verification in
+`build/return-commits-ui-build.log`. The Mac was locked when computer use attempted
+the visual check, so the new review text has not received visual acceptance.
+
+The complete Go race suite and vet pass against disposable PostgreSQL in
+`build/return-commits-server.log`, including the new archive-bound checkout-token
+cases. Linux server/runner/helper builds and the staged secret scan also pass
+(`build/return-commits-secrets.json` contains no findings).
+
+Native Local-to-Cloud ancestor selection, attachments and live-provider transfers
+remain open. Shared skills, Git publication, final UI/performance/security/review
+acceptance, joint Hetzner deployment and the signed V1 release/demo remain
+required. Memory/Cortex is excluded. No cloud deployment or V1 release occurred.

@@ -390,3 +390,64 @@ func TestLocalTransferCheckoutDoesNotReplaceConcurrentDestination(t *testing.T) 
 	}
 	assertNoCheckoutCredential(t, a, in)
 }
+
+func TestLocalTransferCheckoutUnpublishedCommits(t *testing.T) {
+	a, in, count := localCheckoutFixture(t, nil, nil)
+	source := t.TempDir()
+	testgit.Command(t, source, "clone", "--depth=1", a.checkoutRemote(in.Repository), ".")
+	write(t, filepath.Join(source, "committed.txt"), "cloud-only implementation\n")
+	testgit.Command(t, source, "add", "committed.txt")
+	testgit.Command(t, source, "commit", "-m", "Cloud implementation")
+	in.RemoteBaseCommit = in.BaseCommit
+	in.BaseCommit = testgit.Command(t, source, "rev-parse", "HEAD")
+	archive, err := transfer.CaptureCommits(t.Context(), source, in.RemoteBaseCommit, in.BaseCommit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Commits = &archive
+	digest, err := archive.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"missing", "base", "head"} {
+		bad := in
+		switch kind {
+		case "missing":
+			bad.Commits = nil
+		case "base":
+			bad.RemoteBaseCommit = strings.Repeat("e", 40)
+		case "head":
+			bad.BaseCommit = strings.Repeat("f", 40)
+		}
+		if _, err = localCheckoutCall(t.Context(), a, bad); err == nil {
+			t.Fatal("accepted inconsistent archive", kind)
+		}
+	}
+	receipt, err := localCheckoutCall(t.Context(), a, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.BaseCommit != in.BaseCommit || receipt.RemoteBaseCommit != in.RemoteBaseCommit || receipt.CommitsSHA256 != digest {
+		t.Fatal("unbound archive receipt")
+	}
+	if got := testgit.Command(t, receipt.Destination, "cat-file", "commit", in.BaseCommit); got != testgit.Command(t, source, "cat-file", "commit", in.BaseCommit) {
+		t.Fatal("commit identity or authors changed")
+	}
+	if got := testgit.Command(t, receipt.Destination, "show", "HEAD:committed.txt"); got != "cloud-only implementation" {
+		t.Fatal("committed contents lost")
+	}
+	requests := count.Load()
+	replay, err := localCheckoutCall(t.Context(), a, in)
+	if err != nil || replay != receipt || count.Load() != requests {
+		t.Fatal("retry repeated checkout", err)
+	}
+	write(t, filepath.Join(receipt.Destination, "committed.txt"), "newer local work\n")
+	if _, err = localCheckoutCall(t.Context(), a, in); err == nil {
+		t.Fatal("retry reset dirty destination")
+	}
+	raw, _ := os.ReadFile(filepath.Join(receipt.Destination, "committed.txt"))
+	if string(raw) != "newer local work\n" {
+		t.Fatal("discarded local work")
+	}
+	assertNoCheckoutCredential(t, a, in)
+}

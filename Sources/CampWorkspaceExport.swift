@@ -249,7 +249,7 @@ actor CampWorkspaceExport {
                                     body:CampWire.body(["sha256":e.resultSha256]))
         guard let authorized=try await current(),authorized.key==j.key,!authorized.cancelling else { throw CancellationError() }
         let receipt=try await CampTransferCheckout.prepare(scope:scope,deviceID:credential.actor.deviceId,transferID:transferID,
-            export:e,review:review,grant:grant,callLocal:callLocal)
+            export:e,review:review,grant:grant,payload:raw,callLocal:callLocal)
         _ = try await fetchChunk(j,index:0)
         try await authority()
         guard let after=try await current(),after.key==j.key,!after.cancelling else { throw CancellationError() }

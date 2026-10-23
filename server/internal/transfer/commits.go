@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/teslashibe/capybara-camp/server/internal/gitcheckout"
@@ -259,7 +260,8 @@ func CaptureCommits(ctx context.Context, dir, base, head string) (CommitArchive,
 	if err := verifyRoot(ctx, dir); err != nil {
 		return CommitArchive{}, err
 	}
-	if err := completeCommitGraph(ctx, dir); err != nil {
+	shallow, err := completeCommitGraph(ctx, dir, base)
+	if err != nil {
 		return CommitArchive{}, err
 	}
 	current, _, err := revision(ctx, dir)
@@ -278,6 +280,28 @@ func CaptureCommits(ctx context.Context, dir, base, head string) (CommitArchive,
 		return CommitArchive{}, err
 	}
 	a := CommitArchive{1, base, head, objects}
+	if shallow {
+		present := map[string]bool{base: true}
+		for _, object := range objects {
+			if object.Kind == "commit" {
+				present[object.ID] = true
+			}
+		}
+		for _, object := range objects {
+			if object.Kind != "commit" {
+				continue
+			}
+			edges, e := objectEdges(object)
+			if e != nil {
+				return CommitArchive{}, e
+			}
+			for _, parent := range edges[1:] {
+				if !present[parent] {
+					return CommitArchive{}, ErrRepository
+				}
+			}
+		}
+	}
 	if err = a.Validate(); err != nil {
 		return CommitArchive{}, err
 	}
@@ -291,39 +315,72 @@ func CaptureCommits(ctx context.Context, dir, base, head string) (CommitArchive,
 	if current != head {
 		return CommitArchive{}, ErrChanged
 	}
-	if err := completeCommitGraph(ctx, dir); err != nil {
+	afterShallow, err := completeCommitGraph(ctx, dir, base)
+	if err != nil {
 		return CommitArchive{}, err
+	}
+	if afterShallow != shallow {
+		return CommitArchive{}, ErrChanged
 	}
 	return a, nil
 }
 
-// Source worktrees are allowed, but shallow boundaries and grafts must never
-// make a partial or locally rewritten ancestry look like complete history.
-// Git resolves the metadata paths so linked worktrees use their common store.
-func completeCommitGraph(ctx context.Context, dir string) error {
+// Linked worktrees are supported. A shallow source is accepted only at the
+// authorized base boundary; its exported parent graph is checked separately.
+// Destination verification still requires the complete remote ancestor history.
+func completeCommitGraph(ctx context.Context, dir, base string) (bool, error) {
+	gitPath := func(name string) (string, error) {
+		raw, err := git(ctx, dir, 8192, "rev-parse", "--git-path", name)
+		if err != nil {
+			return "", err
+		}
+		value := strings.TrimSpace(string(raw))
+		if value == "" || strings.ContainsAny(value, "\r\n\x00") {
+			return "", ErrRepository
+		}
+		if !filepath.IsAbs(value) {
+			value = filepath.Join(dir, value)
+		}
+		return value, nil
+	}
+	grafts, err := gitPath("info/grafts")
+	if err != nil {
+		return false, err
+	}
+	if _, err = os.Lstat(grafts); !os.IsNotExist(err) {
+		return false, ErrRepository
+	}
 	raw, err := git(ctx, dir, 1024, "rev-parse", "--is-shallow-repository")
 	if err != nil {
-		return err
+		return false, err
 	}
-	if strings.TrimSpace(string(raw)) != "false" {
-		return ErrRepository
+	if strings.TrimSpace(string(raw)) == "false" {
+		return false, nil
 	}
-	raw, err = git(ctx, dir, 8192, "rev-parse", "--git-path", "info/grafts")
+	if strings.TrimSpace(string(raw)) != "true" {
+		return false, ErrRepository
+	}
+	boundary, err := gitPath("shallow")
 	if err != nil {
-		return err
+		return false, err
 	}
-	name := strings.TrimSpace(string(raw))
-	if name == "" || strings.ContainsAny(name, "\r\n\x00") {
-		return ErrRepository
+	f, err := os.OpenFile(boundary, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return false, ErrRepository
 	}
-	if !filepath.IsAbs(name) {
-		name = filepath.Join(dir, name)
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 127 {
+		return false, ErrRepository
 	}
-	if _, err := os.Lstat(name); !os.IsNotExist(err) {
-		return ErrRepository
+	raw, err = io.ReadAll(io.LimitReader(f, 128))
+	ids := strings.Fields(string(raw))
+	if err != nil || len(raw) >= 128 || len(ids) != 1 || ids[0] != base {
+		return false, ErrRepository
 	}
-	return nil
+	return true, nil
 }
+
 func verifyCommitTrees(ctx context.Context, dir string, a CommitArchive) error {
 	base, err := git(ctx, dir, 8<<20, "ls-tree", "-rlz", "--full-tree", a.BaseCommit)
 	if err != nil {

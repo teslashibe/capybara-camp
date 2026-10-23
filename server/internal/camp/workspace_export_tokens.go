@@ -13,15 +13,16 @@ import (
 // ExportCheckoutToken is a private delivery to the requesting owner device.
 // Never persist this response in commands, shared snapshots, events or prompts.
 type ExportCheckoutToken struct {
-	Token       string    `json:"token"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	ExportID    string    `json:"export_id"`
-	DeviceID    string    `json:"device_id"`
-	WorkspaceID string    `json:"workspace_id"`
-	Repository  string    `json:"repository"`
-	BaseCommit  string    `json:"base_commit"`
-	Branch      string    `json:"branch"`
-	SHA256      string    `json:"sha256"`
+	Token            string    `json:"token"`
+	ExpiresAt        time.Time `json:"expires_at"`
+	ExportID         string    `json:"export_id"`
+	DeviceID         string    `json:"device_id"`
+	WorkspaceID      string    `json:"workspace_id"`
+	Repository       string    `json:"repository"`
+	BaseCommit       string    `json:"base_commit"`
+	RemoteBaseCommit string    `json:"remote_base_commit,omitempty"`
+	Branch           string    `json:"branch"`
+	SHA256           string    `json:"sha256"`
 }
 
 func exportTokenBinding(e WorkspaceExport, device string) string {
@@ -69,6 +70,10 @@ func (g *GitStore) WorkspaceExportCheckoutToken(ctx context.Context, a auth.Acto
 	if err != nil {
 		return out, err
 	}
+	head, remoteBase, err := g.exportCommitBinding(work, tx, e, l.value)
+	if err != nil {
+		return out, err
+	}
 	var state string
 	var encrypted []byte
 	err = tx.QueryRow(work, `SELECT state,encrypted_token FROM workspace_export_git_grants WHERE export_id=$1 AND device_id=$2 FOR UPDATE`, id, a.DeviceID).Scan(&state, &encrypted)
@@ -79,7 +84,7 @@ func (g *GitStore) WorkspaceExportCheckoutToken(ctx context.Context, a auth.Acto
 		if err = g.open(encrypted, exportTokenBinding(e, a.DeviceID), &out); err != nil {
 			return ExportCheckoutToken{}, err
 		}
-		if !out.ExpiresAt.After(time.Now()) {
+		if !out.ExpiresAt.After(time.Now()) || out.BaseCommit != head || out.RemoteBaseCommit != remoteBase {
 			return ExportCheckoutToken{}, ErrTransition
 		}
 		return out, tx.Commit(work)
@@ -141,7 +146,7 @@ func (g *GitStore) WorkspaceExportCheckoutToken(ctx context.Context, a auth.Acto
 	if current.ExpiresAt.Before(expires) {
 		expires = current.ExpiresAt
 	}
-	out = ExportCheckoutToken{Token: grant.Token, ExpiresAt: expires.UTC(), ExportID: id, DeviceID: a.DeviceID, WorkspaceID: l.value.ID, Repository: l.value.RepositoryName, BaseCommit: l.value.BaseCommit, Branch: l.value.Branch, SHA256: digest}
+	out = ExportCheckoutToken{Token: grant.Token, ExpiresAt: expires.UTC(), ExportID: id, DeviceID: a.DeviceID, WorkspaceID: l.value.ID, Repository: l.value.RepositoryName, BaseCommit: head, RemoteBaseCommit: remoteBase, Branch: l.value.Branch, SHA256: digest}
 	encrypted, err = g.seal(out, exportTokenBinding(current, a.DeviceID))
 	if err != nil {
 		return ExportCheckoutToken{}, err
@@ -159,6 +164,30 @@ func (g *GitStore) WorkspaceExportCheckoutToken(ctx context.Context, a auth.Acto
 	}
 	accepted = true
 	return out, nil
+}
+
+func (g *GitStore) exportCommitBinding(ctx context.Context, tx pgx.Tx, e WorkspaceExport, w Workspace) (string, string, error) {
+	select {
+	case g.store.transferSlots <- struct{}{}:
+		defer func() { <-g.store.transferSlots }()
+	case <-ctx.Done():
+		return "", "", ctx.Err()
+	default:
+		return "", "", auth.ErrRateLimited
+	}
+	raw, err := g.store.exportPayload(ctx, tx, e)
+	if err != nil {
+		return "", "", err
+	}
+	m, err := validateExportCommits(raw, w)
+	if err != nil {
+		return "", "", err
+	}
+	remote := ""
+	if m.Commits != nil {
+		remote = m.Commits.BaseCommit
+	}
+	return m.BaseCommit, remote, nil
 }
 
 func retireExportToken(ctx context.Context, tx pgx.Tx, id, device string) error {

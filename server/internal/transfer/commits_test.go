@@ -230,7 +230,7 @@ func TestCommitArchiveBoundsAndSourceIdentity(t *testing.T) {
 }
 
 func TestCommitArchiveRequiresCompleteSourceHistory(t *testing.T) {
-	source, _, base := archiveFixture(t)
+	source, destination, base := archiveFixture(t)
 	write(t, source, "new.txt", "New", 0600)
 	head := committed(t, source, "Unpublished")
 	linked := filepath.Join(t.TempDir(), "linked")
@@ -252,8 +252,18 @@ func TestCommitArchiveRequiresCompleteSourceHistory(t *testing.T) {
 	}
 	shallow := filepath.Join(t.TempDir(), "shallow")
 	gitTest(t, source, "clone", "-q", "--depth=2", "file://"+source, shallow)
-	if _, err := CaptureCommits(t.Context(), shallow, base, head); !errors.Is(err, ErrRepository) {
-		t.Fatal("Shallow ancestry accepted", err)
+	archive, err := CaptureCommits(t.Context(), shallow, base, head)
+	if err != nil {
+		t.Fatal("Exact base boundary rejected", err)
+	}
+	digest, _ := archive.Digest()
+	if _, err := RestoreCommits(t.Context(), destination, archive, digest); err != nil {
+		t.Fatal("Boundary capture failed against complete destination ancestry", err)
+	}
+	missing := filepath.Join(t.TempDir(), "missing")
+	gitTest(t, source, "clone", "-q", "--depth=1", "file://"+source, missing)
+	if _, err := CaptureCommits(t.Context(), missing, base, head); !errors.Is(err, ErrRepository) {
+		t.Fatal("Incomplete exported ancestry accepted", err)
 	}
 }
 

@@ -21,7 +21,7 @@ actor DestinationBridgeFixture {
         if action=="transfer-checkout" {
             checkoutCalls+=1
             let scope=input["scope"] as! String,id=input["transferID"] as! String
-            let receipt=TransferCheckoutReceipt(version:1,scope:scope,transferID:id,repository:input["repository"] as! String,baseCommit:review.baseCommit,branch:review.branch,destination:"/fixture/workspace-\(scope)-\(id)")
+            let receipt=TransferCheckoutReceipt(version:1,scope:scope,transferID:id,repository:input["repository"] as! String,baseCommit:review.baseCommit,branch:review.branch,destination:"/fixture/workspace-\(scope)-\(id)",remoteBaseCommit:review.commits?.baseCommit,commitsSha256:review.commits?.reviewSha256)
             if loseCheckout { loseCheckout=false;throw URLError(.networkConnectionLost) }
             return try JSONEncoder().encode(receipt)
         }

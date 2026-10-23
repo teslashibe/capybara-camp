@@ -192,6 +192,20 @@ func (w *Worker) captureExport(ctx context.Context, claim camp.RunnerWorkspaceEx
 		if err != nil {
 			return nil, err
 		}
+		remoteBase := workspace.BaseCommit
+		if workspace.RemoteBaseCommit != "" {
+			remoteBase = workspace.RemoteBaseCommit
+		}
+		if manifest.BaseCommit != remoteBase {
+			archive, err := transfer.CaptureCommits(ctx, w.checkout.workdir(workspace), remoteBase, manifest.BaseCommit)
+			if err != nil {
+				return nil, err
+			}
+			manifest.Commits = &archive
+			if err = transfer.VerifySource(ctx, w.checkout.workdir(workspace), manifest); err != nil {
+				return nil, err
+			}
+		}
 		value, branch, base = manifest, manifest.Branch, manifest.BaseCommit
 	}
 	if branch != workspace.Branch {

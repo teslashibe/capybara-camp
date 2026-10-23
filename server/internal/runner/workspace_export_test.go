@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
 	"github.com/teslashibe/capybara-camp/server/internal/camp"
+	"github.com/teslashibe/capybara-camp/server/internal/testgit"
 	"github.com/teslashibe/capybara-camp/server/internal/transfer"
 )
 
@@ -46,6 +47,15 @@ func TestRunnerWorkspaceExportRestartAndLostResponses(t *testing.T) {
 			}
 			original := []byte(strings.Repeat("selected safe fixture content\n", 12000))
 			dir := f.worker.checkout.workdir(workspace)
+			committedHead := workspace.BaseCommit
+			if kind == "capture" {
+				if err := os.WriteFile(filepath.Join(dir, "committed.txt"), []byte("cloud commit survives return\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				testgit.Command(t, dir, "add", "committed.txt")
+				testgit.Command(t, dir, "commit", "-m", "Cloud implementation")
+				committedHead = testgit.Command(t, dir, "rev-parse", "HEAD")
+			}
 			if err := os.WriteFile(filepath.Join(dir, "README.md"), original, 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -124,6 +134,9 @@ func TestRunnerWorkspaceExportRestartAndLostResponses(t *testing.T) {
 				m, err := transfer.Decode(raw)
 				if err != nil || len(m.Files) != 1 || !bytes.Equal(m.Files[0].Data, original) || len(m.Excluded) != 1 || m.Excluded[0].Path != ".env" {
 					t.Fatal("capture changed or exported credentials", err)
+				}
+				if m.Commits == nil || m.Commits.BaseCommit != workspace.BaseCommit || m.Commits.HeadCommit != committedHead || m.BaseCommit != committedHead {
+					t.Fatal("cloud commit history missing from return")
 				}
 			} else {
 				var changes transfer.ChangeSet

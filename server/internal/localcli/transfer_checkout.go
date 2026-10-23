@@ -19,21 +19,25 @@ import (
 )
 
 type TransferCheckoutInput struct {
-	Scope      string                 `json:"scope"`
-	TransferID string                 `json:"transferID"`
-	Repository string                 `json:"repository"`
-	BaseCommit string                 `json:"baseCommit"`
-	Branch     string                 `json:"branch"`
-	Credential gitcheckout.Credential `json:"credential"`
+	Scope            string                  `json:"scope"`
+	TransferID       string                  `json:"transferID"`
+	Repository       string                  `json:"repository"`
+	BaseCommit       string                  `json:"baseCommit"`
+	RemoteBaseCommit string                  `json:"remoteBaseCommit,omitempty"`
+	Commits          *transfer.CommitArchive `json:"commits,omitempty"`
+	Branch           string                  `json:"branch"`
+	Credential       gitcheckout.Credential  `json:"credential"`
 }
 type TransferCheckoutReceipt struct {
-	Version     int    `json:"version"`
-	Scope       string `json:"scope"`
-	TransferID  string `json:"transferID"`
-	Repository  string `json:"repository"`
-	BaseCommit  string `json:"baseCommit"`
-	Branch      string `json:"branch"`
-	Destination string `json:"destination"`
+	Version          int    `json:"version"`
+	Scope            string `json:"scope"`
+	TransferID       string `json:"transferID"`
+	Repository       string `json:"repository"`
+	BaseCommit       string `json:"baseCommit"`
+	RemoteBaseCommit string `json:"remoteBaseCommit,omitempty"`
+	CommitsSHA256    string `json:"commitsSha256,omitempty"`
+	Branch           string `json:"branch"`
+	Destination      string `json:"destination"`
 }
 
 // Prepare in an unpublished scratch directory, then atomically publish a clean
@@ -42,8 +46,8 @@ type TransferCheckoutReceipt struct {
 func (a *App) prepareTransferCheckout(ctx context.Context, input io.Reader) (any, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	raw, err := io.ReadAll(io.LimitReader(input, 16385))
-	if err != nil || len(raw) > 16384 {
+	raw, err := io.ReadAll(io.LimitReader(input, transfer.MaxWireBytes+16385))
+	if err != nil || len(raw) > transfer.MaxWireBytes+16384 {
 		return nil, transfer.ErrLimit
 	}
 	var in TransferCheckoutInput
@@ -51,6 +55,19 @@ func (a *App) prepareTransferCheckout(ctx context.Context, input io.Reader) (any
 	dec.DisallowUnknownFields()
 	if dec.Decode(&in) != nil || dec.Decode(new(any)) != io.EOF || !installDigest(in.Scope) || !installUUID(in.TransferID) || !gitcheckout.ValidRepository(in.Repository) || !gitcheckout.ValidCommit(in.BaseCommit) || in.Branch == "" || len(in.Branch) > 512 || strings.ContainsFunc(in.Branch, unicode.IsControl) {
 		return nil, transfer.ErrInput
+	}
+	commitDigest := ""
+	if (in.Commits == nil) != (in.RemoteBaseCommit == "") {
+		return nil, transfer.ErrInput
+	}
+	if in.Commits != nil {
+		if in.Commits.BaseCommit != in.RemoteBaseCommit || in.Commits.HeadCommit != in.BaseCommit {
+			return nil, transfer.ErrInput
+		}
+		commitDigest, err = in.Commits.Digest()
+		if err != nil {
+			return nil, err
+		}
 	}
 	remote := "https://github.com/" + in.Repository + ".git"
 	if in.Credential.URL != remote || !gitcheckout.ValidToken(in.Credential.Token) || !in.Credential.ExpiresAt.After(time.Now()) || in.Credential.ExpiresAt.After(time.Now().Add(time.Hour)) {
@@ -92,7 +109,7 @@ func (a *App) prepareTransferCheckout(ctx context.Context, input io.Reader) (any
 	}
 	name := "workspace-" + in.Scope + "-" + in.TransferID
 	destination := filepath.Join(canonical, name)
-	receipt := TransferCheckoutReceipt{Version: 1, Scope: in.Scope, TransferID: in.TransferID, Repository: in.Repository, BaseCommit: in.BaseCommit, Branch: in.Branch, Destination: destination}
+	receipt := TransferCheckoutReceipt{Version: 1, Scope: in.Scope, TransferID: in.TransferID, Repository: in.Repository, BaseCommit: in.BaseCommit, RemoteBaseCommit: in.RemoteBaseCommit, CommitsSHA256: commitDigest, Branch: in.Branch, Destination: destination}
 	encoded, _ := json.Marshal(receipt)
 	prior, err := readInstallFile(root, "checkout-intent.json", 16384)
 	if err != nil && !os.IsNotExist(err) {
@@ -197,7 +214,11 @@ func (a *App) prepareTransferCheckout(ctx context.Context, input io.Reader) (any
 		return nil, err
 	}
 	command.CredentialFile = filepath.Join(state, credentialName)
-	if _, err = run("fetch", "--no-tags", "--depth=1", "origin", in.BaseCommit); err != nil {
+	fetch := []string{"fetch", "--no-tags", "--depth=1", "origin", in.BaseCommit}
+	if in.Commits != nil {
+		fetch = []string{"fetch", "--no-tags", "origin", in.RemoteBaseCommit}
+	}
+	if _, err = run(fetch...); err != nil {
 		return nil, err
 	}
 	command.CredentialFile = ""
@@ -206,6 +227,23 @@ func (a *App) prepareTransferCheckout(ctx context.Context, input io.Reader) (any
 	}
 	if err = verifyCheckoutConfig(root, command.Directory, false); err != nil {
 		return nil, err
+	}
+	if in.Commits != nil {
+		tree, err := run("ls-tree", "-rlz", "--full-tree", in.RemoteBaseCommit)
+		if err != nil {
+			return nil, err
+		}
+		if err = gitcheckout.ValidateTree(ctx, tree, func(ctx context.Context, id string) ([]byte, error) {
+			return gitcheckout.Run(ctx, command, "cat-file", "blob", id)
+		}); err != nil {
+			return nil, err
+		}
+		if _, err = run("checkout", "--no-recurse-submodules", "--detach", in.RemoteBaseCommit); err != nil {
+			return nil, err
+		}
+		if _, err = transfer.RestoreCommits(ctx, command.Directory, *in.Commits, commitDigest); err != nil {
+			return nil, err
+		}
 	}
 	tree, err := run("ls-tree", "-rlz", "--full-tree", in.BaseCommit)
 	if err != nil {

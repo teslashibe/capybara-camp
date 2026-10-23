@@ -17,7 +17,7 @@ import AppKit
     }
     func load() async {
         do {
-            let value = try await ReturnScreenFixture(directory:root.appendingPathComponent(UUID().uuidString),provider:"Claude")
+            let value = try await ReturnScreenFixture(directory:root.appendingPathComponent(UUID().uuidString),provider:"Claude",unpublishedCommits:true)
             store.sources = [value.source,CampSource(id:"fixture-team",provider:"Claude",root:"/fixture/team",label:"Team test account",count:0)]
             fixture = value; transfer = value.screen(automatic:true)
         } catch { self.error = error.localizedDescription }

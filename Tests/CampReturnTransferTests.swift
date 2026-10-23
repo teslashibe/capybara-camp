@@ -6,7 +6,7 @@ import Foundation
         defer { try? FileManager.default.removeItem(at:root) }
         for provider in ["Codex","Claude"] {
             for scenario in ["complete","cancel","install-cancel","signout","reopen"] {
-                let fixture = try await ReturnScreenFixture(directory:root.appendingPathComponent(provider+scenario),provider:provider)
+                let fixture = try await ReturnScreenFixture(directory:root.appendingPathComponent(provider+scenario),provider:provider,unpublishedCommits:scenario == "complete")
                 var screen = fixture.screen()
                 var delivered = 0
                 if scenario == "complete" {
