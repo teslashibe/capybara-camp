@@ -871,7 +871,7 @@ Cancellation is persisted and reconciles any uncertain transfer creation before
 cancelling its upload/hold. If the source already committed, the coordinator
 observes that completed move instead of reporting cancellation. Cache erasure
 invalidates late responses. These states do not themselves start a local model;
-the verified local continuation mapping and native screen remain required.
+the local worker launch/stream integration and native screen remain required.
 
 ## Restored history in a local conversation
 
@@ -893,19 +893,39 @@ channel with the provider conversation.
 Attaching history does not select new-versus-resumed execution, alter provider
 conversation IDs or grant project tools. The native owner must first verify the
 committed handoff and current execution assignment, then persist the new CLI
-conversation ID before treating it as resumable. That mapping and its native
-review flow remain unfinished. The archived history is the pinned context from
+conversation ID before treating it as resumable. The archived history is the pinned context from
 the move; subsequent provider messages belong to the continuation.
 
-The remaining continuation binding must keep the stable Camp ticket/destination
-identity separate from the actual CLI conversation ID. Normal session publication
+`LocalContinuationBinding` keeps the stable Camp ticket/destination identity
+separate from the actual CLI conversation ID. After a fresh committed-handoff
+and assignment read, adoption stores the binding and clears only the matching
+transfer journals, downloaded chunks and history pages in one SQLite transaction.
+Installed files and the shared transcript remain intact. Replayed adoption
+preserves an existing first-request reservation and provider ID. Bindings are
+scoped by server/user/Camp, ticket and execution epoch; clearing the Camp cache
+fences late callbacks and removes its bindings.
+
+Before process creation, `reserveContinuation` requires a persisted running
+worker attempt with the assigned owner/device/epoch, matching permission revision,
+unexpired lease, unrestricted context and appropriate execution permissions.
+It atomically saves the request reservation. A duplicate reservation fails;
+stale worker saves cannot clear it. If the first request has no known provider ID,
+another request cannot silently create a replacement conversation. Normal
+uncertain-attempt reconciliation remains required after restart. Binding the CLI
+ID requires that first running reserved request; replaying the same ID is safe,
+but replacing it is refused. Later authorized requests select the saved provider
+ID. The native transport offers an awaited persistence callback before forwarding
+the session event, rejects missing/conflicting IDs and saves a repeated identical
+ID only once.
+
+The native worker and transfer review screen do not yet invoke this launch path.
+Normal session publication
 requires its existing local session ID and cannot be used to replace that
-identity. It must also append new continuation messages after the imported
+identity. The remaining stream integration must append new continuation messages after the imported
 history with durable, noncolliding message IDs and ordinals. Publishing the new
 provider's transcript from ordinal zero would conflict with the retained parent
-history. Save a provider-created ID before acknowledging it; an uncertain first
-submission must remain reviewable rather than automatically creating another
-conversation.
+history. This binding alone does not complete runnable continuation or transfer
+acceptance.
 
 ## Local destination receipts
 

@@ -320,6 +320,13 @@ The local conversation transport can attach the installed archive through the
 existing read-only Camp context tools, with bounded pages and original message
 links. It verifies the receipt and selected profile/checkout; it does not create
 a provider conversation or authorize execution merely by attaching history.
+Completed handoffs can now be adopted into a private per-ticket/execution-epoch
+binding. The Camp ticket keeps its identity while the binding records the actual
+CLI conversation ID. A durable launch reservation prevents replaying the first
+submission after a crash; an unknown outcome requires review. The native
+transport can persist the ID before forwarding the session event and rejects
+malformed or conflicting identities. Worker launch/stream integration is still
+required before this becomes a runnable transfer in the app.
 The review screen integration, missing remote commits, attachments and connecting the
 handoff to actual local continuation remain part of the unfinished transfer flow.
 The native publisher includes saved subagent histories with a shared or private

@@ -21,6 +21,7 @@ struct CloudAttempt: Codable, Identifiable, Sendable {
     var localProviderSessionId: String? = nil
     var pendingStream: Data? = nil
     var deliveredControls: [String]? = nil
+    var continuationReserved: Bool? = nil
 }
 
 actor CampCache {
@@ -219,6 +220,106 @@ actor CampCache {
                       value.checkout==nil,value.installation==nil else { throw CampCloudError.invalidResponse }
             }
             try setMetadata(key,raw)
+        }
+    }
+    func localContinuation(sessionID: String, executionEpoch: Int64, scope: CloudScope, expectedEpoch: Int64) throws -> LocalContinuationBinding? {
+        try checkEpoch(scope, expectedEpoch)
+        guard UUID(uuidString: sessionID) != nil, executionEpoch > 0 else { throw CampCloudError.invalidResponse }
+        let key = "local-continuation:\(scope.key):\(sessionID):\(executionEpoch)"
+        guard let raw = try metadata(key) else { return nil }
+        guard raw.count <= 128 << 10 else { throw CampCloudError.invalidResponse }
+        let binding = try JSONDecoder().decode(LocalContinuationBinding.self, from: raw)
+        try binding.validate(scope: scope)
+        guard binding.key == key else { throw CampCloudError.invalidResponse }
+        return binding
+    }
+    // Persist the binding and clear only this completed transfer's scratch data
+    // in one transaction. Installed files and the ticket transcript stay intact.
+    func adoptReturnHandoff(_ expected: ReturnHandoffJournal, scope: CloudScope, expectedEpoch: Int64) throws -> LocalContinuationBinding {
+        guard expected.phase == "complete", let session = expected.session,
+              let handoff = expected.handoff, handoff.state == "committed",
+              handoff.executionEpoch == session.executionEpoch,
+              let installed = expected.destination.installation else { throw CampCloudError.invalidResponse }
+        let candidate = LocalContinuationBinding(session: session, handoffID: handoff.id, installation: installed)
+        try candidate.validate(scope: scope)
+        return try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            if let saved = try localContinuation(sessionID: session.id, executionEpoch: session.executionEpoch!, scope: scope, expectedEpoch: expectedEpoch) {
+                guard saved.session == candidate.session, saved.handoffID == candidate.handoffID,
+                      saved.installation == candidate.installation else { throw CancellationError() }
+                return saved
+            }
+            let key = "return-handoff:" + scope.key
+            guard let raw = try metadata(key),
+                  let destinationRaw = try metadata("local-destination:" + scope.key),
+                  let exportRaw = try metadata("workspace-export:" + scope.key),
+                  let historyRaw = try metadata("transfer-history:" + scope.key) else { throw CancellationError() }
+            let saved = try JSONDecoder().decode(ReturnHandoffJournal.self, from: raw)
+            let destination = try JSONDecoder().decode(LocalDestinationJournal.self, from: destinationRaw)
+            let export = try CampWire.decoder().decode(WorkspaceExportJournal.self, from: exportRaw)
+            let history = try CampWire.decoder().decode(TransferHistoryJournal.self, from: historyRaw)
+            guard saved.id == expected.id, saved.revision == expected.revision, saved.phase == "complete",
+                  saved.session == session, saved.handoff?.id == handoff.id, saved.handoff?.state == "committed",
+                  saved.destination.installation == installed, destination.id == saved.destination.id,
+                  destination.session == saved.destination.session, destination.target == candidate.target,
+                  destination.phase == "installed", !destination.cancelling, destination.installation == installed,
+                  destination.deviceId == session.ownerDeviceId,
+                  export.export?.id == destination.exportId, export.session == destination.session,
+                  history.session == destination.session, history.complete else { throw CancellationError() }
+            try setMetadata(candidate.key, JSONEncoder().encode(candidate))
+            for prefix in ["return-handoff:", "local-destination:", "workspace-export:", "transfer-history:"] {
+                try execute("DELETE FROM metadata WHERE key=?", [.text(prefix + scope.key)])
+            }
+            try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("workspace-export-chunk:\(scope.key):\(destination.exportId):%")])
+            try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-history-page:\(scope.key):\(history.id):%")])
+            return candidate
+        }
+    }
+    // Call after the worker has persisted a running attempt and checked the
+    // current server assignment. Reserving precedes process creation; a crash
+    // in between requires reconciliation, never an automatic second submission.
+    func reserveContinuation(session: CloudSession, requestID: String, scope: CloudScope, expectedEpoch: Int64) throws -> LocalContinuationLaunch {
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            guard var binding = try localContinuation(sessionID: session.id, executionEpoch: session.executionEpoch ?? 0, scope: scope, expectedEpoch: expectedEpoch),
+                  binding.matches(session), var attempt = try workerAttempt(requestID, scope: scope),
+                  attempt.state == "running", attempt.continuationReserved != true else { throw CampCloudError.invalidResponse }
+            let request = attempt.request
+            guard request.id == requestID, UUID(uuidString: requestID) != nil, request.supportedWork,
+                  request.kind == "chat", request.campId == scope.campId, request.sessionId == session.id,
+                  request.ownerUserId == scope.userId, request.ownerDeviceId == session.ownerDeviceId,
+                  request.executionLocation == "local", request.executionEpoch == session.executionEpoch,
+                  request.permissionRevision == session.permissionRevision,
+                  UUID(uuidString: request.leaseToken ?? "") != nil, (request.leaseUntil?.timeIntervalSinceNow ?? 0) > 5,
+                  ["claimed", "started"].contains(request.state),
+                  request.mode == binding.target.purpose,
+                  request.mode != "implementation" || request.permissionSettings?.valid(for: session.provider) == true
+            else { throw CampCloudError.invalidResponse }
+            let newSession = binding.providerSessionID == nil
+            if newSession {
+                guard binding.firstRequestID == nil else {
+                    throw CampError.message("The first continuation needs review before another conversation can start")
+                }
+                binding.firstRequestID = requestID
+                try setMetadata(binding.key, JSONEncoder().encode(binding))
+            }
+            attempt.continuationReserved = true
+            try saveAttempt(attempt)
+            return LocalContinuationLaunch(binding: binding, requestID: requestID, newSession: newSession)
+        }
+    }
+    func bindContinuation(sessionID: String, executionEpoch: Int64, requestID: String, providerSessionID: String, scope: CloudScope, expectedEpoch: Int64) throws {
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            guard LocalContinuationBinding.validProviderID(providerSessionID),
+                  var binding = try localContinuation(sessionID: sessionID, executionEpoch: executionEpoch, scope: scope, expectedEpoch: expectedEpoch),
+                  binding.firstRequestID == requestID, let attempt = try workerAttempt(requestID, scope: scope),
+                  attempt.state == "running", attempt.continuationReserved == true,
+                  attempt.request.sessionId == sessionID, attempt.request.executionEpoch == executionEpoch,
+                  binding.providerSessionID == nil || binding.providerSessionID == providerSessionID
+            else { throw CampCloudError.invalidResponse }
+            binding.providerSessionID = providerSessionID
+            try setMetadata(binding.key, JSONEncoder().encode(binding))
         }
     }
     func discardLocalDestination(_ expected: LocalDestinationJournal, scope: CloudScope, expectedEpoch: Int64) throws {
@@ -522,6 +623,9 @@ actor CampCache {
             guard attempt.scope == scope.key, attempt.request.campId == scope.campId,
                   attempt.request.ownerUserId == scope.userId else { throw CampCloudError.invalidResponse }
             var value = attempt
+            if let old = try workerAttempt(value.id, scope: scope), old.continuationReserved == true {
+                value.continuationReserved = true
+            }
             if let old = try workerAttempt(value.id, scope: scope), old.request.isImplementation {
                 value.pendingStream = old.pendingStream
                 value.request.streamSeq = old.request.streamSeq
@@ -720,6 +824,7 @@ actor CampCache {
             try execute("DELETE FROM metadata WHERE key=?", [.text("transfer-history:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("local-destination:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("return-handoff:" + scope.key)])
+            try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("local-continuation:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-history-page:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("workspace-export-chunk:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-payload:" + scope.key + ":%")])

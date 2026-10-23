@@ -129,6 +129,39 @@ private actor LostReturnResponses: CampAccountTransport {
             let child=try await api.get(CloudChildHistoryList.self,path:base+"/children",token:token)
             precondition(child.children.count==1)
             await rejects("Completed move retained access to source export"){_=try await files.payload()}
+            let binding = try await handoff().adoptCompleted()!
+            precondition(binding.session == finished.session && binding.installation == finished.destination.installation)
+            let adopted = try await cache.localContinuation(sessionID:session.id,executionEpoch:binding.session.executionEpoch!,scope:scope,expectedEpoch:epoch)
+            precondition(adopted == binding)
+            let transient = try await handoff().current(); precondition(transient == nil)
+            let replay = try await cache.adoptReturnHandoff(finished,scope:scope,expectedEpoch:epoch)
+            precondition(replay == binding)
+            let providerID = UUID().uuidString.lowercased()
+            for turn in 0..<2 {
+                let queued = try CampWire.decoder().decode(CloudRequest.self,from:await api.data("POST",path:base+"/requests",
+                    body:CampWire.body(["prompt":"Synthetic continuation admission", "model":"", "effort":"high", "speed":"standard", "sources":[]]),key:UUID().uuidString,token:token))
+                let requestBase="/v1/camps/\(scope.campId)/requests"
+                let claimed = try CampWire.decoder().decode(CloudRequest.self,from:await api.data("POST",path:requestBase+"/claim",
+                    body:CampWire.body(["session_ids":[session.id]]),key:UUID().uuidString,token:token))
+                precondition(claimed.id == queued.id && claimed.executionEpoch == binding.session.executionEpoch)
+                var started = try CampWire.decoder().decode(CloudRequest.self,from:await api.data("POST",path:requestBase+"/\(queued.id)/actions",
+                    body:CampWire.body(["action":"start","lease_token":claimed.leaseToken!]),key:UUID().uuidString,token:token))
+                started.leaseToken = claimed.leaseToken
+                let attempt = CloudAttempt(id:started.id,scope:scope.key,request:started,localSessionId:binding.session.localSessionId,
+                    state:"running",startKey:UUID().uuidString,finishKey:UUID().uuidString)
+                try await cache.saveWorkerAttempt(attempt,scope:scope,expectedEpoch:epoch)
+                let current = try await api.get(CloudSession.self,path:base,token:token)
+                let launch = try await cache.reserveContinuation(session:current,requestID:started.id,scope:scope,expectedEpoch:epoch)
+                precondition(launch.newSession == (turn == 0))
+                if turn == 0 {
+                    try await cache.bindContinuation(sessionID:session.id,executionEpoch:current.executionEpoch!,requestID:started.id,
+                        providerSessionID:providerID,scope:scope,expectedEpoch:epoch)
+                } else { precondition(launch.providerSessionID == providerID) }
+                await rejects("Real request admitted twice") { _ = try await cache.reserveContinuation(session:current,requestID:started.id,scope:scope,expectedEpoch:epoch) }
+                // No model is invoked in this test. Finish the API fixture honestly.
+                _ = try await api.data("POST",path:requestBase+"/\(queued.id)/actions",
+                    body:CampWire.body(["action":"finish","lease_token":claimed.leaseToken!,"outcome":"failed","evidence":"Synthetic admission test; no model was started"]),key:UUID().uuidString,token:token)
+            }
             try await cache.clear(scope)
             print("PASS: real API return for \(session.provider), independent destination device, 510 history messages, lost-response recovery and retained permissions")
         }

@@ -22,8 +22,9 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: connect the native review screen to the saved checkout, installation and
-return-handoff coordinators, establish runnable local continuation, then finish
+Next: connect the native worker's launch/stream path to the saved continuation
+binding and connect the native review screen to the checkout, installation and
+return-handoff coordinators, then finish
 attachments and the remaining transfer cases,
 shared skills and Git publication. Continue executor-setup acceptance and the
 native design audit as those surfaces are implemented. Validate the full workflow locally before the owner provisions
@@ -210,9 +211,30 @@ worker, bundled-helper and implementation suites pass
 chat-mode rejection of an explicitly requested new CLI conversation ID; ordinary
 resume calls still reject unsolicited identity changes. Staged secret scanning
 passes. These tests do not complete
-the runnable continuation mapping or native transfer screen. The mapping must
-retain the Camp identity, durably capture the CLI-created conversation ID and
-append new messages without colliding with imported history.
+the runnable continuation or native transfer screen. The remaining stream
+integration must append new messages without colliding with imported history.
+
+Completed return handoffs now have a durable native continuation binding. A fresh
+server assignment read precedes atomic adoption and cleanup of the matching
+temporary transfer cache. The binding preserves the Camp ticket and installed
+archive separately from the physical CLI conversation ID. Launch reservation
+checks the persisted running request, device/epoch, permissions and lease, and
+survives stale worker writes. Unknown first submissions cannot create replacement
+conversations automatically. The native transport can save the provider ID before
+forwarding its event and rejects missing/conflicting IDs. Worker launch/stream
+and native review integration remain open; no live provider continuation is
+claimed.
+
+The final real API/PostgreSQL journeys and all six native suites pass
+(`build/continuation-binding-verified.log`). Both provider fixtures retain 260
+parent and 250 child messages, adopt the committed destination, admit a first
+request and select the saved provider ID for the next one. Native tests cover
+stale adoption/writes, duplicate launches, invalid permissions, expired leases,
+changed owner/epoch, unknown first submissions after restart, conflicting CLI IDs
+and cache erasure. An initially invalid test assumption about inherited permission
+settings was corrected to use an unsupported value. The Go helper race suite,
+fixture vet, shell checks and staged secret scan pass. The API and native provider
+fixtures are synthetic; this is not live-model, UI or full transfer acceptance.
 
 Cloud source inspection and selected-file capture are now implemented at schema
 34. The owner creates a bounded export; only its assigned runner can claim it.

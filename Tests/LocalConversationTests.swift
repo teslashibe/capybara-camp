@@ -152,6 +152,15 @@ import Foundation
         result = nil
         let restored = LocalConversation(session: a, history: [], prompt: "Continue")
         var createdID: String?
+        var persistedID: String?
+        restored.persistSession = { id in
+            try await Task.sleep(for: .milliseconds(20))
+            persistedID = id
+        }
+        restored.forwardEvent = { data in
+            let event = try JSONSerialization.jsonObject(with:data) as! [String:Any]
+            if event["type"] as? String == "session" { precondition(persistedID == event["sessionID"] as? String) }
+        }
         restored.sessionCreated = { createdID = $0 }
         restored.completed = { result = $0 }
         try restored.start(prompt: "Continue", model: "", tuning: ModelTuning(), newSession: true,
@@ -169,6 +178,27 @@ import Foundation
                              makeProcess: { fixtureProcess("unexpected-session-id") })
         try await until { result != nil }
         precondition(result?.state == "uncertain" && createdID == nil && Bridge.activeProcesses.isEmpty)
+        for scenario in ["missing-session-id", "conflicting-session-id", "duplicate-session-id", "persistence-failed"] {
+            result = nil
+            var saves = 0, forwarded = 0
+            let identity = LocalConversation(session:a,history:[],prompt:"Continue")
+            identity.persistSession = { _ in
+                if scenario == "persistence-failed" { throw CampCloudError.cacheUnavailable }
+                saves += 1
+            }
+            identity.forwardEvent = { data in
+                let event = try JSONSerialization.jsonObject(with:data) as! [String:Any]
+                if event["type"] as? String == "session" { forwarded += 1 }
+            }
+            identity.completed = { result = $0 }
+            try identity.start(prompt:"Continue",model:"",tuning:ModelTuning(),newSession:true,
+                makeProcess:{fixtureProcess(scenario == "persistence-failed" ? "unexpected-session-id" : scenario)})
+            try await until { result != nil }
+            precondition(result?.state == (scenario == "duplicate-session-id" ? "completed" : "uncertain"))
+            precondition(saves == (["missing-session-id","persistence-failed"].contains(scenario) ? 0 : 1))
+            precondition(forwarded == (scenario == "duplicate-session-id" ? 2 : scenario == "conflicting-session-id" ? 1 : 0))
+            precondition(Bridge.activeProcesses.isEmpty)
+        }
         print("PASS: background navigation, queues, cancellation, isolated planning, restored history references, usage and bounded process IO")
     }
 }

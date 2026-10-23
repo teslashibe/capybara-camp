@@ -128,6 +128,24 @@ actor CampReturnHandoff {
         try await cache.discardReturnHandoff(j,scope:scope,expectedEpoch:epoch)
         try await authority()
     }
+    // Recheck the committed server assignment before adopting it. No provider
+    // starts here; the worker must separately reserve an authorized request.
+    func adoptCompleted() async throws -> LocalContinuationBinding? {
+        guard !busy else { throw CampError.message("The move is already being updated") }
+        busy = true; defer { busy = false }
+        guard var j = try await current() else { return nil }
+        guard j.phase == "complete" else { throw CampCloudError.invalidResponse }
+        guard let savedSession = j.session, let installation = j.destination.installation, let handoff = j.handoff else { throw CampCloudError.invalidResponse }
+        let before = LocalContinuationBinding(session:savedSession,handoffID:handoff.id,installation:installation)
+        try await refreshHandoff(&j)
+        guard j.phase == "complete", let current = j.session, before.matches(current) else { throw CampCloudError.invalidResponse }
+        let previous = j.revision
+        j.revision += 1
+        try await save(j,previous:previous)
+        let binding = try await cache.adoptReturnHandoff(j, scope: scope, expectedEpoch: epoch)
+        try await authority()
+        return binding
+    }
     @discardableResult func advance()async throws->ReturnHandoffJournal? {
         guard !busy else{throw CampError.message("The move is already being updated")};busy=true;defer{busy=false}
         guard var j=try await current() else{return nil}

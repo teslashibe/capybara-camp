@@ -54,6 +54,7 @@ struct ConversationResult: Sendable {
     var completed: ((ConversationResult) -> Void)?
     var didAccept: (() -> Void)?
     var sessionCreated: ((String) -> Void)?
+    var persistSession: ((String) async throws -> Void)?
     var forwardEvent: ((Data) async throws -> Void)?
     private var process: Process?
     private var input: ConversationInput?
@@ -119,17 +120,18 @@ struct ConversationResult: Sendable {
                         guard let value = try JSONSerialization.jsonObject(with: line) as? [String: Any], let type = value["type"] as? String else {
                             throw CampError.message("The local CLI returned an unreadable event")
                         }
+                        if type == "session" {
+                            guard newSession, mode != .planning, let id = value["sessionID"] as? String,
+                                  LocalContinuationBinding.validProviderID(id) else { throw CampError.message("The CLI returned an invalid session identity") }
+                            try await self?.createdSession(id)
+                            try await self?.forward(line)
+                            continue
+                        }
                         try await self?.forward(line)
                         if type == "approval" {
                             let approval = try JSONDecoder().decode(ProviderApproval.self, from: line)
                             guard mode == .implementation, approval.valid else { throw CampError.message("The CLI returned an unsupported approval request") }
                             await self?.receive(approval)
-                            continue
-                        }
-                        if type == "session", let id = value["sessionID"] as? String {
-                            guard newSession, mode != .planning, !id.isEmpty, id.utf8.count <= 200,
-                                  !id.contains(where: { "/\\\r\n\0".contains($0) }) else { throw CampError.message("The CLI returned an invalid session identity") }
-                            await self?.createdSession(id)
                             continue
                         }
                         if type == "settings" {
@@ -219,9 +221,15 @@ struct ConversationResult: Sendable {
         guard approvals.count < 16 else { terminal = "failed"; notice = "Too many pending approval requests"; stop(); return }
         approvals.append(approval); changed?()
     }
-    private func createdSession(_ id: String) {
-        guard !finished, !stopped, providerSessionID == nil else { return }
-        providerSessionID = id; sessionCreated?(id); changed?()
+    private func createdSession(_ id: String) async throws {
+        if let previous = providerSessionID {
+            guard previous == id else { throw CampError.message("The CLI changed its conversation identity") }
+            return
+        }
+        guard !finished else { throw CancellationError() }
+        try await persistSession?(id)
+        providerSessionID = id
+        if !stopped { sessionCreated?(id); changed?() }
     }
     func answer(_ id: String, allow: Bool, answers: [String: [String]] = [:], decision: String? = nil) {
         guard !finished, !stopped, !answering.contains(id), let approval = approvals.first(where: { $0.id == id }),
@@ -268,7 +276,7 @@ struct ConversationResult: Sendable {
         else { message = error.isEmpty ? "The CLI stopped before confirming the result. Check the transcript before retrying." : error }
         completed?(ConversationResult(state: state, message: message, accepted: accepted,
             output: messages.filter { $0.role == "assistant" }.map(\.text).joined(separator: "\n\n"), usage: usage))
-        changed = nil; completed = nil; didAccept = nil; sessionCreated = nil; forwardEvent = nil
+        changed = nil; completed = nil; didAccept = nil; sessionCreated = nil; persistSession = nil; forwardEvent = nil
     }
     func stop() {
         guard !finished, !stopped else { return }; stopped = true

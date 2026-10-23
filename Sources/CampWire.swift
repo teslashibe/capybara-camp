@@ -95,6 +95,7 @@ struct CloudRequest: Codable, Identifiable, Equatable, Sendable {
     var planStep: Int? = nil
     var executionLocation: String? = nil
     var streamSeq: Int64? = nil
+    var executionEpoch: Int64? = nil
     var quotedSources: [ImportedPlanningSource]? = nil
     var quotedContextDigest: String? = nil
     var isPlanning: Bool { kind == "planning" }

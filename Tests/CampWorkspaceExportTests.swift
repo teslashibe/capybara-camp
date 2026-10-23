@@ -503,6 +503,76 @@ func corrupt(){malformed=true}
                 precondition(finished.phase=="complete" && counts.2==1)
                 precondition(finished.session?.id==source.id && finished.session?.ownerDeviceId==credential.actor.deviceId && finished.session?.profileId==target.profileID && finished.session?.transcriptRevision==source.transcriptRevision)
                 precondition(finished.session?.executionEpoch==(source.executionEpoch ?? 0)+1)
+                var stale = finished; stale.revision -= 1
+                await rejects("Stale journal adopted") { _ = try await cache.adoptReturnHandoff(stale,scope:scope,expectedEpoch:localEpoch) }
+                let adopted = try await handoff().adoptCompleted()!
+                let assigned = finished.session!
+                precondition(adopted.session == assigned && adopted.target == target && adopted.firstRequestID == nil && adopted.providerSessionID == nil)
+                precondition(adopted.history.transferID == finished.destination.id)
+                for prefix in ["return-handoff:","local-destination:","workspace-export:","transfer-history:"] {
+                    let value = try await cache.metadata(prefix+scope.key); precondition(value == nil)
+                }
+                var request = CloudRequest(id:UUID().uuidString.lowercased(),campId:scope.campId,sessionId:assigned.id,
+                    requesterUserId:scope.userId,ownerUserId:scope.userId,ownerDeviceId:assigned.ownerDeviceId,
+                    permissionRevision:assigned.permissionRevision,revision:1,prompt:"Continue",model:"",effort:"",speed:"standard",state:"started",
+                    leaseToken:UUID().uuidString,leaseUntil:Date().addingTimeInterval(120),createdAt:Date(),sources:[])
+                request.kind="chat";request.executionLocation="local";request.executionEpoch=assigned.executionEpoch
+                request.mode="implementation";request.permissions=finished.permissions
+                let first = CloudAttempt(id:request.id,scope:scope.key,request:request,localSessionId:assigned.localSessionId,
+                    state:"running",startKey:UUID().uuidString,finishKey:UUID().uuidString)
+                try await cache.saveWorkerAttempt(first,scope:scope,expectedEpoch:localEpoch)
+                var moved = assigned; moved.executionEpoch! += 1
+                await rejects("Old execution epoch launched") { _ = try await cache.reserveContinuation(session:moved,requestID:request.id,scope:scope,expectedEpoch:localEpoch) }
+                moved=assigned;moved.ownerDeviceId=UUID().uuidString
+                await rejects("Other device launched") { _ = try await cache.reserveContinuation(session:moved,requestID:request.id,scope:scope,expectedEpoch:localEpoch) }
+                for violation in ["lease","permissions","revision","epoch","restricted"] {
+                    var invalid=first
+                    switch violation {
+                    case "lease": invalid.request.leaseUntil = Date().addingTimeInterval(-1)
+                    case "permissions": invalid.request.permissions = ["sandbox":"unsupported"]
+                    case "revision": invalid.request.permissionRevision += 1
+                    case "epoch": invalid.request.executionEpoch! += 1
+                    default: invalid.request.contentRestricted = true
+                    }
+                    try await cache.saveWorkerAttempt(invalid,scope:scope,expectedEpoch:localEpoch)
+                    await rejects("Invalid continuation admitted: "+violation) { _ = try await cache.reserveContinuation(session:assigned,requestID:request.id,scope:scope,expectedEpoch:localEpoch) }
+                }
+                try await cache.saveWorkerAttempt(first,scope:scope,expectedEpoch:localEpoch)
+                let launch = try await cache.reserveContinuation(session:assigned,requestID:request.id,scope:scope,expectedEpoch:localEpoch)
+                precondition(launch.newSession && launch.providerSessionID == target.sessionID)
+                await rejects("Reserved request launched twice") { _ = try await cache.reserveContinuation(session:assigned,requestID:request.id,scope:scope,expectedEpoch:localEpoch) }
+                // A stale worker write must not clear the launch reservation.
+                try await cache.saveWorkerAttempt(first,scope:scope,expectedEpoch:localEpoch)
+                await rejects("Stale worker write permitted relaunch") { _ = try await cache.reserveContinuation(session:assigned,requestID:request.id,scope:scope,expectedEpoch:localEpoch) }
+                var next = first; next.id=UUID().uuidString.lowercased();next.request.id=next.id
+                try await cache.saveWorkerAttempt(next,scope:scope,expectedEpoch:localEpoch)
+                await rejects("Unknown first conversation created another") { _ = try await cache.reserveContinuation(session:assigned,requestID:next.id,scope:scope,expectedEpoch:localEpoch) }
+                let replay = try await cache.adoptReturnHandoff(finished,scope:scope,expectedEpoch:localEpoch)
+                precondition(replay.firstRequestID == request.id && replay.providerSessionID == nil)
+                if scenario == "losses" {
+                    let restarted = try CampCache(directory:root)
+                    let unknown = try await restarted.localContinuation(sessionID:assigned.id,executionEpoch:assigned.executionEpoch!,scope:scope,expectedEpoch:localEpoch)
+                    precondition(unknown?.firstRequestID == request.id && unknown?.providerSessionID == nil)
+                    await rejects("Restart created a replacement for an unknown submission") { _ = try await restarted.reserveContinuation(session:assigned,requestID:next.id,scope:scope,expectedEpoch:localEpoch) }
+                    await rejects("Restart accepted an unowned late identity") { try await restarted.bindContinuation(sessionID:assigned.id,executionEpoch:assigned.executionEpoch!,requestID:request.id,providerSessionID:UUID().uuidString,scope:scope,expectedEpoch:localEpoch) }
+                    continue
+                }
+                let providerID = UUID().uuidString.lowercased()
+                await rejects("Other request bound the conversation") { try await cache.bindContinuation(sessionID:assigned.id,executionEpoch:assigned.executionEpoch!,requestID:next.id,providerSessionID:providerID,scope:scope,expectedEpoch:localEpoch) }
+                try await cache.bindContinuation(sessionID:assigned.id,executionEpoch:assigned.executionEpoch!,requestID:request.id,providerSessionID:providerID,scope:scope,expectedEpoch:localEpoch)
+                try await cache.bindContinuation(sessionID:assigned.id,executionEpoch:assigned.executionEpoch!,requestID:request.id,providerSessionID:providerID,scope:scope,expectedEpoch:localEpoch)
+                await rejects("Conversation identity overwritten") { try await cache.bindContinuation(sessionID:assigned.id,executionEpoch:assigned.executionEpoch!,requestID:request.id,providerSessionID:UUID().uuidString,scope:scope,expectedEpoch:localEpoch) }
+                let followup = try await cache.reserveContinuation(session:assigned,requestID:next.id,scope:scope,expectedEpoch:localEpoch)
+                precondition(!followup.newSession && followup.providerSessionID == providerID && followup.binding.session.localSessionId == target.sessionID)
+                let reopened = try CampCache(directory:root)
+                let persisted = try await reopened.localContinuation(sessionID:assigned.id,executionEpoch:assigned.executionEpoch!,scope:scope,expectedEpoch:localEpoch)
+                precondition(persisted?.providerSessionID == providerID && persisted?.session.transcriptRevision == source.transcriptRevision)
+                await rejects("Restart repeated submitted request") { _ = try await reopened.reserveContinuation(session:assigned,requestID:next.id,scope:scope,expectedEpoch:localEpoch) }
+                try await cache.clear(scope)
+                let newEpoch=try await cache.epoch(scope)
+                let erased=try await cache.localContinuation(sessionID:assigned.id,executionEpoch:assigned.executionEpoch!,scope:scope,expectedEpoch:newEpoch)
+                precondition(erased == nil)
+                await rejects("Late provider callback restored cleared binding") { try await cache.bindContinuation(sessionID:assigned.id,executionEpoch:assigned.executionEpoch!,requestID:request.id,providerSessionID:providerID,scope:scope,expectedEpoch:localEpoch) }
             }
         }
         print("PASS: export, destination restart, approved return handoff, lost responses, cancellation and integrity")
