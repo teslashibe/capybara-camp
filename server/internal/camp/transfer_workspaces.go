@@ -10,6 +10,13 @@ import (
 )
 
 // Queries using this expression provide workspace w and source session s.
+// A workspace is prepared for one session revision. Once it is the session's
+// assigned execution workspace, board moves, sharing toggles and other display
+// edits no longer affect it; execution epoch, permission, project, Git and
+// provider checks still fence real authority changes.
+const workspaceSourceCurrentSQL = `(s.revision=w.source_revision OR s.execution_workspace_id=w.id)`
+
+// Queries using this expression provide workspace w and source session s.
 // A staged destination cannot outlive the source snapshot it was reviewed for.
 const validWorkspaceTransferSQL = `(w.transfer_id IS NULL OR EXISTS(
  SELECT 1 FROM session_transfers t WHERE t.id=w.transfer_id

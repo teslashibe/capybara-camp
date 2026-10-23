@@ -89,7 +89,7 @@ func (g *GitStore) lockRunnerWorkspace(ctx context.Context, tx pgx.Tx, token, id
 	if err != nil {
 		return out, err
 	}
-	if authority.git.Epoch != out.value.GitEpoch || authority.project.ID != out.value.ProjectID || authority.project.Revision != out.value.ProjectRevision || authority.session.Revision != out.value.SourceRevision {
+	if authority.git.Epoch != out.value.GitEpoch || authority.project.ID != out.value.ProjectID || authority.project.Revision != out.value.ProjectRevision || authority.session.Revision != out.value.SourceRevision && authority.session.ExecutionWorkspaceID != out.value.ID {
 		return out, ErrRevision
 	}
 	err = tx.QueryRow(ctx, `SELECT COALESCE(claim_id::text,''),COALESCE(claim_grant_id::text,''),COALESCE(lease_until,'epoch'),COALESCE(prepare_deadline,'epoch'),token_state,installation_page,repository_page FROM ticket_workspaces WHERE id=$1 FOR UPDATE`, id).Scan(&out.claim, &out.grant, &out.until, &out.deadline, &out.tokenState, &out.installationPage, &out.repositoryPage)
@@ -117,7 +117,7 @@ func (g *GitStore) NextRunnerWorkspace(ctx context.Context, token string) (*Work
  ORDER BY r.created_at,r.id LIMIT 1) AS queued_at
  ) requests ON true
  WHERE w.provider_installation_id=$1 AND w.provider_epoch=$2 AND w.state IN ('queued','preparing','ready')
- AND s.revision=w.source_revision AND s.project_id=w.project_id AND p.revision=w.project_revision AND NOT p.archived
+ AND `+workspaceSourceCurrentSQL+` AND s.project_id=w.project_id AND p.revision=w.project_revision AND NOT p.archived
  AND g.state='connected' AND g.epoch=w.git_epoch AND m.role<>'viewer'
  AND `+validWorkspaceTransferSQL+`
  AND NOT EXISTS(SELECT 1 FROM transfer_handoffs h JOIN session_transfers t ON t.id=h.transfer_id LEFT JOIN ticket_workspaces w ON w.id=h.workspace_id WHERE h.session_id=s.id AND `+liveHandoffSQL+`)

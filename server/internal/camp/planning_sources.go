@@ -34,7 +34,7 @@ func (s *Store) PlanningSources(ctx context.Context, a auth.Actor, campID, proje
  JOIN provider_installations i ON i.id=w.provider_installation_id AND i.account_id=a.id AND i.owner_user_id=s.owner_user_id
  JOIN git_connections g ON g.id=w.git_connection_id AND g.owner_user_id=s.owner_user_id
  WHERE s.camp_id=$1 AND s.project_id=$2 AND s.owner_user_id=$3 AND s.execution_location='cloud' AND ($4='' OR w.provider_account_id=NULLIF($4,'')::uuid)
- AND w.state='ready' AND w.source_revision=s.revision AND w.project_revision=j.revision AND NOT j.archived
+ AND w.state='ready' AND w.project_revision=j.revision AND NOT j.archived
  AND i.state='connected' AND i.epoch=w.provider_epoch AND (i.credential_expires_at IS NULL OR i.credential_expires_at>clock_timestamp())
  AND g.state='connected' AND g.epoch=w.git_epoch
  ORDER BY s.updated_at DESC,s.id LIMIT 100`, campID, projectID, a.UserID, accountID)

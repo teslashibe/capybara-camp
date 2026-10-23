@@ -306,8 +306,70 @@ func TestCloudSharingRevocationPreservesRuntimeAndStopsAuthority(t *testing.T) {
 	if err != nil || changed.Shared || changed.State != "running" || changed.Stage != "In progress" {
 		t.Fatal("stale local state blocked revocation or replaced runtime", changed, err)
 	}
-	if _, err = g.ActOnRunnerRequest(t.Context(), grant.Token, w.ID, r.ID, uuid.NewString(), RequestAction{Action: "heartbeat", LeaseToken: claim}); err == nil {
-		t.Fatal("revoked authority stayed live")
+	// Revocation reaches the runner as a cancellation of the running turn. The
+	// owner's assigned workspace itself stays usable.
+	beat, err := g.ActOnRunnerRequest(t.Context(), grant.Token, w.ID, r.ID, uuid.NewString(), RequestAction{Action: "heartbeat", LeaseToken: claim})
+	if err == nil && (beat.State != "cancel_requested" || beat.Reason != "permission_changed") {
+		t.Fatal("revoked authority stayed live", beat)
+	}
+	if err = g.ReapWorkspaces(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if kept, err := g.Workspace(t.Context(), owner, w.CampID, w.ID); err != nil || kept.State != "ready" {
+		t.Fatal("sharing change failed the assigned workspace", kept.State, err)
+	}
+}
+
+func TestDisplayEditsKeepAssignedCloudWorkspace(t *testing.T) {
+	g, w, grant, owner, input := executionFixture(t, "planning")
+	s := g.store
+	if _, err := s.AssignExecution(t.Context(), owner, w.CampID, w.SessionID, uuid.NewString(), input); err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.CreateRequest(t.Context(), owner, w.CampID, w.SessionID, uuid.NewString(), RequestInput{Prompt: "Cloud work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := uuid.NewString()
+	if _, err = g.ClaimRunnerRequest(t.Context(), grant.Token, w.ID, claim); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = g.ActOnRunnerRequest(t.Context(), grant.Token, w.ID, r.ID, uuid.NewString(), RequestAction{Action: "start", LeaseToken: claim}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.Session(t.Context(), owner, w.CampID, w.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A board move and a sharing grant both change the session's display
+	// revision; neither changes who may run in this workspace.
+	moved, err := s.MoveSession(t.Context(), owner, w.CampID, w.SessionID, uuid.NewString(), "Needs you", current.Revision)
+	if err != nil || moved.Revision == w.SourceRevision {
+		t.Fatal("board move did not change the display revision", moved.Revision, err)
+	}
+	if err = g.ReapWorkspaces(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	beat, err := g.ActOnRunnerRequest(t.Context(), grant.Token, w.ID, r.ID, uuid.NewString(), RequestAction{Action: "heartbeat", LeaseToken: claim})
+	if err != nil || beat.State != "started" {
+		t.Fatal("board move fenced the running turn", beat.State, err)
+	}
+	finished, err := g.ActOnRunnerRequest(t.Context(), grant.Token, w.ID, r.ID, uuid.NewString(), RequestAction{Action: "finish", LeaseToken: claim, Outcome: "completed", Evidence: "Provider terminal receipt"})
+	if err != nil || finished.State != "completed" {
+		t.Fatal("board move blocked completion", finished.State, err)
+	}
+	if target, err := s.Execution(t.Context(), owner, w.CampID, w.SessionID); err != nil || !target.Available {
+		t.Fatal("assigned workspace became unavailable", target, err)
+	}
+	next, err := s.CreateRequest(t.Context(), owner, w.CampID, w.SessionID, uuid.NewString(), RequestInput{Prompt: "Next cloud turn"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := g.ClaimRunnerRequest(t.Context(), grant.Token, w.ID, uuid.NewString()); err != nil || claimed == nil || claimed.ID != next.ID {
+		t.Fatal("next turn could not run after a board move", claimed, err)
+	}
+	if kept, err := g.Workspace(t.Context(), owner, w.CampID, w.ID); err != nil || kept.State != "ready" {
+		t.Fatal("board move failed the assigned workspace", kept.State, err)
 	}
 }
 

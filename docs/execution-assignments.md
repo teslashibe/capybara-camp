@@ -24,7 +24,11 @@ The runtime must verify that the installed CLI accepts those settings before
 submitting a prompt.
 
 The assignment epoch changes independently of the display revision. The
-approved repository and history snapshot are preserved. Every new prompt
+approved repository and history snapshot are preserved. A workspace is
+prepared for one session revision, and an unassigned preparation fails if the
+session changes. Once it is the session's assigned execution workspace, board
+moves and sharing changes no longer fail it; a sharing or permission change
+cancels running turns through the permission revision instead. Every new prompt
 freezes its destination, epoch, workspace, mode and permissions. Pending,
 queued, claimed, running or uncertain requests prevent reassignment; they must
 first be cancelled or reconciled. Replaying an old assignment command observes

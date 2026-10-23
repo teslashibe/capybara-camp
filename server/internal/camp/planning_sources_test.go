@@ -58,7 +58,6 @@ func TestPlanningSourcesAreOwnerScopedAndRequireCurrentAssignments(t *testing.T)
 		{"changed Git login", `UPDATE git_connections SET epoch=epoch+1 WHERE id=$1`, `UPDATE git_connections SET epoch=epoch-1 WHERE id=$1`, w.GitConnectionID},
 		{"changed project", `UPDATE projects SET revision=revision+1 WHERE id=$1`, `UPDATE projects SET revision=revision-1 WHERE id=$1`, w.ProjectID},
 		{"archived project", `UPDATE projects SET archived=true WHERE id=$1`, `UPDATE projects SET archived=false WHERE id=$1`, w.ProjectID},
-		{"changed session", `UPDATE sessions SET revision=revision+1 WHERE id=$1`, `UPDATE sessions SET revision=revision-1 WHERE id=$1`, w.SessionID},
 	} {
 		t.Run(change.name, func(t *testing.T) {
 			if _, err := s.pool.Exec(t.Context(), change.reject, change.id); err != nil {
