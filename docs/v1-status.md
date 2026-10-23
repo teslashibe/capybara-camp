@@ -22,9 +22,9 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: connect the native worker's launch path to the saved continuation
-binding and connect the native review screen to the checkout, installation and
-return-handoff coordinators, then finish
+Next: connect the native review/adoption screen to the checkout, installation and
+return-handoff coordinators, suppress duplicate local cards for adopted provider
+conversations, then finish
 attachments and the remaining transfer cases,
 shared skills and Git publication. Continue executor-setup acceptance and the
 native design audit as those surfaces are implemented. Validate the full workflow locally before the owner provisions
@@ -1171,3 +1171,35 @@ still need the final keyboard audit.
 This review belongs at the end of implementation, alongside the two clean
 code-review cycles, native acceptance tests and performance checks. Preserve
 the owner's existing wording and clean, uniform card layout throughout.
+
+### Native continuation worker checkpoint — October 22
+
+The native worker now resolves adopted transfers from their private bindings,
+without requiring an ordinary imported session on the destination Mac. It saves
+Start and reserves the launch before process creation, persists the first physical
+conversation ID before forwarding its event, and resumes that ID on later turns.
+The installed archive is supplied through the existing bounded context tools.
+Read-only continuations use chat mode; implementation checks the committed
+permissions against the current CLI/project context. Returned runs use the existing
+capacity, lease, cancellation, stream and owner-control paths. Adopted sessions
+also remain eligible as inputs to independent planning requests.
+
+The six native regression suites and real local API/PostgreSQL transfer journeys
+pass (`build/continuation-worker-verified.log`). Both provider journeys now launch
+the native worker against a synthetic subprocess, recover a lost stream response,
+deliver an owner approval, resume the saved ID and preserve all 260 parent plus
+250 child messages. Worker tests cover both purposes, missing/stale bindings,
+unknown first submissions, process creation failures and cancellation. The local
+Go race suites, fixture vet and diff checks pass. These are synthetic provider
+processes; live model and final visual acceptance remain open.
+
+Next: wire the native transfer review/adoption screen, suppress duplicate local
+cards for the physical provider logs, and complete attachments and missing remote
+commits. Shared skills, Git publication, live provider/UI/performance/review gates,
+joint Hetzner deployment and V1 release/demo remain open. Memory/Cortex is excluded.
+
+A focused final run also passes after adding lost completion acknowledgements and
+independent planning on adopted sessions (`build/continuation-worker-recovery.log`).
+The worker does not repeat provider work when the API has committed completion but
+the response is lost. Planning leaves the continuation's first-request reservation
+and physical provider ID unchanged.

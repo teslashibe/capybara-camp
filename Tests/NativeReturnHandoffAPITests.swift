@@ -24,11 +24,15 @@ private actor LostContinuationEvent: CampPublishingTransport {
     let api: CampHTTP
     let token: String
     var lost = false
+    var lostFinish = false
     init(api:CampHTTP,token:String) { self.api=api;self.token=token }
     func perform(_ operation:CampPublication) async throws -> Data {
         let data = try await api.data(operation.method,path:operation.path,body:operation.body,key:operation.key,token:token)
         if operation.path.hasSuffix("/continuation-events") && !lost {
             lost=true;throw URLError(.networkConnectionLost)
+        }
+        if operation.kind == "finish" && !lostFinish {
+            lostFinish=true;throw URLError(.networkConnectionLost)
         }
         return data
     }
@@ -156,50 +160,63 @@ private actor LostContinuationEvent: CampPublishingTransport {
                 let queued = try CampWire.decoder().decode(CloudRequest.self,from:await api.data("POST",path:base+"/requests",
                     body:CampWire.body(["prompt":"Synthetic continuation admission", "model":"", "effort":"high", "speed":"standard", "sources":[]]),key:UUID().uuidString,token:token))
                 let requestBase="/v1/camps/\(scope.campId)/requests"
-                let claimed = try CampWire.decoder().decode(CloudRequest.self,from:await api.data("POST",path:requestBase+"/claim",
-                    body:CampWire.body(["session_ids":[session.id]]),key:UUID().uuidString,token:token))
-                precondition(claimed.id == queued.id && claimed.executionEpoch == binding.session.executionEpoch)
-                var started = try CampWire.decoder().decode(CloudRequest.self,from:await api.data("POST",path:requestBase+"/\(queued.id)/actions",
-                    body:CampWire.body(["action":"start","lease_token":claimed.leaseToken!]),key:UUID().uuidString,token:token))
-                started.leaseToken = claimed.leaseToken
-                precondition(started.localContinuation == true && (turn == 0 || started.providerSessionId == providerID))
-                let attempt = CloudAttempt(id:started.id,scope:scope.key,request:started,localSessionId:binding.session.localSessionId,
-                    state:"running",startKey:UUID().uuidString,finishKey:UUID().uuidString)
-                try await cache.saveWorkerAttempt(attempt,scope:scope,expectedEpoch:epoch)
                 let current = try await api.get(CloudSession.self,path:base,token:token)
-                let launch = try await cache.reserveContinuation(session:current,requestID:started.id,scope:scope,expectedEpoch:epoch)
-                precondition(launch.newSession == (turn == 0))
+                let record = root.appendingPathComponent("worker-\(session.provider)-\(turn).jsonl")
+                let worker = CampLocalWorker(readFences: { [] }, cache:cache,automatic:false)
+                var launches = 0
+                worker.nativeSession = { _ in nil } // No ordinary imported session exists on the destination Mac
+                worker.available = { local in
+                    precondition(local.root == binding.target.root && local.cwd == binding.installation.receipt.destination)
+                    return true
+                }
+                worker.readHistory = { _ in preconditionFailure("Continuation used a bounded native transcript instead of its archive") }
+                worker.execute = { _,_,_,_,_,_ in preconditionFailure("Continuation used the ordinary launch path") }
+                worker.inspectExecution = { local, permissions in
+                    precondition(permissions.valid(for:session.provider))
+                    return ExecutionContext(fingerprint:String(repeating:"a",count:64),cwd:local.cwd,profile:local.root,provider:local.provider,permissionSummary:"Synthetic permission review")
+                }
+                worker.makeContinuationProcess = {
+                    launches += 1
+                    return fixtureProcess("continuation-worker",[providerID,String(turn),record.path])
+                }
+                worker.attach(scope:scope,actor:actor,transport:LostContinuationEvent(api:api,token:token),sessions:[current])
+                await worker.poll()
+                precondition(launches == 1,worker.status)
+                live.watch(session:current,scope:scope,client:api,credential:auth)
                 if turn == 0 {
-                    try await cache.bindContinuation(sessionID:session.id,executionEpoch:current.executionEpoch!,requestID:started.id,
-                        providerSessionID:providerID,scope:scope,expectedEpoch:epoch)
-                } else { precondition(launch.providerSessionID == providerID) }
-                await rejects("Real request admitted twice") { _ = try await cache.reserveContinuation(session:current,requestID:started.id,scope:scope,expectedEpoch:epoch) }
-                let stream = CampLocalImplementationStream(request:started,scope:scope,epoch:epoch,cache:cache,transport:LostContinuationEvent(api:api,token:token))
-                if turn == 0 { try await stream.emit(CampWire.body(["type":"session","sessionID":providerID])) }
-                try await stream.emit(CampWire.body(["type":"started"]))
-                try await stream.emit(CampWire.body(["type":"settings","model":"fixture-actual-model","effort":"high","speed":"fast"]))
-                try await stream.emit(CampWire.body(["type":"text","text":"Synthetic continuation answer \(turn)"]))
-                if turn == 0 {
-                    let approvalID=UUID().uuidString.lowercased()
-                    try await stream.emit(CampWire.body(["type":"approval","id":approvalID,"kind":"file","title":"Synthetic edit","detail":"No file is edited by this test","questions":[],"canApprove":true,"acceptLabel":"Allow edit"]))
-                    live.watch(session:current,scope:scope,client:api,credential:auth)
-                    for _ in 0..<200 { if live.approvals.count == 1 { break }; try await Task.sleep(for:.milliseconds(10)) }
+                    // This isolated reader has no CampConnection SSE subscriber.
+                    for _ in 0..<500 { if live.approvals.count == 1 { break }; live.invalidate(session.id); try await Task.sleep(for:.milliseconds(10)) }
+                    let approvalID="e8a1e25a-2b71-4fb9-8122-9ad03a842993"
                     precondition(live.head?.localContinuation == true && live.approvals.first?.id == approvalID && live.messages.last?.text == "Synthetic continuation answer 0")
-                    let waiting = try await api.get(CloudRequest.self,path:requestBase+"/"+started.id,token:token)
+                    let saved = try await cache.localContinuation(sessionID:session.id,executionEpoch:current.executionEpoch!,scope:scope,expectedEpoch:epoch)
+                    precondition(saved?.providerSessionID == providerID && saved?.firstRequestID == queued.id)
+                    let waiting = try await api.get(CloudRequest.self,path:requestBase+"/"+queued.id,token:token)
+                    precondition(waiting.providerSessionId == providerID)
                     let control = try CampWire.body(["id":UUID().uuidString.lowercased(),"approval_seq":waiting.streamSeq!,"control":["type":"approval","id":approvalID,"allow":true]])
-                    await denied("Teammate approved owner continuation") { _ = try await api.data("POST",path:requestBase+"/\(started.id)/controls",body:control,token:teammate.token) }
-                    _ = try await api.data("POST",path:requestBase+"/\(started.id)/controls",body:control,token:token)
-                    let controls = try CampWire.decoder().decode([LocalWorkerControl].self,from:await api.data("POST",path:requestBase+"/\(started.id)/local-controls",body:CampWire.body(["lease_token":claimed.leaseToken!]),token:token))
-                    precondition(controls.count == 1 && controls[0].control.id == approvalID)
-                    try await stream.emit(CampWire.body(["type":"approvalResolved","requestID":approvalID]))
+                    await denied("Teammate approved owner continuation") { _ = try await api.data("POST",path:requestBase+"/\(queued.id)/controls",body:control,token:teammate.token) }
+                    _ = try await api.data("POST",path:requestBase+"/\(queued.id)/controls",body:control,token:token)
                 }
-                try await stream.emit(CampWire.body(["type":"done"]))
-                // The stream is synthetic; no live model or project command runs.
-                let finishKey=UUID().uuidString
-                for _ in 0..<2 {
-                _ = try await api.data("POST",path:requestBase+"/\(queued.id)/actions",
-                    body:CampWire.body(["action":"finish","lease_token":claimed.leaseToken!,"outcome":"completed","evidence":"Synthetic provider stream; no live model was started"]),key:finishKey,token:token)
+                for _ in 0..<500 {
+                    await worker.poll()
+                    if try await cache.attempts(scope).isEmpty { break }
+                    try await Task.sleep(for:.milliseconds(10))
                 }
+                let done = try await api.get(CloudRequest.self,path:requestBase+"/"+queued.id,token:token)
+                precondition(done.state == "completed" && done.providerSessionId == providerID,worker.status)
+                let attempts = try await cache.attempts(scope)
+                precondition(attempts.isEmpty)
+                await worker.poll();precondition(launches == 1,"Worker repeated a provider turn")
+                let inputs = try String(contentsOf:record,encoding:.utf8).split(separator:"\n")
+                precondition(inputs.count == 1)
+                let input = try JSONSerialization.jsonObject(with:Data(inputs[0].utf8)) as! [String:Any]
+                precondition(input["newSession"] as? Bool == (turn == 0))
+                let restored = input["restoredHistory"] as! [String:String]
+                precondition(restored == ["scope":binding.history.scope,"transferID":binding.history.transferID,"receiptSHA256":binding.history.receiptSHA256])
+                let native = input["session"] as! [String:Any]
+                precondition(native["sessionID"] as? String == (turn == 0 ? binding.target.sessionID : providerID))
+                precondition(native["cwd"] as? String == binding.installation.receipt.destination)
+                worker.attach(scope:nil,actor:nil,transport:nil,sessions:[])
+
             }
             var retained:[CloudMessage]=[],before:Int64=0
             for _ in 0..<4 {

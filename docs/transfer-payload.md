@@ -708,7 +708,7 @@ Downloads use 120-message pages, at most 512 children, 2,000 messages and 8 MiB 
 text per conversation, and 32 MiB of stored pages per transfer. Exceeding a limit
 fails explicitly without truncation. The downloader owns no timer or provider
 process. The installer below preserves this archive privately. Attachments and
-native continuation still need integration; a complete archive does not grant execution.
+the transfer review UI still need integration; a complete archive does not grant execution.
 
 Run the native downloader against disposable PostgreSQL and the real local API:
 
@@ -871,7 +871,7 @@ Cancellation is persisted and reconciles any uncertain transfer creation before
 cancelling its upload/hold. If the source already committed, the coordinator
 observes that completed move instead of reporting cancellation. Cache erasure
 invalidates late responses. These states do not themselves start a local model;
-the local worker launch/stream integration and native screen remain required.
+the native screen must adopt the completed binding before the worker can use it.
 
 ## Restored history in a local conversation
 
@@ -918,10 +918,22 @@ ID. The native transport offers an awaited persistence callback before forwardin
 the session event, rejects missing/conflicting IDs and saves a repeated identical
 ID only once.
 
-The native worker and transfer review screen do not yet invoke this launch path.
-Normal session publication requires its existing local session ID and cannot be
-used to replace that identity. Publishing the new provider's transcript from
-ordinal zero would conflict with the retained parent history.
+The native worker resolves an adopted binding without requiring an ordinary
+imported session on the destination Mac. It checks the current assignment and
+reserves the request after saving Start, before creating the provider process.
+The first launch persists the physical conversation ID before forwarding its
+event; follow-ups require agreement with the server and resume that ID.
+Both use the pinned installed-history reference, never a truncated native
+transcript. Planning-purpose continuations run read-only chat, while implementation
+uses the committed permissions and a fresh CLI context fingerprint. The bundled
+helper rechecks that fingerprint before project tools run.
+
+Returned runs count against local execution capacity and use the existing lease,
+stop, ordered stream and owner-control paths. Missing/stale bindings cannot
+launch. An unknown first submission or reserved process-creation failure remains
+fenced against replacement. Normal snapshot publication must not overwrite the
+retained history. The transfer review/adoption screen and suppression of the
+physical provider log's duplicate local card still require integration.
 
 ## Local continuation streams
 
@@ -957,9 +969,9 @@ provider conversation cannot be separately published as a second ticket.
 
 Downgrade from schema 37 refuses to discard retained provider IDs, continuation
 streams or active/uncertain continuation requests. Empty rollback remains
-supported. The native worker launch/adoption flow and transfer review UI still
-need integration; this stream contract does not complete runnable transfer or
-live-provider acceptance.
+supported. The native worker consumes this stream contract. The transfer
+review/adoption UI, remaining payload cases and live-provider acceptance are
+still required before the whole transfer flow is complete.
 
 ## Local destination receipts
 

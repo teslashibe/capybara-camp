@@ -155,6 +155,35 @@ func run(scenario string, args []string) error {
 			return nil
 		}
 		return errors.New("Planning stream fixture was not stopped")
+	case "continuation-worker":
+		implementation := text(r["mode"]) == "implementation" && r["executionApproved"] == true && len(text(r["executionContext"])) == 64
+		chat := text(r["mode"]) == "chat" && r["executionApproved"] == false && r["permissions"] == nil
+		if err := require(len(args) == 3 && len(object(r["restoredHistory"])) == 3 && (implementation || chat)); err != nil {
+			return err
+		}
+		if err := appendRecord(args[2], r); err != nil {
+			return err
+		}
+		if r["newSession"] == true {
+			_ = emit(message{"type": "session", "sessionID": args[0]})
+		} else if err := require(text(object(r["session"])["sessionID"]) == args[0]); err != nil {
+			return err
+		}
+		_ = emit(message{"type": "started"})
+		_ = emit(message{"type": "settings", "model": "fixture-actual-model", "effort": "high", "speed": "fast"})
+		_ = emit(message{"type": "text", "text": "Synthetic continuation answer " + args[1]})
+		if args[1] == "0" {
+			id := "e8a1e25a-2b71-4fb9-8122-9ad03a842993"
+			_ = emit(approval(id, "command"))
+			control, err := i.request()
+			if err != nil {
+				return err
+			}
+			if err := require(text(control["type"]) == "approval" && text(control["id"]) == id && control["allow"] == true); err != nil {
+				return err
+			}
+			_ = emit(message{"type": "approvalResolved", "requestID": id})
+		}
 	case "ui-audit":
 		// Interactive synthetic transport for exercising the real native UI.
 		// This executable never invokes either provider or executes a command.

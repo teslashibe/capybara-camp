@@ -406,6 +406,97 @@ actor WorkerFixture: CampPublishingTransport {
         await historyWorker.poll()
         check(await historyAPI.snapshot().1["claim"] == nil, "Archived history was included in an execution claim")
         historyWorker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
-        print("PASS: worker replay and recovery, isolated Codex/Claude implementation streams, owner controls, permission checks, follow-up identity, revocation and history-only exclusion")
+        // Private, synthetic installed receipts isolate worker admission here.
+        // NativeReturnHandoffAPITests creates these through the real handoff API.
+        for provider in ["Codex", "Claude"] {
+            for purpose in ["planning", "implementation"] {
+                for scenario in ["complete", "missing", "moved", "unknown", "launch-failure", "cancel", "plan-source"] {
+                    let folder = root.appendingPathComponent("continuation-\(provider)-\(purpose)-\(scenario)")
+                    let returnedCache = try CampCache(directory:folder), epoch = try await returnedCache.epoch(scope)
+                    var assigned = remote; assigned.provider = provider; assigned.executionLocation = "local"; assigned.executionEpoch = 2
+                    let target = TransferInstallationTarget(profileID:assigned.profileId,sourceID:local.sourceID,provider:provider,root:local.root,sessionID:assigned.localSessionId,purpose:purpose)
+                    let hash = String(repeating:"a",count:64)
+                    let receipt = TransferInstallationReceipt(version:1,scope:scope.key,transferID:UUID().uuidString,exportID:UUID().uuidString,
+                        destination:folder.path,target:target,payloadSHA256:hash,historySHA256:hash,sourceID:assigned.id,transcriptRevision:assigned.transcriptRevision,
+                        files:.init(reviewSHA256:hash,baseCommit:String(repeating:"b",count:40),branch:"main",files:0))
+                    var binding = LocalContinuationBinding(session:assigned,handoffID:UUID().uuidString,installation:.init(receipt:receipt,receiptSHA256:hash))
+                    if scenario == "unknown" { binding.firstRequestID = UUID().uuidString }
+                    if scenario != "missing" { try await returnedCache.setMetadata(binding.key,JSONEncoder().encode(binding)) }
+                    if scenario == "moved" { assigned.executionEpoch! += 1 }
+                    let providerID = UUID().uuidString.lowercased()
+                    var processAttempts = 0
+                    for turn in 0..<(scenario == "complete" ? 2 : 1) {
+                        var work = request(); work.kind = "chat"; work.localContinuation = true
+                        work.executionLocation = "local"; work.executionEpoch = assigned.executionEpoch; work.mode = purpose
+                        work.permissions = purpose == "planning" ? [:] : provider == "Codex" ? ["sandbox":"workspace-write","approval":"on-request"] : ["claudeMode":"manual"]
+                        work.providerSessionId = turn == 0 ? nil : providerID
+                        if scenario == "plan-source" {
+                            work.kind = "planning"; work.localContinuation = false
+                            work.planId = UUID().uuidString; work.planVersion = 1; work.planStep = 0
+                        }
+                        let returnedAPI = WorkerFixture(request:work,session:assigned)
+                        let returnedWorker = CampLocalWorker(readFences: { [] },cache:returnedCache,automatic:false)
+                        returnedWorker.nativeSession = { _ in nil }
+                        returnedWorker.available = { value in value.root == target.root && value.cwd == receipt.destination }
+                        returnedWorker.readHistory = { _ in preconditionFailure("Returned history was truncated") }
+                        var finishPlanning: ((ConversationResult) -> Void)?
+                        returnedWorker.execute = { native, work, prompt, history, _, completed in
+                            check(scenario == "plan-source" && work.isPlanning && history.isEmpty)
+                            check(native.root == target.root && native.cwd == receipt.destination)
+                            finishPlanning = completed
+                            return LocalConversation(session:native,history:[],prompt:prompt)
+                        }
+                        returnedWorker.inspectExecution = { value, permissions in
+                            check(purpose == "implementation" && permissions.valid(for:provider))
+                            return ExecutionContext(fingerprint:hash,cwd:value.cwd,profile:value.root,provider:provider,permissionSummary:"Fixture")
+                        }
+                        let record = folder.appendingPathComponent("input-\(turn).jsonl")
+                        returnedWorker.makeContinuationProcess = {
+                            processAttempts += 1
+                            if scenario == "launch-failure" { throw CampError.message("Synthetic process creation failure") }
+                            if scenario == "cancel" { return fixtureProcess("cancel") }
+                            return fixtureProcess("continuation-worker",[providerID,"2",record.path])
+                        }
+                        returnedWorker.attach(scope:scope,actor:actor,transport:returnedAPI,sessions:[assigned])
+                        await returnedWorker.poll()
+                        let afterAdmission = await returnedAPI.snapshot()
+                        if scenario == "plan-source" {
+                            check(processAttempts == 0 && finishPlanning != nil)
+                            finishPlanning?(ConversationResult(state:"completed",message:"",accepted:true,output:"Independent planning output"))
+                            try await eventually("Planning on an adopted session did not finish") { try await returnedCache.attempts(scope).isEmpty }
+                            let unchanged = try await returnedCache.localContinuation(sessionID:assigned.id,executionEpoch:assigned.executionEpoch!,scope:scope,expectedEpoch:epoch)
+                            check(unchanged?.firstRequestID == nil && unchanged?.providerSessionID == nil)
+                        } else if ["missing","moved"].contains(scenario) {
+                            check(processAttempts == 0 && afterAdmission.1["claim"] == nil)
+                        } else if scenario == "unknown" {
+                            check(processAttempts == 0 && afterAdmission.0.state == "failed")
+                        } else if scenario == "launch-failure" {
+                            check(processAttempts == 1 && afterAdmission.0.state == "failed")
+                            let retained = try await returnedCache.localContinuation(sessionID:assigned.id,executionEpoch:assigned.executionEpoch!,scope:scope,expectedEpoch:epoch)
+                            check(retained?.firstRequestID == work.id && retained?.providerSessionID == nil)
+                            await returnedWorker.poll();check(processAttempts == 1)
+                        } else {
+                            if scenario == "cancel" {
+                                var stop = work; stop.state = "cancel_requested"; returnedWorker.changed(stop)
+                            }
+                            try await eventually("Continuation did not settle: \(provider) \(purpose) \(scenario) · \(returnedWorker.status)") {
+                                try await returnedCache.attempts(scope).isEmpty
+                            }
+                            check(await returnedAPI.snapshot().0.state == (scenario == "cancel" ? "cancelled" : "completed"))
+                            if scenario == "complete" {
+                                let body = try JSONSerialization.jsonObject(with:Data(contentsOf:record)) as! [String:Any]
+                                check(body["mode"] as? String == (purpose == "planning" ? "chat" : "implementation"))
+                                check(body["newSession"] as? Bool == (turn == 0))
+                                let physical = body["session"] as! [String:Any]
+                                check(physical["sessionID"] as? String == (turn == 0 ? target.sessionID : providerID))
+                                check(processAttempts == turn + 1)
+                            }
+                        }
+                        returnedWorker.attach(scope:nil,actor:nil,transport:nil,sessions:[])
+                    }
+                }
+            }
+        }
+        print("PASS: worker replay, Codex/Claude continuations, read-only and implementation modes, retained planning inputs, owner controls, follow-up identity, cancellation, missing/stale bindings and uncertain launch fencing")
     }
 }

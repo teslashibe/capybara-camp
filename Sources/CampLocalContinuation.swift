@@ -14,6 +14,14 @@ struct LocalContinuationBinding: Codable, Equatable, Sendable {
               receiptSHA256: installation.receiptSHA256)
     }
     var target: TransferInstallationTarget { installation.receipt.target }
+    var nativeSession: CampSession {
+        let id = providerSessionID ?? target.sessionID
+        return CampSession(id: target.sourceID + ":" + id, sessionID: id, provider: target.provider,
+                           sourceID: target.sourceID, sourceLabel: session.profileLabel, root: target.root,
+                           title: session.title, cwd: installation.receipt.destination,
+                           updated: session.updatedAt.timeIntervalSince1970, path: "", accountID: "",
+                           archived: false, model: session.model)
+    }
     var key: String { "local-continuation:\(installation.receipt.scope):\(session.id):\(session.executionEpoch ?? 0)" }
 
     static func validProviderID(_ id: String) -> Bool {

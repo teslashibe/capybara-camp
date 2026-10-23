@@ -483,6 +483,7 @@ final class TranscriptWatch {
         }
         sharing.published = { [weak cloud] value, scope, epoch in await cloud?.acceptPublishedSession(value, scope: scope, epoch: epoch) }
         cloud.worker.nativeSession = { [weak sharing] remote in sharing?.native(for: "camp:" + remote.id) }
+        cloud.worker.makeContinuationProcess = conversationProcess
         cloud.worker.available = { [weak self] local in
             guard let self else { return false }
             return self.activity[local.id] == nil && self.conversations.count + self.planning.activeCount + self.cloud.worker.activePlanningCount < 4 && !self.planning.uses(local.provider) && !self.conversations.values.contains { $0.session.provider == local.provider && $0.session.root == local.root }
