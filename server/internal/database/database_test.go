@@ -148,9 +148,19 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if err = Ready(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
-	// Schema 39 cannot be removed while bytes or message references survive.
-	if _, err = pool.Exec(ctx, `INSERT INTO transcript_attachment_blobs(camp_id,parent_session_id,session_id,sha256,byte_count,encrypted_body) VALUES($1,$2,$2,$3,1,$4)`, camp, session, strings.Repeat("e", 64), bytes.Repeat([]byte{1}, 29)); err != nil {
+	if _, err = provider.DownTo(ctx, 39); err != nil {
 		t.Fatal(err)
+	}
+	// Schema 39 cannot be removed while bytes or message references survive.
+	if _, err = pool.Exec(ctx, `INSERT INTO transcript_attachment_blobs(camp_id,parent_session_id,session_id,sha256,byte_count,encrypted_body,created_at) VALUES($1,$2,$2,$3,1,$4,now()-interval '30 days')`, camp, session, strings.Repeat("e", 64), bytes.Repeat([]byte{1}, 29)); err != nil {
+		t.Fatal(err)
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
+	var freshUploadWindow bool
+	if err = pool.QueryRow(ctx, `SELECT last_uploaded_at > now()-interval '1 minute' FROM transcript_attachment_blobs`).Scan(&freshUploadWindow); err != nil || !freshUploadWindow {
+		t.Fatal("Existing upload did not receive a new retention window", err)
 	}
 	if _, err = provider.DownTo(ctx, 38); err == nil {
 		t.Fatal("Downgrade discarded attachment bytes")

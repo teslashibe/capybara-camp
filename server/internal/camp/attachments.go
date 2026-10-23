@@ -125,6 +125,9 @@ func (s *Store) PutAttachment(ctx context.Context, a auth.Actor, campID, parentI
 		if e != nil || len(plain) != size || transferDigest(plain) != hash {
 			return out, ErrConflict
 		}
+		if _, err = tx.Exec(ctx, `UPDATE transcript_attachment_blobs SET last_uploaded_at=clock_timestamp() WHERE session_id=$1 AND sha256=$2`, id, hash); err != nil {
+			return out, err
+		}
 		return out, tx.Commit(ctx)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {

@@ -76,8 +76,7 @@ conversation/message and the pinned transcript revision. Missing or changed
 confirmation identities refuse the move. Missing retained bodies also refuse
 handoff, while cancellation remains available. Source ownership and fresh stop
 proof checks still apply. This replaces the development blanket attachment block;
-it does not complete the release gate. Reclamation of unreferenced cloud uploads
-and live provider acceptance remain unfinished.
+it does not complete the release gate. Live provider acceptance remains unfinished.
 The PostgreSQL attachment/handoff regression suite and native transfer, export
 and return-screen suites pass, including exact review confirmation, missing-body
 cancellation and preserved contents. Evidence: `build/attachment-review-regression.log`
@@ -137,13 +136,20 @@ requests can decode or return bodies concurrently per API handler; other request
 receive `attachment_busy`. The HTTP upload envelope is bounded to 23 MiB. The native uploader leaves
 base64 slashes unescaped so every valid 16 MiB body fits that bound. There
 is no compression, executable-file installation or automatic reference fetch.
-Unreferenced uploads count toward storage limits; automatic orphan reclamation
-is not implemented yet.
+Unreferenced uploads count toward storage limits. An upload with no reference
+in any retained message revision can be reclaimed seven days after its last
+verified PUT. Retrying the PUT renews that window. Cleanup runs in bounded batches
+in the existing maintenance loop, skips busy Camps, and rechecks references under
+the same Camp lock as publication. Superseded messages and removed child histories
+retain their referenced bodies. A queued publication whose upload has expired
+must upload the original bytes again before its descriptors can be committed.
 
-Stop schema-38 writers, back up the database and encryption key, run the existing
-migration command, and start the schema-39 server. Readiness requires schema 39.
-Downgrade refuses while any attachment blob or message descriptor is retained;
-restore a compatible deployment rather than discard that history.
+Stop schema-39 writers, back up the database and encryption key, run the existing
+migration command, and start the schema-40 server. Readiness requires schema 40.
+Existing uploads receive a fresh seven-day window on upgrade. Downgrading to 39
+stops expiry cleanup and retains the bodies; stop schema-40 processes before the
+downgrade. Downgrade below 39 refuses while any attachment blob or message
+descriptor is retained; restore a compatible deployment rather than discard it.
 
 The native publisher and permission-checked byte reader use this storage API.
 Cloud message decoding retains descriptors, and the native destination

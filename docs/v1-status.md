@@ -22,15 +22,16 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: complete unreferenced cloud-upload reclamation and attachment acceptance,
-then shared skills and Git publication. Local attachment import, verified publication, cloud storage,
+Next: shared Markdown skills and Git publication, followed by the remaining
+integrated attachment and live-provider acceptance checks. Local attachment import, verified publication, cloud storage,
 the native byte reader, chat preview/save controls, resumable transfer downloads
 and local byte installation are implemented. Restored and cloud context readers
 can supply attachment content. The development handoff now requires confirmation
 of the pinned attachment review, including unavailable references, and checks
 retained body availability. Saved-history publication preserves attachment contents
 and startup cleanup reclaims recognized temporary folders from stopped processes.
-Cloud-upload reclamation and full live acceptance remain open. See [the attachment contract](attachments.md). Native
+Unreferenced cloud uploads have a renewable seven-day retention window; cleanup
+preserves every body referenced by retained history. Full live acceptance remains open. See [the attachment contract](attachments.md). Native
 Local-to-Cloud ancestor selection, cloud-source commit capture and Mac restoration
 are implemented; live-provider transfer acceptance remains open. The native
 return review/adoption screen and duplicate-card

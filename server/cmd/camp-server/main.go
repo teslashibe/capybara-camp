@@ -100,6 +100,9 @@ func run() error {
 			if err := a.Camps.ReapProviderLogins(work); err != nil && ctx.Err() == nil {
 				log.Print("Provider login expiry will retry")
 			}
+			if err := a.Camps.ReapAttachmentUploads(work); err != nil && ctx.Err() == nil {
+				log.Print("Attachment upload cleanup will retry")
+			}
 			stop()
 			select {
 			case <-ctx.Done():
