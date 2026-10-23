@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/teslashibe/capybara-camp/server/internal/processguard"
 )
 
 type treeFile struct{ mode, oid string }
@@ -32,6 +34,23 @@ func (b *limitedOutput) Write(p []byte) (int, error) {
 	return b.buffer.Write(p)
 }
 
+type isolationKey struct{}
+
+// Isolated runs transfer Git inside the provider process guard. Cloud runners
+// use it for every workspace a provider has written: repository-local config
+// and attributes can name filter programs, and those must not run with the
+// runner's access to grants and the control journal. stateDir holds the
+// guarded process's temporary home and must be outside the workspace.
+func Isolated(ctx context.Context, stateDir string) context.Context {
+	return context.WithValue(ctx, isolationKey{}, stateDir)
+}
+
+// trusted is for repositories this package created itself, such as the
+// commit-review quarantine, which has no provider configuration to execute.
+func trusted(ctx context.Context) context.Context {
+	return context.WithValue(ctx, isolationKey{}, "")
+}
+
 // Git operations never inherit credentials or global configuration from the
 // launching process. Callers use fixed plumbing commands with hooks, external
 // monitors and network protocols disabled. Object installation uses gitInput;
@@ -40,19 +59,52 @@ func git(ctx context.Context, dir string, limit int, args ...string) ([]byte, er
 	return gitInput(ctx, dir, limit, nil, args...)
 }
 
+func gitCommand(ctx context.Context, dir string, args []string) (*exec.Cmd, func(), error) {
+	options := []string{"--no-pager", "--literal-pathspecs", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.attributesFile=/dev/null", "-c", "color.ui=false", "-c", "credential.helper=", "-c", "protocol.allow=never"}
+	path, commandArgs, cleanup := "/usr/bin/git", append(options, args...), func() {}
+	if stateDir, _ := ctx.Value(isolationKey{}).(string); stateDir != "" {
+		home, err := os.MkdirTemp(stateDir, "transfer-git-home-")
+		if err != nil {
+			return nil, nil, ErrRepository
+		}
+		cleanup = func() { os.RemoveAll(home) }
+		path, commandArgs, err = processguard.Wrap(path, append([]string{"git"}, commandArgs...), processguard.Policy{Home: home, Workspace: dir, WriteWorkspace: true})
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+	}
+	command := exec.CommandContext(ctx, path, commandArgs...)
+	command.Dir = dir
+	command.Env = []string{"PATH=/usr/bin:/bin", "HOME=/dev/null", "XDG_CONFIG_HOME=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_NO_REPLACE_OBJECTS=1", "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=", "LANG=C"}
+	// A filter may start its own children; the timeout ends the whole group.
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		if command.Process != nil {
+			return syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
+	}
+	command.WaitDelay = time.Second
+	return command, cleanup, nil
+}
+
 func gitInput(ctx context.Context, dir string, limit int, input []byte, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	options := []string{"--no-pager", "--literal-pathspecs", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.attributesFile=/dev/null", "-c", "color.ui=false", "-c", "credential.helper=", "-c", "protocol.allow=never"}
-	command := exec.CommandContext(ctx, "/usr/bin/git", append(options, args...)...)
-	command.Dir = dir
+	command, cleanup, err := gitCommand(ctx, dir, args)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
 	command.Stdin = bytes.NewReader(input)
-	command.Env = []string{"PATH=/usr/bin:/bin", "HOME=/dev/null", "XDG_CONFIG_HOME=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_NO_REPLACE_OBJECTS=1", "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=", "LANG=C"}
-	command.WaitDelay = time.Second
 	out := &limitedOutput{limit: limit}
 	command.Stdout = out
 	command.Stderr = io.Discard
-	err := command.Run()
+	err = command.Run()
+	if command.Process != nil {
+		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}

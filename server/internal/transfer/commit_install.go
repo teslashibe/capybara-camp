@@ -138,19 +138,20 @@ func RestoreCommits(ctx context.Context, dir string, a CommitArchive, reviewed s
 		return CommitReceipt{}, ErrDestination
 	}
 	defer os.RemoveAll(quarantine)
-	if _, err = git(ctx, quarantine, 1024, "init", "--bare", "--template="); err != nil {
+	review := trusted(ctx)
+	if _, err = git(review, quarantine, 1024, "init", "--bare", "--template="); err != nil {
 		return CommitReceipt{}, err
 	}
 	if err = os.WriteFile(filepath.Join(quarantine, "objects/info/alternates"), []byte(objects+"\n"), 0600); err != nil {
 		return CommitReceipt{}, ErrDestination
 	}
-	if _, err = gitInput(ctx, quarantine, 1024, pack, "index-pack", "--stdin", "--strict"); err != nil {
+	if _, err = gitInput(review, quarantine, 1024, pack, "index-pack", "--stdin", "--strict"); err != nil {
 		return CommitReceipt{}, err
 	}
-	if _, err = git(ctx, quarantine, 64<<10, "fsck", "--strict", "--no-reflogs", "--no-dangling", a.HeadCommit); err != nil {
+	if _, err = git(review, quarantine, 64<<10, "fsck", "--strict", "--no-reflogs", "--no-dangling", a.HeadCommit); err != nil {
 		return CommitReceipt{}, err
 	}
-	ids, err := commitObjectIDs(ctx, quarantine, a.BaseCommit, a.HeadCommit)
+	ids, err := commitObjectIDs(review, quarantine, a.BaseCommit, a.HeadCommit)
 	if err != nil {
 		return CommitReceipt{}, err
 	}
@@ -167,7 +168,7 @@ func RestoreCommits(ctx context.Context, dir string, a CommitArchive, reviewed s
 			return CommitReceipt{}, ErrInput
 		}
 	}
-	if err = verifyCommitTrees(ctx, quarantine, a); err != nil {
+	if err = verifyCommitTrees(review, quarantine, a); err != nil {
 		return CommitReceipt{}, err
 	}
 	if _, err = commitDestination(ctx, dir, a.BaseCommit); err != nil {

@@ -14,6 +14,7 @@ import (
 	"github.com/teslashibe/capybara-camp/server/internal/config"
 	"github.com/teslashibe/capybara-camp/server/internal/localcli"
 	"github.com/teslashibe/capybara-camp/server/internal/processguard"
+	"github.com/teslashibe/capybara-camp/server/internal/transfer"
 )
 
 type loginFunc func(context.Context, string, string, func(localcli.ProviderLoginChallenge) error, <-chan string) (localcli.ProviderLoginResult, error)
@@ -106,6 +107,9 @@ func (w *Worker) Run(ctx context.Context) error {
 		if err := processguard.Available(); err != nil {
 			return err
 		}
+	}
+	if w.checkout != nil && w.checkout.guarded {
+		ctx = transfer.Isolated(ctx, w.checkout.dir)
 	}
 	r, err := w.journal.load()
 	if err != nil {

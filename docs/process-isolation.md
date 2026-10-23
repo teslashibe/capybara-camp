@@ -12,7 +12,12 @@ A Git subprocess receives its one workspace, an empty private scratch home,
 and only its current short-lived checkout credential file when required. It
 cannot read the account grant, control journal, other workspaces or provider
 homes. Git's existing restrictions on hooks, system configuration, redirects
-and credential helpers remain in place.
+and credential helpers remain in place. This covers the transfer package's
+Git as well as checkout Git: review, capture, commit restore and staging read
+a workspace the provider wrote, and its repository-local config and
+attributes can name filter programs. Only the commit-review quarantine, a bare
+repository the transfer package creates without provider configuration, runs
+Git outside the domain.
 
 The domain is applied on a locked OS thread immediately before executing the
 provider or Git binary. Descendants inherit the restrictions. Filesystem
