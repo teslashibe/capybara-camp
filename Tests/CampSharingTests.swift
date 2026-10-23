@@ -16,6 +16,22 @@ actor PublishingFixture: CampPublishingTransport {
     var childHistories: [String:CloudChildHistory] = [:]
     var childMessages: [String:PublishMessage] = [:]
     var childWrites = 0
+    var attachmentBodies: [String:Data] = [:]
+    var attachmentAttempts = 0
+    var lostAttachmentResponse = false
+    var invalidAttachmentReceipt = false
+    var attachmentCapacity = false
+    func fillAttachmentStorage() { attachmentCapacity = true }
+    func loseAttachmentResponse() { lostAttachmentResponse = true; lostResponse = false }
+    func invalidateAttachmentReceipt() { invalidAttachmentReceipt = true; lostResponse = false }
+    func attachmentSnapshot() -> ([String:Data],Int) { (attachmentBodies,attachmentAttempts) }
+    func verifyAttachments(_ values:[PublishMessage], conversation:String) {
+        for value in values {
+            for ref in value.attachments ?? [] where ref.state == "embedded" {
+                precondition(attachmentBodies[conversation+":"+ref.sha256!]?.count == ref.size, "Transcript published before attachment bytes")
+            }
+        }
+    }
     var lostChildResponse = false
     init(scope: CloudScope, actor: CloudActor) { self.scope = scope; self.actor = actor }
     func holdNextSession() { holdSession = true; lostResponse = false }
@@ -53,6 +69,18 @@ actor PublishingFixture: CampPublishingTransport {
         let object = try JSONSerialization.jsonObject(with: operation.body) as! [String: Any]
         let result: Data
         switch operation.kind {
+        case "attachment":
+            attachmentAttempts += 1
+            if attachmentCapacity {throw CampCloudError.server(409,"attachment_storage_limit")}
+            let hash = String(operation.path.split(separator:"/").last!)
+            let body = Data(base64Encoded:object["data"] as! String)!
+            let conversation = object["child_id"] as? String ?? remote!.id
+            precondition(operation.method == "PUT" && PublishMessage.hash(body) == hash)
+            precondition(operation.body.count <= ((body.count+2)/3)*4+128,"Escaped base64 exceeded the bounded upload envelope")
+            if conversation != remote!.id { precondition(childHistories[conversation] != nil, "Upload before child registration") }
+            attachmentBodies[conversation+":"+hash] = body
+            result = try CampWire.body(["session_id":invalidAttachmentReceipt ? UUID().uuidString : conversation,"sha256":hash,"bytes":body.count])
+            if lostAttachmentResponse {lostAttachmentResponse=false;throw URLError(.networkConnectionLost)}
         case "profile":
             let value = CloudProfile(id: UUID().uuidString, ownerUserId: actor.userId, ownerDeviceId: actor.deviceId, provider: object["provider"] as! String, localId: object["local_id"] as! String, label: object["label"] as! String)
             profile = value; result = try CampWire.encoder().encode(value)
@@ -66,6 +94,7 @@ actor PublishingFixture: CampPublishingTransport {
             guard expected == remote?.transcriptRevision else { throw CampCloudError.server(409, "revision_conflict") }
             let encoded = try JSONSerialization.data(withJSONObject: object["messages"]!)
             let values = try CampWire.decoder().decode([PublishMessage].self, from: encoded)
+            verifyAttachments(values, conversation: remote!.id)
             for value in values { messages[value.id] = value }
             remote?.transcriptRevision += 1; transcriptWrites += 1
             result = try CampWire.body(["revision": remote!.transcriptRevision])
@@ -74,6 +103,7 @@ actor PublishingFixture: CampPublishingTransport {
             guard (object["expected_parent_revision"] as! NSNumber).int64Value==remote?.transcriptRevision,
                   (object["expected_transcript_revision"] as! NSNumber).int64Value==(old?.transcriptRevision ?? 0) else{throw CampCloudError.server(409,"revision_conflict")}
             let values=try CampWire.decoder().decode([PublishMessage].self,from:JSONSerialization.data(withJSONObject:object["messages"]!))
+            verifyAttachments(values, conversation: id)
             for value in values {childMessages[value.id]=value}
             remote?.transcriptRevision += 1;childWrites += 1
             let child=CloudChildHistory(id:id,parentId:remote!.id,sourceKey:object["source_key"] as! String,sourceRevision:object["source_revision"] as! String,name:object["name"] as! String,phase:object["phase"] as! String,workflow:object["workflow"] as! String,state:object["state"] as! String,model:object["model"] as! String,complete:object["complete"] as! Bool,removed:object["removed"] as! Bool,revision:remote!.transcriptRevision,transcriptRevision:(old?.transcriptRevision ?? 0)+(values.isEmpty ? 0 : 1))
@@ -128,6 +158,7 @@ actor ChangingHistoryFixture {
         let actor = CloudActor(userId: scope.userId, deviceId: UUID().uuidString, email: "fixture@example.com", name: "Fixture")
         let cache = try CampCache(directory: root)
         let native = CampSession(id: "Claude:/local:fixture", sessionID: UUID().uuidString, provider: "Claude", sourceID: "Claude:/local", sourceLabel: "Fixture account", root: "/local", title: "  A synthetic session  ", cwd: "/local/project", updated: 1, path: "/local/session.jsonl", accountID: "", archived: false, model: "fixture-model")
+        try await attachmentPublication(root:root,scope:scope,actor:actor,native:native)
         let changingSource=ChangingHistoryFixture(),changingServer=PublishingFixture(scope:scope,actor:actor)
         let changing=CampSharing(cache:try CampCache(directory:root.appendingPathComponent("changing-history")),export:{_,after in await changingSource.page(after)})
         changing.localSession={_ in native}
@@ -326,5 +357,115 @@ actor ChangingHistoryFixture {
         precondition(resumedHistory.1 == 2 && resumedHistory.3.count == 230 && resumedHistory.0?.ownerDeviceId == actor.deviceId, "History recovery duplicated data or changed execution ownership")
         continued.attach(scope: nil, actor: nil, transport: nil)
         print("Native sharing, parent/child pagination, lost-response recovery, tombstones, privacy and hash isolation passed")
+    }
+}
+
+actor AttachmentReadGate {
+    var started = false
+    var continuation: CheckedContinuation<Void,Never>?
+    func read(_ data:Data) async -> Data {
+        started=true
+        await withCheckedContinuation {continuation=$0}
+        return data
+    }
+    func isStarted()->Bool {started}
+    func markRead(){started=true}
+    func release(){continuation?.resume();continuation=nil}
+}
+
+extension CampSharingTests {
+    @MainActor static func attachmentPublication(root:URL,scope:CloudScope,actor:CloudActor,native:CampSession) async throws {
+        let data = Data(repeating:0xff,count:(1<<20)+13)
+        let ref = TranscriptAttachment(id:"a:0",kind:"image",source:"inline",sourceDigest:String(repeating:"e",count:64),state:"embedded",mediaType:"image/png",sha256:PublishMessage.hash(data),size:data.count)
+        var duplicate=ref;duplicate.id="a:1"
+        let message=PublishMessage(id:"image",ordinal:0,role:"user",text:"",removed:false,attachments:[ref,duplicate])
+        let revision=String(repeating:"f",count:64)
+        let export: @Sendable (CampSession,Int64) async throws -> TranscriptExport = {_,_ in TranscriptExport(messages:[message],after:0,hasMore:false,fingerprint:revision)}
+        let source=LocalChildHistorySource(id:String(repeating:"c",count:64),localID:"child",name:"Helper",phase:"review",workflow:"",status:"done",model:"fixture",revision:revision)
+        let catalog=LocalChildHistoryCatalog(parentID:String(repeating:"a",count:64),revision:String(repeating:"b",count:64),sources:[source])
+        let cache=try CampCache(directory:root.appendingPathComponent("attachments"))
+        let server=PublishingFixture(scope:scope,actor:actor)
+        await server.loseAttachmentResponse()
+        let sharing=CampSharing(cache:cache,export:export)
+        sharing.localSession={_ in native}
+        sharing.childCatalog={_ in catalog}
+        sharing.childPage={_,_,_ in LocalChildHistoryPage(parentID:catalog.parentID,source:source,page:try await export(native,-1))}
+        sharing.attachmentBytes={local,child,id,attachment in
+            precondition(local.id==native.id && id=="image" && attachment==ref)
+            precondition(child == nil || child?.id==source.id)
+            return data
+        }
+        sharing.attach(scope:scope,actor:actor,transport:server)
+        await eventually("Attachment publisher did not initialize"){sharing.ready}
+        try await sharing.configure(local:native,projectId:UUID().uuidString,shared:true,allowRequests:false)
+        await eventually("Attachment publication did not recover lost upload response"){sharing.shares.first?.state=="Shared"}
+        let blobs=await server.attachmentSnapshot(),published=await server.snapshot(),children=await server.childSnapshot()
+        precondition(blobs.0.count==2 && blobs.1==3 && blobs.0.values.allSatisfy{$0==data},"Expected one body per conversation and one safe upload retry")
+        precondition(published.3["image"]?.attachments==[ref,duplicate] && children.1["image"]?.attachments==[ref,duplicate])
+        let saved=try await cache.shares(scope)
+        precondition(saved.first?.pending==nil)
+        let savedWire=try CampWire.encoder().encode(saved)
+        precondition(savedWire.range(of:data.base64EncodedData()) == nil,"Raw bytes leaked into publication journal")
+        sharing.attach(scope:nil,actor:nil,transport:nil)
+        let resumed=CampSharing(cache:cache,export:export)
+        resumed.localSession={_ in native}
+        resumed.childCatalog=sharing.childCatalog;resumed.childPage=sharing.childPage
+        resumed.attachmentBytes={_,_,_,_ in preconditionFailure("Restart unnecessarily reuploaded committed bytes")}
+        var resumedSync=false
+        resumed.changed={if resumed.shares.first?.state=="Syncing transcript" {resumedSync=true}}
+        resumed.attach(scope:scope,actor:actor,transport:server)
+        await eventually("Attachment publisher did not restore"){resumedSync && resumed.shares.first?.state=="Shared"}
+        resumed.attach(scope:nil,actor:nil,transport:nil)
+        let pendingCache=try CampCache(directory:root.appendingPathComponent("attachment-pending"))
+        let pendingServer=PublishingFixture(scope:scope,actor:actor)
+        let pending=CampSharing(cache:pendingCache,export:export)
+        pending.localSession={_ in native}
+        pending.childCatalog={_ in LocalChildHistoryCatalog(parentID:catalog.parentID,revision:catalog.revision,sources:[])}
+        pending.attachmentBytes={_,_,_,_ in data}
+        pending.attach(scope:scope,actor:actor,transport:pendingServer)
+        await eventually("Pending attachment fixture did not initialize"){pending.ready}
+        try await pending.configure(local:native,projectId:UUID().uuidString,shared:true,allowRequests:false)
+        await eventually("Lost transcript receipt did not retain its command"){pending.shares.first?.state=="Waiting to sync" && pending.shares.first?.pending?.kind=="transcript"}
+        pending.attach(scope:nil,actor:nil,transport:nil)
+        let replay=CampSharing(cache:pendingCache,export:export)
+        replay.localSession={_ in native}
+        replay.childCatalog=pending.childCatalog
+        replay.attachmentBytes={_,_,_,_ in preconditionFailure("Pending transcript recovery reuploaded attachment bytes")}
+        replay.attach(scope:scope,actor:actor,transport:pendingServer)
+        await eventually("Pending attachment transcript did not recover after restart"){replay.shares.first?.state=="Shared"}
+        let recovered=await pendingServer.snapshot(),recoveredBodies=await pendingServer.attachmentSnapshot()
+        precondition(recovered.1==1 && recoveredBodies.1==1 && recovered.3["image"]?.attachments==[ref,duplicate],"Restart duplicated the attachment or transcript")
+        replay.attach(scope:nil,actor:nil,transport:nil)
+        // Failed verification cannot publish a transcript or durable command.
+        for failure in ["source","receipt","detach","erase","capacity"] {
+            let localCache=try CampCache(directory:root.appendingPathComponent("attachment-"+failure))
+            let target=PublishingFixture(scope:scope,actor:actor),gate=AttachmentReadGate()
+            if failure=="receipt" {await target.invalidateAttachmentReceipt()}
+            if failure=="capacity" {await target.fillAttachmentStorage()}
+            let publisher=CampSharing(cache:localCache,export:export)
+            publisher.localSession={_ in native}
+            publisher.childCatalog={_ in LocalChildHistoryCatalog(parentID:catalog.parentID,revision:catalog.revision,sources:[])}
+            publisher.attachmentBytes={_,_,_,_ in
+                if failure=="detach" || failure=="erase" {return await gate.read(data)}
+                await gate.markRead()
+                if failure=="source" {return Data("changed".utf8)}
+                return data
+            }
+            publisher.attach(scope:scope,actor:actor,transport:target)
+            await eventually("Attachment failure fixture did not initialize"){publisher.ready}
+            try await publisher.configure(local:native,projectId:UUID().uuidString,shared:true,allowRequests:false)
+            if failure=="detach" || failure=="erase" {
+                await eventually("Attachment read did not start"){await gate.isStarted()}
+                if failure=="erase" {try await localCache.clear(scope)} else {publisher.attach(scope:nil,actor:nil,transport:nil)}
+                await gate.release()
+                try await Task.sleep(for:.milliseconds(80))
+            } else {await eventually("Attachment verification did not refuse publication"){await gate.isStarted() && publisher.shares.first?.state==(failure=="capacity" ? "Attachment storage full" : "Waiting to sync")}}
+            if failure=="capacity" {try await Task.sleep(for:.milliseconds(1200))}
+            let result=await target.snapshot(),uploads=await target.attachmentSnapshot(),journal=try await localCache.shares(scope)
+            precondition(result.1==0 && result.3.isEmpty && journal.allSatisfy{$0.pending==nil},"Failed attachment published transcript")
+            precondition(uploads.1 == (["receipt","capacity"].contains(failure) ? 1 : 0),"Cancelled/invalid read uploaded bytes")
+            publisher.attach(scope:nil,actor:nil,transport:nil)
+        }
+        print("Attachment publication: parent/child ordering, retry, dedupe, restart, verification and scope cancellation passed")
     }
 }

@@ -23,6 +23,9 @@ bytes only if the selection still matches. An incomplete source write, removed
 message, changed attachment or changed source fingerprint refuses the read.
 It writes no attachment cache and never fetches a URL or opens an attachment path.
 The native reader also verifies the returned selection, size and content hash.
+The `child-transcript-attachment` action resolves an opaque source within the
+selected parent/profile and checks the selected child revision before and after
+reading. It accepts no caller-supplied child path.
 
 Inspection is bounded to 64 attachments, 4,096 content blocks and eight nested
 levels per message. Embedded bodies are limited to 16 MiB; provider records are
@@ -32,17 +35,24 @@ attachment type and availability, not a media preview.
 
 ## Publication and transfer status
 
-Native attachment byte synchronization is unfinished. Local export of a transcript containing
-attachments currently returns an explicit error and leaves the prior committed
-index unchanged. Native saved-history publication also refuses attachment-bearing
-messages. The importer fingerprint changed so an old text-only index cannot
-bypass this check. Local viewing and text-only sessions remain supported.
+The native publisher uploads verified embedded bodies before recording a pending
+transcript command. Publication retains all attachment descriptors, including
+unavailable references. Duplicate bytes within a page share one upload per
+conversation. The publisher checks the receipt's conversation, hash and size;
+a lost response retries the content-addressed PUT. Once a transcript command is
+journaled, restarting replays its references without rereading the body. Raw
+attachment bytes are never saved in the publication journal.
 
-This guard is temporary implementation state, not the V1 transfer contract.
-The next work must connect native publication and both transfer directions to
-the storage API below, including destination history installation. It must retain
-main/subagent provenance and current permissions through retries, offline recovery
-and revocation, and represent references whose bytes cannot be recovered.
+Uploads stop when the active Camp changes, the task is cancelled or its local
+cache scope is cleared. The server independently checks current source ownership.
+Child uploads follow creation of the incomplete child history and precede its
+message publication. Completed parent/child histories retain their source
+revision bindings. A failed upload leaves synchronization incomplete. A full storage quota shows\n`Attachment storage full` and stops automatic retry until another sync is requested.
+
+Destination installation and native media download/preview are unfinished.
+Native saved-history publication still refuses attachment-bearing messages.
+Transfer guards remain until both destinations can preserve the bytes, including
+main/subagent provenance, permissions, retries, offline recovery and revocation.
 The transfer review must identify unavailable bytes before ownership moves.
 Live provider, media preview, full migration and native visual acceptance remain
 open. No remote-reference fetching or arbitrary local-path reading is authorized
@@ -84,7 +94,7 @@ the byte endpoint cannot resolve them.
 The server accepts at most 16 MiB per body, 1,024 blobs and 128 MiB per parent
 session including its children, and 512 MiB per owner across Camps. Two attachment
 requests can decode or return bodies concurrently per API handler; other requests
-receive `attachment_busy`. The HTTP upload envelope is bounded to 23 MiB. There
+receive `attachment_busy`. The HTTP upload envelope is bounded to 23 MiB. The native uploader leaves\nbase64 slashes unescaped so every valid 16 MiB body fits that bound. There
 is no compression, executable-file installation or automatic reference fetch.
 Unreferenced uploads count toward storage limits; automatic orphan reclamation
 is not implemented yet.
@@ -94,8 +104,25 @@ migration command, and start the schema-39 server. Readiness requires schema 39.
 Downgrade refuses while any attachment blob or message descriptor is retained;
 restore a compatible deployment rather than discard that history.
 
-This backend is not yet connected to native automatic publication or media
-preview. Cloud message decoding retains descriptors, and the native destination
+The native publisher uses this storage API; media preview is unfinished. Cloud message decoding retains descriptors, and the native destination
 history downloader refuses an archive that would omit their bodies. Server
 transfer checks also refuse sessions with retained attachment history. Those
-guards remain until transfer installation and the native uploader are complete.
+guards remain until destination byte installation is complete.
+
+## Verification
+
+Run the native and bundled-helper checks with:
+
+```sh
+./test.sh CampSharingTests BridgeIntegrationTests CampChildHistoryTests CampCloudTests LocalPlanImportTests
+```
+
+Run the native publisher against a disposable loopback Go API and PostgreSQL:
+
+```sh
+./tools/test-native-api.sh NativeAttachmentAPITests
+```
+
+The API test uses independent owner and teammate logins, parent and child bodies
+above 2 MiB, lost upload/transcript responses and revoked sharing. It uses synthetic
+provider histories and does not establish live-provider or native visual acceptance.

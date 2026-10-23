@@ -29,7 +29,22 @@ import Foundation
             precondition(read == bytes, "The bundled helper did not return exact embedded bytes above the text-page limit")
             precondition(message.contextMessage.attachments == nil, "Text-only provenance falsely claimed to include image bytes")
             precondition(!HistorySourceSnapshot(messages: [message]).valid, "History publication would drop attachment bytes")
-            do { _ = try await Bridge.call("export-page", input: input); preconditionFailure("Text-only publication accepted an attachment") } catch {}
+            let exported = try JSONDecoder().decode(TranscriptExport.self, from: await Bridge.call("export-page", input: CampWire.body(["session": JSONSerialization.jsonObject(with: JSONEncoder().encode(session)), "after": -1, "limit": 200])))
+            precondition(exported.messages.count == 1 && exported.messages[0].attachments == [ref], "Export dropped attachment metadata")
+            if provider == "Claude" {
+                let childFile=file.deletingPathExtension().appendingPathComponent("subagents/agent-image.jsonl")
+                try FileManager.default.createDirectory(at:childFile.deletingLastPathComponent(),withIntermediateDirectories:true)
+                try wire.write(to:childFile)
+                let catalog=try await ChildHistoryBridge.catalog(session)
+                precondition(catalog.sources.count==1)
+                let source=catalog.sources[0]
+                let page=try await ChildHistoryBridge.page(session,source,-1)
+                precondition(page.page.messages.first?.attachments==[ref])
+                let childBytes=try await TranscriptAttachmentReader.read(session:session,child:source,messageID:message.id,attachment:ref)
+                precondition(childBytes==bytes,"Child bridge lost exact attachment bytes")
+                try Data().write(to:childFile)
+                do {_ = try await TranscriptAttachmentReader.read(session:session,child:source,messageID:message.id,attachment:ref);preconditionFailure("Removed child attachment read succeeded")} catch {}
+            }
             try Data().write(to: file)
             do { _ = try await TranscriptAttachmentReader.read(session: session, messageID: message.id, attachment: ref); preconditionFailure("Read an attachment removed from its source") } catch {}
         }

@@ -20,6 +20,9 @@ struct LocalShareStatus {
     private let export: @Sendable (CampSession, Int64) async throws -> TranscriptExport
     var childCatalog: @Sendable (CampSession) async throws -> LocalChildHistoryCatalog = {try await ChildHistoryBridge.catalog($0)}
     var childPage: @Sendable (CampSession, LocalChildHistorySource, Int64) async throws -> LocalChildHistoryPage = {try await ChildHistoryBridge.page($0,$1,$2)}
+    var attachmentBytes: @Sendable (CampSession, LocalChildHistorySource?, String, TranscriptAttachment) async throws -> Data = {
+        try await TranscriptAttachmentReader.read(session: $0, child: $1, messageID: $2, attachment: $3)
+    }
     private let watch = TranscriptWatch()
     private var generation = UUID()
     private var task: Task<Void, Never>?
@@ -149,6 +152,8 @@ struct LocalShareStatus {
             catch is CancellationError { return false }
             catch CampCloudError.server(let code, _) where [400, 401, 403, 404].contains(code) {
                 await state(id, code == 401 ? "Sign in to Camp again" : "Needs review", generation: token)
+            } catch CampCloudError.server(409, "attachment_storage_limit") {
+                await state(id, "Attachment storage full", generation: token)
             } catch CampCloudError.server(409, _) {
                 // A rejected revision has no committed effect. Read current state
                 // and create a fresh command, preserving the user's latest intent.
@@ -169,6 +174,47 @@ struct LocalShareStatus {
         guard generation == token else { return }; set(value)
     }
     private func check(_ token: UUID) throws { if generation != token || Task.isCancelled { throw CancellationError() } }
+    private func checkAttachmentScope(_ token: UUID, scope: CloudScope, epoch: Int64) async throws {
+        try check(token)
+        guard self.scope == scope, cacheEpoch == epoch, try await cache?.epoch(scope) == epoch else { throw CancellationError() }
+        try check(token)
+    }
+    // Bodies go directly to their content-addressed PUT. The durable outbox
+    // contains only message references, after every upload receipt is verified.
+    private func uploadAttachments(_ messages: [PublishMessage], local: CampSession, parentID: String,
+                                   child: LocalChildHistorySource? = nil, childID: String? = nil, generation token: UUID) async throws {
+        guard let scope, let transport else { throw CampCloudError.cacheUnavailable }
+        let epoch = cacheEpoch
+        var uploaded = Set<String>()
+        struct Upload: Encodable { var childId: String?; var data: Data }
+        struct Receipt: Decodable { var sessionId: String; var sha256: String; var bytes: Int }
+        let encoder = CampWire.encoder()
+        // Escaping base64 slashes can double the envelope and reject an
+        // otherwise valid 16 MiB body. Keep this choice local to blob uploads.
+        encoder.outputFormatting.insert(.withoutEscapingSlashes)
+        for message in messages {
+            let attachments = message.attachments ?? []
+            guard attachments.count <= 64, !message.removed || attachments.isEmpty else { throw CampCloudError.invalidResponse }
+            for attachment in attachments where attachment.state == "embedded" {
+                guard let hash = attachment.sha256, hash.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
+                      let size = attachment.size, size > 0, size <= 16 << 20 else { throw CampCloudError.invalidResponse }
+                if uploaded.contains(hash) { continue }
+                try await checkAttachmentScope(token, scope: scope, epoch: epoch)
+                let bytes = try await attachmentBytes(local, child, message.id, attachment)
+                try await checkAttachmentScope(token, scope: scope, epoch: epoch)
+                guard bytes.count == size, PublishMessage.hash(bytes) == hash else { throw CampCloudError.invalidResponse }
+                let command = CampPublication(kind: "attachment", method: "PUT",
+                    path: "/v1/camps/\(scope.campId)/sessions/\(parentID)/attachments/\(hash)",
+                    body: try encoder.encode(Upload(childId: childID, data: bytes)))
+                let response = try await transport.perform(command)
+                try await checkAttachmentScope(token, scope: scope, epoch: epoch)
+                let receipt = try CampWire.decoder().decode(Receipt.self, from: response)
+                guard receipt.sessionId == (childID ?? parentID), receipt.sha256 == hash, receipt.bytes == size else { throw CampCloudError.invalidResponse }
+                uploaded.insert(hash)
+            }
+        }
+        try await checkAttachmentScope(token, scope: scope, epoch: epoch)
+    }
     private func commit(_ value: LocalShare, hashes: [PublishedDigest] = [], publishedSessionID:String? = nil, generation token: UUID) async throws {
         try check(token)
         guard let cache, let scope else { throw CampCloudError.cacheUnavailable }
@@ -386,6 +432,7 @@ struct LocalShareStatus {
             snapshotRevision=page.snapshotRevision
             let messages = try await cache.unpublished(page.messages, scope: scope, sessionId: id)
             if !messages.isEmpty {
+                try await uploadAttachments(messages, local: local, parentID: id, generation: token)
                 guard let remote = value.remote else { throw CampCloudError.invalidResponse }
                 struct Upload: Encodable { let expectedRevision: Int64; let messages: [PublishMessage] }
                 value.pending = CampPublication(kind: "transcript", method: "POST", path: get.path + "/transcript",
@@ -439,6 +486,7 @@ struct LocalShareStatus {
                       !exported.page.hasMore || exported.page.after>after else{throw CampCloudError.invalidResponse}
                 let messages=try await cache.unpublished(exported.page.messages,scope:scope,sessionId:childID);try check(token)
                 if !messages.isEmpty || !exported.page.hasMore {
+                    try await uploadAttachments(messages, local: local, parentID: value.id, child: source, childID: childID, generation: token)
                     try await writeChild(&value,source:source,id:childID,messages:messages,complete:!exported.page.hasMore,removed:false,generation:token)
                 }
                 if !exported.page.hasMore{finished=true;break}

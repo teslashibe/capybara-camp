@@ -152,7 +152,7 @@ enum Bridge {
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Capybara Camp")
     }()
     static func process(_ action: String) throws -> Process {
-        guard ["discover", "scan", "transcript", "transcript-attachment", "export-page", "add-source", "children", "child-history-catalog", "child-export-page", "activity", "permissions", "execution-context", "codex-activity-watch", "conversation", "transfer-source", "transfer-fences", "transfer-resolve", "transfer-changes", "transfer-capture", "transfer-review", "transfer-stage", "transfer-install", "transfer-checkout"].contains(action) else {
+        guard ["discover", "scan", "transcript", "transcript-attachment", "export-page", "add-source", "children", "child-history-catalog", "child-export-page", "child-transcript-attachment", "activity", "permissions", "execution-context", "codex-activity-watch", "conversation", "transfer-source", "transfer-fences", "transfer-resolve", "transfer-changes", "transfer-capture", "transfer-review", "transfer-stage", "transfer-install", "transfer-checkout"].contains(action) else {
             throw CampError.message("Unsupported local session action")
         }
         let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/camp-local")

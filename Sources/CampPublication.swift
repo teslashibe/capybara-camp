@@ -6,6 +6,7 @@ struct PublishMessage: Codable, Sendable, Equatable {
     var model: String?
     var effort: String?
     var speed: String?
+    var attachments: [TranscriptAttachment]? = nil
     var digest: String { (try? CampWire.encoder().encode(self)).map(Self.hash) ?? "" }
     static func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 }

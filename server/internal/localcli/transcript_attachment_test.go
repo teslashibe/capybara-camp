@@ -41,8 +41,9 @@ func TestAttachmentOnlyTranscriptAndVerifiedBytes(t *testing.T) {
 			if err != nil || string(result.(AttachmentBody).Data) != "first" {
 				t.Fatal(result, err)
 			}
-			if _, err = a.ExportPage(t.Context(), s, -1, 200); !errors.Is(err, ErrAttachmentPublication) {
-				t.Fatal("Text-only export should be refused", err)
+			page, err := a.ExportPage(t.Context(), s, -1, 200)
+			if err != nil || len(page.Messages) != 1 || len(page.Messages[0].Attachments) != 1 || page.Messages[0].Attachments[0] != ref {
+				t.Fatal("Export lost attachment metadata", page, err)
 			}
 			write(t, path, attachmentRecord(provider, "image", "changed"))
 			if _, err = a.TranscriptAttachment(t.Context(), request); !errors.Is(err, attachments.ErrChanged) {
@@ -92,7 +93,7 @@ func TestClaudeAttachmentAmendmentCannotReturnOldBytes(t *testing.T) {
 	}
 }
 
-func TestCodexDatabaseAttachmentAndExportRollback(t *testing.T) {
+func TestCodexDatabaseAttachmentExportAndRemoval(t *testing.T) {
 	a := fixture(t)
 	db := makeDB(t, filepath.Join(a.Config.Home, "thread_history_1.sqlite"), `CREATE TABLE thread_items(thread_id,item_id,item_json,item_type,rollout_ordinal)`)
 	_, err := db.Exec(`INSERT INTO thread_items VALUES('fixture','one','{"type":"userMessage","content":[{"type":"text","text":"Before"}]}','userMessage',0)`)
@@ -117,8 +118,9 @@ func TestCodexDatabaseAttachmentAndExportRollback(t *testing.T) {
 	if err != nil || string(data.Data) != "bytes" {
 		t.Fatal(data, err)
 	}
-	if _, err = a.ExportPage(t.Context(), s, -1, 200); !errors.Is(err, ErrAttachmentPublication) {
-		t.Fatal(err)
+	attached, err := a.ExportPage(t.Context(), s, -1, 200)
+	if err != nil || attached.ContentRevision == before.ContentRevision || len(attached.Messages) != 1 || len(attached.Messages[0].Attachments) != 1 || attached.Messages[0].Attachments[0] != ref {
+		t.Fatal("Attachment export lost its revision or descriptor", err)
 	}
 	_, err = db.Exec(`UPDATE thread_items SET item_json='{"type":"userMessage","content":[{"type":"text","text":"Before"}]}'`)
 	if err != nil {
@@ -126,7 +128,7 @@ func TestCodexDatabaseAttachmentAndExportRollback(t *testing.T) {
 	}
 	after, err := a.ExportPage(t.Context(), s, -1, 200)
 	if err != nil || after.ContentRevision != before.ContentRevision {
-		t.Fatal("Attachment refusal changed the committed index", err)
+		t.Fatal("Removing the attachment did not restore the original content revision", err)
 	}
 	// A newer empty SQLite item must not resurrect an attachment from rollout.
 	s.Path = filepath.Join(a.Config.Home, "old.jsonl")
@@ -168,5 +170,62 @@ func TestSubagentAttachmentRequiresChildTranscriptSelection(t *testing.T) {
 	request.Session.IsSubagent = false
 	if _, err = a.TranscriptAttachment(t.Context(), request); !errors.Is(err, attachments.ErrChanged) {
 		t.Fatal(err)
+	}
+}
+
+func TestChildAttachmentRequiresParentAndCurrentRevision(t *testing.T) {
+	for _, provider := range []string{"Claude", "Codex"} {
+		t.Run(provider, func(t *testing.T) {
+			a, parent, path := childHistoryFixture(t, provider)
+			if provider == "Claude" {
+				write(t, path, attachmentRecord(provider, "image", "child-bytes"))
+			} else {
+				db := makeDB(t, filepath.Join(parent.Root, "thread_history_1.sqlite"), "")
+				if _, err := db.Exec(`DELETE FROM thread_items; INSERT INTO thread_items VALUES('one','image','{"type":"userMessage","content":[{"type":"image","url":"data:image/png;base64,Y2hpbGQtYnl0ZXM="}]}','userMessage',0)`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			catalog, err := a.ChildHistory(t.Context(), parent)
+			if err != nil || len(catalog.Sources) != 1 {
+				t.Fatal(catalog, err)
+			}
+			source := catalog.Sources[0]
+			page, err := a.ExportChildHistory(t.Context(), parent, source.ID, source.Revision, -1, 200)
+			if err != nil || len(page.Page.Messages) != 1 || len(page.Page.Messages[0].Attachments) != 1 {
+				t.Fatal(page, err)
+			}
+			ref := page.Page.Messages[0].Attachments[0]
+			input := map[string]any{"session": parent, "sourceID": source.ID, "revision": source.Revision, "messageID": "image", "attachmentID": ref.ID, "sourceDigest": ref.SourceDigest}
+			raw, _ := json.Marshal(input)
+			result, err := a.Run(t.Context(), "child-transcript-attachment", bytes.NewReader(raw))
+			if err != nil || string(result.(AttachmentBody).Data) != "child-bytes" {
+				t.Fatal(result, err)
+			}
+			request := AttachmentRead{MessageID: "image", AttachmentID: ref.ID, SourceDigest: ref.SourceDigest}
+			other := parent
+			other.SessionID = "unrelated"
+			if _, err := a.ChildTranscriptAttachment(t.Context(), other, source.ID, source.Revision, request); err == nil {
+				t.Fatal("Unrelated parent read child bytes")
+			}
+			if _, err := a.ChildTranscriptAttachment(t.Context(), parent, source.ID, strings.Repeat("0", 64), request); err == nil {
+				t.Fatal("Accepted wrong child revision")
+			}
+			// An unrelated text amendment invalidates the selected snapshot even
+			// when the attachment's bytes and source digest have not changed.
+			if provider == "Claude" {
+				write(t, path, attachmentRecord(provider, "image", "child-bytes")+record("later", "New message"))
+			} else {
+				db := makeDB(t, filepath.Join(parent.Root, "thread_history_1.sqlite"), "")
+				if _, err := db.Exec(`INSERT INTO thread_items VALUES('one','later','{"type":"agentMessage","text":"New message"}','agentMessage',1)`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := a.ChildTranscriptAttachment(t.Context(), parent, source.ID, source.Revision, request); err == nil {
+				t.Fatal("Stale child revision returned bytes")
+			}
+			if _, err := a.Run(t.Context(), "child-transcript-attachment", strings.NewReader(string(raw)+"{}")); err == nil {
+				t.Fatal("Accepted trailing JSON")
+			}
+		})
 	}
 }

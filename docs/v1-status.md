@@ -22,10 +22,10 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: finish attachment byte synchronization and transfer, then shared skills
+Next: finish attachment download and transfer, then shared skills
 and Git publication. Local attachment inspection and verified embedded-byte reads
-and the cloud storage API are implemented; native synchronization and destination
-installation remain unfinished. See [the attachment contract](attachments.md). Native
+and the cloud storage API are implemented. Native publication is connected;
+attachment download and destination installation remain unfinished. See [the attachment contract](attachments.md). Native
 Local-to-Cloud ancestor selection, cloud-source commit capture and Mac restoration
 are implemented; live-provider transfer acceptance remains open. The native
 return review/adoption screen and duplicate-card
@@ -1451,3 +1451,46 @@ unfinished. The local export guard remains until those paths are connected. Thes
 are local synthetic tests, not a cloud deployment or native visual acceptance.
 V1 remains unreleased, memory/Cortex remains excluded, and Hetzner provisioning
 still happens with the owner after full local acceptance.
+
+### Native attachment publication checkpoint — October 22
+
+The native publisher now retains attachment descriptors in its local export and
+uploads verified embedded bytes before publishing parent or child messages. The
+local export refusal from the earlier checkpoint is removed. Bodies stay out of
+the durable command journal; a lost upload response retries the same content hash,
+and a lost transcript response resumes its saved command. Duplicate content is
+uploaded once per conversation/page. Changed bytes, invalid receipts, disconnection
+and cache erasure prevent further publication. A full storage quota shows
+`Attachment storage full` instead of scheduling a reconciliation retry.
+
+The new child reader resolves an opaque source within its parent/profile and
+checks the selected child revision before and after reading. It does not accept
+an arbitrary child path. Native HTTP permits the 23 MiB upload envelope only for
+the exact attachment PUT route; ordinary request limits remain unchanged. Base64
+slashes remain unescaped so a valid body cannot double its upload envelope.
+
+Go race tests pass for local import/export, embedded reads, child revision and
+parent isolation, provider amendments, and attachment removal. Vet and the Linux
+helper build pass (`build/attachment-publication-checks.log`). Five native suites
+pass (`build/attachment-publication-native-final.log`): sharing, bundled bridge,
+child history, cloud cache/projection, and plan import/HTTP bounds. These include
+lost-response recovery, restart, descriptor preservation, duplicate suppression,
+wrong receipts, changed sources, disconnect/cache fencing, and exact child bytes.
+The final sharing regression pass also verifies the full-quota state and compact
+base64 encoding (`build/attachment-publication-final.log`).
+
+The native publisher also passes against a real loopback Go API and PostgreSQL
+with two independent users (`build/attachment-publication-api-verified.log`). For
+both provider histories, the test publishes parent and child attachments above
+2 MiB, loses an upload response and a transcript response after the API commits,
+then verifies exact bytes through the teammate's login. Unsharing denies the
+teammate further reads. Sources are synthetic; these tests do not establish live
+provider or two-Mac acceptance.
+
+Still required: native attachment download/preview, orphan reclamation, saved
+history bytes and destination installation in both transfer directions. Server
+and native transfer guards remain until installation can preserve the bytes.
+Shared skills, Git publication and the other V1 acceptance/release gates remain
+open. Computer use is responding again; the running review build's footer was
+visually inspected, but the proposed sidebar redesign has not been applied.
+There is no new release or cloud deployment. Memory/Cortex remains excluded.

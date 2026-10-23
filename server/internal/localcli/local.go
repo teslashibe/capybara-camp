@@ -92,7 +92,7 @@ func (a *App) Run(ctx context.Context, action string, input io.Reader) (any, err
 	if action == "transcript-attachment" {
 		return a.readTranscriptAttachment(ctx, input)
 	}
-	if action == "child-history-catalog" || action == "child-export-page" {
+	if action == "child-history-catalog" || action == "child-export-page" || action == "child-transcript-attachment" {
 		return a.childHistoryRequest(ctx, action, input)
 	}
 	if action == "transfer-changes" || action == "transfer-capture" {

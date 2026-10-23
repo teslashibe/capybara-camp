@@ -74,6 +74,15 @@ actor PlanImportFixture: CampPublishingTransport {
             do { _ = try await client.data(method, path: path, body: Data(repeating: 32, count: count)); preconditionFailure("Upload allowance escaped its exact route") }
             catch CampCloudError.responseTooLarge {} catch { preconditionFailure("Unexpected transport rejection: \(error)") }
         }
+        let attachment = "/v1/camps/\(UUID().uuidString)/sessions/\(UUID().uuidString)/attachments/" + String(repeating:"a",count:64)
+        _ = try await client.data("PUT", path:attachment, body:Data(repeating:32,count:23<<20))
+        for (method,path,count) in [("PUT",attachment,(23<<20)+1),("POST",attachment,3<<20),
+                                   ("PUT",attachment+"?large=1",3<<20),("PUT",attachment+"/extra",3<<20),
+                                   ("PUT",attachment.replacingOccurrences(of:"/attachments/",with:"/transcript/"),3<<20),
+                                   ("PUT",String(attachment.dropLast()),3<<20)] {
+            do {_ = try await client.data(method,path:path,body:Data(repeating:32,count:count));preconditionFailure("Attachment allowance escaped its exact route")}
+            catch CampCloudError.responseTooLarge {} catch {preconditionFailure("Unexpected attachment rejection: \(error)")}
+        }
         await client.cancel()
     }
     @MainActor static func main() async throws {

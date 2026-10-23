@@ -30,7 +30,11 @@ actor CampHTTP {
             let segments = path.split(separator: "/", omittingEmptySubsequences: false)
             let isPlanImport = method == "POST" && segments.count == 6 && segments[0].isEmpty && segments[1] == "v1" &&
                 segments[2] == "camps" && UUID(uuidString: String(segments[3])) != nil && segments[4] == "planning" && segments[5] == "import"
-            guard body.count <= (isPlanImport ? 16 : 2) << 20 else { throw CampCloudError.responseTooLarge }
+            let isAttachment = method == "PUT" && segments.count == 8 && segments[0].isEmpty && segments[1] == "v1" &&
+                segments[2] == "camps" && UUID(uuidString: String(segments[3])) != nil && segments[4] == "sessions" &&
+                UUID(uuidString: String(segments[5])) != nil && segments[6] == "attachments" &&
+                String(segments[7]).range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil
+            guard body.count <= (isAttachment ? 23 : isPlanImport ? 16 : 2) << 20 else { throw CampCloudError.responseTooLarge }
             request.httpBody = body; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         if let key { request.setValue(key, forHTTPHeaderField: "Idempotency-Key") }

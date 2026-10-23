@@ -37,12 +37,17 @@ enum TranscriptAttachmentReader {
         var attachment: TranscriptAttachment
         var data: Data
     }
-    static func read(session: CampSession, messageID: String, attachment: TranscriptAttachment) async throws -> Data {
+    static func read(session: CampSession, child: LocalChildHistorySource? = nil, messageID: String, attachment: TranscriptAttachment) async throws -> Data {
         guard attachment.state == "embedded", let size = attachment.size, size > 0, size <= 16 << 20,
               let hash = attachment.sha256, hash.count == 64 else { throw CampError.message("The transcript does not contain readable attachment bytes") }
-        struct Input: Encodable { var session: CampSession; var messageID: String; var attachmentID: String; var sourceDigest: String }
-        let input = Input(session: session, messageID: messageID, attachmentID: attachment.id, sourceDigest: attachment.sourceDigest)
-        let result = try JSONDecoder().decode(Body.self, from: await Bridge.call("transcript-attachment", input: JSONEncoder().encode(input)))
+        if let child, !child.valid { throw CampCloudError.invalidResponse }
+        struct Input: Encodable {
+            var session: CampSession; var messageID: String; var attachmentID: String; var sourceDigest: String
+            var sourceID: String?; var revision: String?
+        }
+        let input = Input(session: session, messageID: messageID, attachmentID: attachment.id, sourceDigest: attachment.sourceDigest,
+                          sourceID: child?.id, revision: child?.revision)
+        let result = try JSONDecoder().decode(Body.self, from: await Bridge.call(child == nil ? "transcript-attachment" : "child-transcript-attachment", input: JSONEncoder().encode(input)))
         guard result.messageID == messageID, result.attachment == attachment, result.data.count == size,
               PublishMessage.hash(result.data) == hash else { throw CampError.message("The attachment changed; reload the session before reading it") }
         return result.data

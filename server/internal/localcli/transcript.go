@@ -20,7 +20,6 @@ import (
 
 // Until attachment bodies are part of Camp publication, refuse a text-only
 // snapshot of a conversation containing attachments. Local viewing is supported.
-var ErrAttachmentPublication = errors.New("This session contains attachments; sharing and transfer require attachment byte synchronization, which is not available in this build")
 
 func validSession(s Session) error {
 	if (s.Provider != "Codex" && s.Provider != "Claude") || s.SessionID == "" || s.Root == "" {
@@ -362,9 +361,6 @@ func syncIndex(ctx context.Context, db *sql.DB, s Session, stamp string) error {
 		return err
 	}
 	err = records(ctx, s, true, func(m Message) error {
-		if len(m.Attachments) != 0 {
-			return ErrAttachmentPublication
-		}
 		if len(m.ID) > 256 {
 			m.ID = "m:" + hash([]byte(m.ID))
 		}

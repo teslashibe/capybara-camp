@@ -179,17 +179,15 @@ func (a *App) indexedChildSource(ctx context.Context, parent Session, child Chil
 	return source, session, nil
 }
 
-func (a *App) ExportChildHistory(ctx context.Context, parent Session, sourceID, revision string, after int64, limit int) (ChildHistoryPage, error) {
-	if len(sourceID) != 64 || len(revision) != 64 || after < -1 || limit < 1 || limit > 200 {
-		return ChildHistoryPage{}, errChildHistory
-	}
-	parent, err := childHistoryParent(parent)
-	if err != nil {
-		return ChildHistoryPage{}, err
+// resolveHistoryChild accepts an opaque parent/profile-bound source, never an
+// arbitrary child path supplied by the caller.
+func (a *App) resolveHistoryChild(ctx context.Context, parent Session, sourceID, revision string) (ChildHistorySource, Session, error) {
+	if len(sourceID) != 64 || len(revision) != 64 {
+		return ChildHistorySource{}, Session{}, errChildHistory
 	}
 	children, err := childrenForLimit(ctx, parent, false, maxHistoryChildren)
 	if err != nil || len(children) > maxHistoryChildren {
-		return ChildHistoryPage{}, errChildHistory
+		return ChildHistorySource{}, Session{}, errChildHistory
 	}
 	for _, child := range children {
 		if childHistoryKey(parent, child.ID) != sourceID {
@@ -197,18 +195,54 @@ func (a *App) ExportChildHistory(ctx context.Context, parent Session, sourceID, 
 		}
 		source, session, err := a.indexedChildSource(ctx, parent, child)
 		if err != nil || source.Revision != revision {
-			return ChildHistoryPage{}, errChildHistory
+			return ChildHistorySource{}, Session{}, errChildHistory
 		}
-		page, err := a.ExportPage(ctx, session, after, limit)
-		if err != nil {
-			return ChildHistoryPage{}, err
-		}
-		if page.ContentRevision != revision {
-			return ChildHistoryPage{}, errChildHistory
-		}
-		return ChildHistoryPage{ParentID: childHistoryKey(parent, ""), Source: source, Page: page}, nil
+		return source, session, nil
 	}
-	return ChildHistoryPage{}, errChildHistory
+	return ChildHistorySource{}, Session{}, errChildHistory
+}
+
+func (a *App) ExportChildHistory(ctx context.Context, parent Session, sourceID, revision string, after int64, limit int) (ChildHistoryPage, error) {
+	if after < -1 || limit < 1 || limit > 200 {
+		return ChildHistoryPage{}, errChildHistory
+	}
+	parent, err := childHistoryParent(parent)
+	if err != nil {
+		return ChildHistoryPage{}, err
+	}
+	source, session, err := a.resolveHistoryChild(ctx, parent, sourceID, revision)
+	if err != nil {
+		return ChildHistoryPage{}, err
+	}
+	page, err := a.ExportPage(ctx, session, after, limit)
+	if err != nil {
+		return ChildHistoryPage{}, err
+	}
+	if page.ContentRevision != revision {
+		return ChildHistoryPage{}, errChildHistory
+	}
+	return ChildHistoryPage{ParentID: childHistoryKey(parent, ""), Source: source, Page: page}, nil
+}
+
+func (a *App) ChildTranscriptAttachment(ctx context.Context, parent Session, sourceID, revision string, request AttachmentRead) (AttachmentBody, error) {
+	parent, err := childHistoryParent(parent)
+	if err != nil {
+		return AttachmentBody{}, err
+	}
+	_, session, err := a.resolveHistoryChild(ctx, parent, sourceID, revision)
+	if err != nil {
+		return AttachmentBody{}, err
+	}
+	request.Session = session
+	body, err := a.TranscriptAttachment(ctx, request)
+	if err != nil {
+		return AttachmentBody{}, err
+	}
+	// Re-resolve membership and content after reading, including child removal.
+	if _, _, err = a.resolveHistoryChild(ctx, parent, sourceID, revision); err != nil {
+		return AttachmentBody{}, err
+	}
+	return body, nil
 }
 
 func (a *App) childHistoryRequest(ctx context.Context, action string, input io.Reader) (any, error) {
@@ -219,11 +253,14 @@ func (a *App) childHistoryRequest(ctx context.Context, action string, input io.R
 		return nil, errChildHistory
 	}
 	var in struct {
-		Session  Session `json:"session"`
-		SourceID string  `json:"sourceID"`
-		Revision string  `json:"revision"`
-		After    int64   `json:"after"`
-		Limit    int     `json:"limit"`
+		Session      Session `json:"session"`
+		SourceID     string  `json:"sourceID"`
+		Revision     string  `json:"revision"`
+		After        int64   `json:"after"`
+		Limit        int     `json:"limit"`
+		MessageID    string  `json:"messageID"`
+		AttachmentID string  `json:"attachmentID"`
+		SourceDigest string  `json:"sourceDigest"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -232,6 +269,9 @@ func (a *App) childHistoryRequest(ctx context.Context, action string, input io.R
 	}
 	if action == "child-history-catalog" {
 		return a.ChildHistory(ctx, in.Session)
+	}
+	if action == "child-transcript-attachment" {
+		return a.ChildTranscriptAttachment(ctx, in.Session, in.SourceID, in.Revision, AttachmentRead{MessageID: in.MessageID, AttachmentID: in.AttachmentID, SourceDigest: in.SourceDigest})
 	}
 	return a.ExportChildHistory(ctx, in.Session, in.SourceID, in.Revision, in.After, in.Limit)
 }
