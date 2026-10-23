@@ -102,11 +102,22 @@ func TestGitHTTPConsentAndSignedRevocation(t *testing.T) {
 	}
 	call("GET", "/v1/git/connections/"+login.ConnectionID, tokens[1], "", nil, 404)
 	u, _ := url.Parse(login.URL)
-	callback := "/v1/git/github/callback?state=" + url.QueryEscape(u.Query().Get("state")) + "&code=fixture-code"
+	loginState := u.Query().Get("state")
+	callback := "/v1/git/github/callback?state=" + url.QueryEscape(loginState) + "&code=fixture-code"
 	response := call("GET", callback, "", "", nil, 200)
-	if !bytes.Contains(response, []byte("GitHub is connected")) || bytes.Contains(response, []byte("fixture-code")) {
-		t.Fatal("unsafe callback page")
+	if !bytes.Contains(response, []byte("capybara://github-login?code=fixture-code&amp;state=")) {
+		t.Fatal("callback did not hand the code to the app", string(response))
 	}
+	// The browser alone cannot finish the login, and another signed-in person
+	// who approved the link cannot bind it either.
+	raw = call("GET", "/v1/git/connections/"+login.ConnectionID, tokens[0], "", nil, 200)
+	var pending camp.GitStatus
+	if json.Unmarshal(raw, &pending) != nil || pending.Connection.State == "connected" {
+		t.Fatal("browser callback completed the login")
+	}
+	completion := `{"state":"` + loginState + `","code":"fixture-code"}`
+	call("POST", "/v1/git/logins/complete", tokens[1], completion, nil, 404)
+	call("POST", "/v1/git/logins/complete", tokens[0], completion, nil, 204)
 	call("GET", "/v1/git/connections/"+login.ConnectionID+"/installations", tokens[0], "", nil, 200)
 	call("GET", "/v1/git/connections/"+login.ConnectionID+"/installations/999/repositories", tokens[0], "", nil, 404)
 	call("GET", "/v1/git/connections/"+login.ConnectionID+"/installations/10/repositories?page=0", tokens[0], "", nil, 400)

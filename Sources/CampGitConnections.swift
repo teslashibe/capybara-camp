@@ -176,6 +176,15 @@ enum GitHubURL {
             try await self.finishBegin(c)
         }
     }
+    // The GitHub callback page hands the approval to this app; the server
+    // exchanges it only for the signed-in person who started the login.
+    func completeLogin(state: String, code: String) async {
+        guard state.utf8.count == 43, !code.isEmpty, code.utf8.count <= 512 else { return }
+        await mutate { c in
+            _ = try await c.transport.data("POST", path: "/v1/git/logins/complete", body: CampWire.body(["state": state, "code": code]), key: UUID().uuidString, token: c.credential.token)
+            try self.check(c); try await self.read(c)
+        }
+    }
     func cancel() async {
         await mutate { c in
             if self.journal.pending != nil { try await self.finishBegin(c) }

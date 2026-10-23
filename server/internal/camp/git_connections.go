@@ -276,6 +276,20 @@ func randomGitSecret() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(raw[:]), nil
 }
 func (g *GitStore) Claim(ctx context.Context, state string) (GitExchange, error) {
+	return g.claim(ctx, state, "")
+}
+
+// ClaimOwned completes only the login the signed-in person started. The
+// browser that approved GitHub hands the code to that person's own Mac app;
+// a login started by someone else is left untouched.
+func (g *GitStore) ClaimOwned(ctx context.Context, a auth.Actor, state string) (GitExchange, error) {
+	if a.UserID == "" {
+		return GitExchange{}, ErrDenied
+	}
+	return g.claim(ctx, state, a.UserID)
+}
+
+func (g *GitStore) claim(ctx context.Context, state, owner string) (GitExchange, error) {
 	if len(state) != 43 {
 		return GitExchange{}, ErrDenied
 	}
@@ -294,6 +308,9 @@ func (g *GitStore) Claim(ctx context.Context, state string) (GitExchange, error)
 	}
 	if err != nil {
 		return out, err
+	}
+	if owner != "" && out.OwnerID != owner {
+		return GitExchange{}, ErrDenied
 	}
 	if status != "waiting" || !expires.After(time.Now()) {
 		return out, ErrTransition

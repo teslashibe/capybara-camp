@@ -202,11 +202,18 @@ native setup journal, which retains only operation and connection IDs. The
 server stores the pending verifier encrypted and accepts one callback claim.
 Cancel, disconnect, expiry and connection revisions fence late completions.
 
+The browser callback does not exchange the code. It hands the state and code
+to the Camp app on the same Mac through a `capybara://github-login` link, and
+the app completes the login over its signed-in Camp session. The server
+exchanges the code only when that signed-in person started the login, so a
+teammate who approves someone else's authorize link cannot bind their GitHub
+account to that person's connection.
+
 Access and refresh tokens are encrypted with owner, connection and epoch
 binding. Human endpoints return only metadata and permitted repository views.
 Shared Camp snapshots and events contain no Git credentials or connection
-details. Browser callbacks return a fixed completion page without codes or
-tokens. Disable query-string logging on the callback route in your ingress,
+details. The callback page carries the code only in its link back to the
+local app and sends no referrer. Disable query-string logging on the callback route in your ingress,
 proxy and observability configuration; OAuth codes and state appear in its URL.
 
 Repository browsing uses GitHub App user tokens. The API checks the chosen

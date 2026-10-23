@@ -53,7 +53,7 @@ func run() error {
 			return err
 		}
 	}
-	a := &httpapi.API{Pool: pool, Auth: auth.New(pool, cfg.AuthSecret, cfg.PublicURL, resend.New(cfg.ResendKey, cfg.EmailFrom)), Camps: camps, Origin: cfg.PublicURL}
+	a := &httpapi.API{Pool: pool, Auth: auth.New(pool, cfg.AuthSecret, cfg.PublicURL, resend.New(cfg.ResendKey, cfg.EmailFrom)), Camps: camps, Origin: cfg.PublicURL, TrustedProxies: cfg.TrustedProxies}
 	gitDone := make(chan struct{})
 	if cfg.GitHub.Enabled() {
 		a.GitWebhookSecret = cfg.GitHub.WebhookSecret

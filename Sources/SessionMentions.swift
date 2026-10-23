@@ -121,6 +121,11 @@ struct ContextPreview: Sendable {
 
 extension CampStore {
     func openContextLink(_ url: URL) {
+        if let parts = URLComponents(url: url, resolvingAgainstBaseURL: false), parts.scheme == "capybara", parts.host == "github-login" {
+            let value = { (name: String) in parts.queryItems?.first { $0.name == name }?.value ?? "" }
+            Task { await cloud.gitConnections.completeLogin(state: value("state"), code: value("code")) }
+            return
+        }
         guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false), parts.scheme == "capybara", parts.host == "session" else { return }
         let id = String(parts.path.dropFirst())
         let revision = parts.queryItems?.first { $0.name == "revision" }?.value ?? ""

@@ -138,9 +138,13 @@ its transcript, invalidates old queued requests and increments the permission
 revision. Active, uncertain, or externally controlled sessions cannot move.
 
 The email-code store hashes codes, limits attempts, consumes atomically, and
-throttles resends. The public auth boundary also limits requests by the direct
-remote address. Forwarded-IP headers are not trusted. A production proxy needs a
-corresponding edge rate limit so one proxy IP does not become a shared limit.
+throttles resends. Failed codes also count per address across resends, with at
+most 20 a day. The public auth boundary limits requests per client address.
+Without configuration that is the direct remote address and forwarded headers
+are ignored. Behind an ingress, set `CAMP_TRUSTED_PROXIES` to the proxy CIDRs
+(for example `10.42.0.0/16` for default k3s pod networking); the server then
+uses the right-most `X-Forwarded-For` hop that no trusted proxy added. Without
+it, every client behind the proxy shares one sign-in limit.
 Device tokens are hashed in PostgreSQL, last 30 days and can renew within an
 absolute 90-day lifetime; expired/revoked devices sign in again.
 

@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/google/uuid"
+	"html"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -95,17 +97,18 @@ func (a *API) gitRoutes(mux *http.ServeMux) {
 			write(w, 200, out)
 		}
 	}))
-	mux.HandleFunc("POST /v1/runner/workspaces/{workspace}/requests/{request}/history", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, _ camp.RunnerAccountState) {
+	mux.HandleFunc("POST /v1/runner/workspaces/{workspace}/requests/{request}/history", a.workspaceRunnerAuthorize(func(w http.ResponseWriter, r *http.Request, state camp.RunnerAccountState) {
 		var in localcli.HistoryRead
 		if !decode(w, r, &in) {
 			return
 		}
 		if in.Attachment != nil {
-			if !a.acquireAttachment() {
+			slot := "runner:" + state.InstallationID
+			if !a.acquireAttachment(slot) {
 				problem(w, 429, "attachment_busy")
 				return
 			}
-			defer a.releaseAttachment()
+			defer a.releaseAttachment(slot)
 		}
 		out, err := a.Git.RunnerHistory(r.Context(), token(r), r.PathValue("workspace"), r.PathValue("request"), in)
 		if !fail(w, err) {
@@ -220,6 +223,7 @@ func (a *API) gitRoutes(mux *http.ServeMux) {
 			write(w, 200, out)
 		}
 	}))
+	mux.HandleFunc("POST /v1/git/logins/complete", a.gitAuthorize(a.gitCompleteLogin))
 	mux.HandleFunc("POST /v1/git/logins", a.gitAuthorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		var input struct {
 			ConnectionID string `json:"connection_id"`
@@ -370,11 +374,38 @@ func (a *API) gitCallback(w http.ResponseWriter, r *http.Request) {
 		gitCallbackPage(w, false)
 		return
 	}
-	exchange, err := a.Git.Claim(r.Context(), states[0])
-	if err == nil {
-		err = a.Git.Exchange(r.Context(), exchange, codes[0])
+	// The code is exchanged only by the initiating person's signed-in app, so a
+	// teammate who approves someone else's link cannot bind their GitHub
+	// account to that person's connection. This page hands the code to the
+	// Camp app on the Mac where it was approved.
+	gitHandoffPage(w, "capybara://github-login?"+url.Values{"state": states, "code": codes}.Encode())
+}
+func (a *API) gitCompleteLogin(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+	var input struct {
+		State string `json:"state"`
+		Code  string `json:"code"`
 	}
-	gitCallbackPage(w, err == nil)
+	if !decode(w, r, &input) {
+		return
+	}
+	if len(input.Code) == 0 || len(input.Code) > 512 || strings.ContainsAny(input.Code, "\x00\r\n") {
+		problem(w, 400, "invalid_input")
+		return
+	}
+	exchange, err := a.Git.ClaimOwned(r.Context(), u, input.State)
+	if err == nil {
+		err = a.Git.Exchange(r.Context(), exchange, input.Code)
+	}
+	if !fail(w, err) {
+		w.WriteHeader(204)
+	}
+}
+func gitHandoffPage(w http.ResponseWriter, link string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+	escaped := html.EscapeString(link)
+	_, _ = fmt.Fprintf(w, "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><meta http-equiv=\"refresh\" content=\"0;url=%s\"><title>Capybara Camp</title><h1>Capybara Camp</h1><p>Finish connecting GitHub in Capybara Camp on this Mac. <a href=\"%s\">Open Capybara Camp</a></p></html>", escaped, escaped)
 }
 func gitCallbackPage(w http.ResponseWriter, success bool) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

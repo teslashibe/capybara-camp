@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/mail"
+	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -15,6 +16,8 @@ type Config struct {
 	Address, DatabaseURL, PublicURL, AuthSecret, ResendKey, EmailFrom string
 	ProviderEncryptionKey                                             string
 	GitHub                                                            GitHub
+	// Proxies whose X-Forwarded-For hop is trusted for per-client limits.
+	TrustedProxies []netip.Prefix
 }
 
 func Load(migrateOnly bool) (Config, error) {
@@ -25,6 +28,16 @@ func Load(migrateOnly bool) (Config, error) {
 	c.GitHub = loadGitHub()
 	if value := os.Getenv("CAMP_ADDRESS"); value != "" {
 		c.Address = value
+	}
+	for _, value := range strings.Split(os.Getenv("CAMP_TRUSTED_PROXIES"), ",") {
+		if value = strings.TrimSpace(value); value == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return c, errors.New("CAMP_TRUSTED_PROXIES must be a comma-separated list of CIDR ranges")
+		}
+		c.TrustedProxies = append(c.TrustedProxies, prefix.Masked())
 	}
 	c.PublicURL = strings.TrimRight(c.PublicURL, "/")
 	return c, c.Validate(migrateOnly)

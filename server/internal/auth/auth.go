@@ -149,6 +149,10 @@ func (s *Service) Create(ctx context.Context, email, code, _ string, expires tim
 	}
 	return err
 }
+
+// About one in 50,000 chance per address per day of guessing a six-digit code.
+const maxDailyCodeFailures = 20
+
 func (s *Service) ConsumeByCode(ctx context.Context, email, code string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -168,8 +172,24 @@ func (s *Service) ConsumeByCode(ctx context.Context, email, code string) error {
 	if expired || consumed || attempts >= 5 {
 		return magiclink.ErrInvalidCode
 	}
+	// Each new code resets its own attempt count, so failures are also
+	// counted per address across codes for a day.
+	failures := s.digest("verify-fail:" + email)
+	var failed int
+	if err = tx.QueryRow(ctx, `SELECT COALESCE((SELECT hits FROM auth_limits WHERE key_hash=$1 AND window_start>=now()-interval '24 hours'),0)`, failures).Scan(&failed); err != nil {
+		return err
+	}
+	if failed >= maxDailyCodeFailures {
+		return magiclink.ErrInvalidCode
+	}
 	if subtle.ConstantTimeCompare(hash, s.digest(email+"\x00"+code)) != 1 {
 		if _, err = tx.Exec(ctx, `UPDATE auth_challenges SET attempts=attempts+1 WHERE email=$1`, email); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO auth_limits(key_hash,window_start,hits) VALUES($1,now(),1)
+		 ON CONFLICT(key_hash) DO UPDATE SET
+		 hits=CASE WHEN auth_limits.window_start < now()-interval '24 hours' THEN 1 ELSE auth_limits.hits+1 END,
+		 window_start=CASE WHEN auth_limits.window_start < now()-interval '24 hours' THEN now() ELSE auth_limits.window_start END`, failures); err != nil {
 			return err
 		}
 		if err = tx.Commit(ctx); err != nil {

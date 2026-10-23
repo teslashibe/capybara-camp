@@ -110,3 +110,42 @@ func TestEmailNormalization(t *testing.T) {
 		t.Fatalf("normalization %q %v", email, err)
 	}
 }
+
+func TestCodeFailuresAccumulateAcrossResends(t *testing.T) {
+	pool := testdb.Open(t)
+	ctx := context.Background()
+	mail := &mailbox{}
+	s := New(pool, strings.Repeat("test", 10), "https://camp.example", mail)
+	const email = "target@example.com"
+	wrongFor := func() string {
+		if mail.code == "000000" {
+			return "111111"
+		}
+		return "000000"
+	}
+	for round := 0; round*5 < maxDailyCodeFailures; round++ {
+		if round > 0 {
+			// Each resend issues a fresh code with a fresh per-code count.
+			if _, err := pool.Exec(ctx, `UPDATE auth_challenges SET sent_at=now()-interval '2 minutes',sent_count=0 WHERE email=$1`, email); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := s.Send(ctx, email); err != nil {
+			t.Fatal(err)
+		}
+		for range 5 {
+			if _, err := s.Verify(ctx, email, wrongFor(), "Test Mac"); !errors.Is(err, ErrUnauthorized) {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE auth_challenges SET sent_at=now()-interval '2 minutes',sent_count=0 WHERE email=$1`, email); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Send(ctx, email); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Verify(ctx, email, mail.code, "Test Mac"); !errors.Is(err, ErrUnauthorized) {
+		t.Fatal("a fresh code reset the daily guess limit", err)
+	}
+}

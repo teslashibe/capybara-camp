@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,10 +29,12 @@ type API struct {
 	Git              *camp.GitStore
 	GitWebhookSecret string
 	Origin           string
+	TrustedProxies   []netip.Prefix
 	streamMu         sync.Mutex
 	streams          map[string]int
 	streamCount      int
 	attachmentCount  int
+	attachmentUsers  map[string]bool
 }
 type authorizedHandler func(http.ResponseWriter, *http.Request, auth.Actor)
 
@@ -332,12 +335,43 @@ func (a *API) authorize(next authorizedHandler) http.HandlerFunc {
 	}
 }
 func (a *API) authLimit(w http.ResponseWriter, r *http.Request) bool {
+	return !fail(w, a.Auth.Limit(r.Context(), "login:"+a.clientAddress(r), 30))
+}
+
+// clientAddress is the connecting peer unless that peer is a configured trusted
+// proxy; then it is the right-most X-Forwarded-For hop no trusted proxy added.
+// Without CAMP_TRUSTED_PROXIES forwarded headers are ignored.
+func (a *API) clientAddress(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	// Forwarded headers are deliberately ignored without a configured trusted proxy.
-	return !fail(w, a.Auth.Limit(r.Context(), "login:"+host, 30))
+	trusted := func(value string) bool {
+		ip, err := netip.ParseAddr(strings.TrimSpace(value))
+		if err != nil {
+			return false
+		}
+		for _, prefix := range a.TrustedProxies {
+			if prefix.Contains(ip.Unmap()) {
+				return true
+			}
+		}
+		return false
+	}
+	if !trusted(host) {
+		return host
+	}
+	hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
+	for i := len(hops) - 1; i >= 0; i-- {
+		hop := strings.TrimSpace(hops[i])
+		if _, err := netip.ParseAddr(hop); err != nil {
+			return host
+		}
+		if !trusted(hop) {
+			return hop
+		}
+	}
+	return host
 }
 func (a *API) sendCode(w http.ResponseWriter, r *http.Request) {
 	var input struct {
@@ -432,11 +466,11 @@ func (a *API) accept(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 	}
 }
 func (a *API) events(w http.ResponseWriter, r *http.Request, u auth.Actor) {
-	if !a.reserveStream(u.DeviceID) {
+	if !a.reserveStream(u) {
 		problem(w, 429, "too_many_streams")
 		return
 	}
-	defer a.releaseStream(u.DeviceID)
+	defer a.releaseStream(u)
 	after := int64(0)
 	raw := r.Header.Get("Last-Event-ID")
 	if raw == "" {
@@ -504,26 +538,32 @@ func (a *API) events(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 	}
 }
 
-func (a *API) reserveStream(device string) bool {
+// Streams are capped per device, per user and overall, so one self-registered
+// account with many devices cannot take every slot.
+func (a *API) reserveStream(u auth.Actor) bool {
 	a.streamMu.Lock()
 	defer a.streamMu.Unlock()
 	if a.streams == nil {
 		a.streams = make(map[string]int)
 	}
-	if a.streamCount >= 128 || a.streams[device] >= 4 {
+	device, user := "device:"+u.DeviceID, "user:"+u.UserID
+	if a.streamCount >= 128 || a.streams[device] >= 4 || a.streams[user] >= 8 {
 		return false
 	}
 	a.streams[device]++
+	a.streams[user]++
 	a.streamCount++
 	return true
 }
-func (a *API) releaseStream(device string) {
+func (a *API) releaseStream(u auth.Actor) {
 	a.streamMu.Lock()
 	defer a.streamMu.Unlock()
-	if a.streams[device] <= 1 {
-		delete(a.streams, device)
-	} else {
-		a.streams[device]--
+	for _, key := range []string{"device:" + u.DeviceID, "user:" + u.UserID} {
+		if a.streams[key] <= 1 {
+			delete(a.streams, key)
+		} else {
+			a.streams[key]--
+		}
 	}
 	a.streamCount--
 }
