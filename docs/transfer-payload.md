@@ -919,13 +919,47 @@ the session event, rejects missing/conflicting IDs and saves a repeated identica
 ID only once.
 
 The native worker and transfer review screen do not yet invoke this launch path.
-Normal session publication
-requires its existing local session ID and cannot be used to replace that
-identity. The remaining stream integration must append new continuation messages after the imported
-history with durable, noncolliding message IDs and ordinals. Publishing the new
-provider's transcript from ordinal zero would conflict with the retained parent
-history. This binding alone does not complete runnable continuation or transfer
-acceptance.
+Normal session publication requires its existing local session ID and cannot be
+used to replace that identity. Publishing the new provider's transcript from
+ordinal zero would conflict with the retained parent history.
+
+## Local continuation streams
+
+Schema 37 adds a write-once provider conversation ID to the committed local
+handoff. A request is identified as a local continuation only when a committed
+local receipt exists for its exact session/execution epoch. Request reads return
+the bound provider ID for follow-up; the stable ticket/local destination identity
+does not change. A profile/conversation uniqueness index and the existing owner
+lock prevent binding a conversation already published or bound elsewhere.
+
+`POST /v1/camps/{camp}/requests/{request}/continuation-events` accepts the same
+sequence/event/lease envelope as local implementation streaming. Only the assigned
+owner device with its current lease can write. Each append rechecks session,
+execution and source access, preserves the existing event limits, and rejects
+sequence gaps or changed replays. A session event binds the provider ID once;
+completion cannot report success without that ID. Ordinary local imports do not
+gain this endpoint merely by being local.
+
+The existing local-controls endpoint delivers steering and approvals to these
+requests under the same device/lease checks. Control submission remains owner-only,
+with existing approval sequence validation and provider acknowledgements. Stream
+headers identify local continuations so the native chat can render their output,
+offer the supported controls and show actual model settings. The existing activity
+updates move the ticket to In progress, Needs you or its terminal state.
+
+Terminal requests append through the existing transcript transaction. New IDs
+are `camp:<request UUID>:<part index>` and ordinals start after the current last
+message. Saved imported parent and child records remain unchanged. A persisted
+publication flag prevents duplicate appends after lost finish responses. The
+native reader hides streamed output after these IDs appear in saved history.
+Ordinary transcript writes to the returned epoch are refused, and the bound
+provider conversation cannot be separately published as a second ticket.
+
+Downgrade from schema 37 refuses to discard retained provider IDs, continuation
+streams or active/uncertain continuation requests. Empty rollback remains
+supported. The native worker launch/adoption flow and transfer review UI still
+need integration; this stream contract does not complete runnable transfer or
+live-provider acceptance.
 
 ## Local destination receipts
 

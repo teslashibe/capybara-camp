@@ -35,12 +35,13 @@ type StreamPage struct {
 // StreamHead reveals only display metadata to a session reader. Queued prompts,
 // account identities and execution leases remain private to their owners.
 type StreamHead struct {
-	ID     string `json:"id"`
-	State  string `json:"state"`
-	Seq    int64  `json:"seq"`
-	Model  string `json:"model"`
-	Effort string `json:"effort"`
-	Speed  string `json:"speed"`
+	LocalContinuation bool   `json:"local_continuation,omitempty"`
+	ID                string `json:"id"`
+	State             string `json:"state"`
+	Seq               int64  `json:"seq"`
+	Model             string `json:"model"`
+	Effort            string `json:"effort"`
+	Speed             string `json:"speed"`
 }
 
 func (s *Store) SessionStream(ctx context.Context, a auth.Actor, campID, id string) (*StreamHead, error) {
@@ -56,7 +57,7 @@ func (s *Store) SessionStream(ctx context.Context, a auth.Actor, campID, id stri
 		return nil, err
 	}
 	var out StreamHead
-	err = tx.QueryRow(ctx, `SELECT id,state,stream_seq,model,effort,speed FROM prompt_requests WHERE session_id=$1 AND kind='chat' AND execution_location='cloud' AND (stream_seq>0 OR state IN ('claimed','started','cancel_requested','outcome_unknown')) ORDER BY (state IN ('claimed','started','cancel_requested','outcome_unknown')) DESC,created_at DESC,id DESC LIMIT 1`, id).Scan(&out.ID, &out.State, &out.Seq, &out.Model, &out.Effort, &out.Speed)
+	err = tx.QueryRow(ctx, `SELECT id,state,stream_seq,model,effort,speed,(`+localContinuationSQL+`) FROM prompt_requests r WHERE session_id=$1 AND kind='chat' AND (execution_location='cloud' OR (`+localContinuationSQL+`)) AND (stream_seq>0 OR state IN ('claimed','started','cancel_requested','outcome_unknown')) ORDER BY (state IN ('claimed','started','cancel_requested','outcome_unknown')) DESC,created_at DESC,id DESC LIMIT 1`, id).Scan(&out.ID, &out.State, &out.Seq, &out.Model, &out.Effort, &out.Speed, &out.LocalContinuation)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -392,12 +393,16 @@ func (s *Store) appendRequestEvent(ctx context.Context, tx pgx.Tx, r Request, in
 	if _, err = tx.Exec(ctx, `INSERT INTO request_stream_events(request_id,seq,payload,payload_hash) VALUES($1,$2,$3,$4)`, r.ID, input.Seq, raw, hash[:]); err != nil {
 		return 0, err
 	}
-	if kind == "session" && r.Mode != "planning" {
+	if kind == "session" && (r.Mode != "planning" || r.LocalContinuation) {
 		providerSession, _ := event["sessionID"].(string)
 		if providerSession == "" || len(providerSession) > 200 || strings.ContainsAny(providerSession, "/\\\x00\r\n") {
 			return 0, ErrInput
 		}
-		if r.Kind == "implementation" {
+		if r.LocalContinuation {
+			if err = saveLocalContinuationSession(ctx, tx, r, providerSession); err != nil {
+				return 0, err
+			}
+		} else if r.Kind == "implementation" {
 			if err = saveImplementationSession(ctx, tx, r, providerSession); err != nil {
 				return 0, err
 			}
@@ -591,7 +596,11 @@ func (s *Store) publishRunnerTranscript(ctx context.Context, tx pgx.Tx, r Reques
 	}
 	flush()
 	for i, part := range parts {
-		id := "cloud:" + r.ID + ":" + strconv.Itoa(i)
+		prefix := "cloud:"
+		if r.LocalContinuation {
+			prefix = "camp:"
+		}
+		id := prefix + r.ID + ":" + strconv.Itoa(i)
 		if _, err = tx.Exec(ctx, `INSERT INTO messages(session_id,local_id,ordinal) VALUES($1,$2,$3)`, r.SessionID, id, ordinal+int64(i)); err != nil {
 			return err
 		}

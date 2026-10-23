@@ -190,6 +190,13 @@ func (s *Store) PublishSession(ctx context.Context, a auth.Actor, campID, reques
 	if !owned {
 		return Session{}, ErrDenied
 	}
+	var continued bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM transfer_handoffs WHERE local_profile_id=$1 AND local_provider_session_id=$2 AND session_id<>$3)`, input.ProfileID, input.LocalSessionID, input.ID).Scan(&continued); err != nil {
+		return Session{}, err
+	}
+	if continued {
+		return Session{}, ErrConflict
+	}
 	result := Session{}
 	if hit, err := s.beginCommand(ctx, tx, a, requestID, "session.publish:"+campID, input, &result); err != nil {
 		return result, err
@@ -372,6 +379,13 @@ func (s *Store) WriteTranscript(ctx context.Context, a auth.Actor, campID, id, r
 		return 0, ErrDenied
 	}
 	if session.ExecutionLocation != "local" {
+		return 0, ErrTransition
+	}
+	var continued bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM transfer_handoffs WHERE session_id=$1 AND execution_epoch=$2 AND state='committed' AND local_profile_id IS NOT NULL)`, id, session.ExecutionEpoch).Scan(&continued); err != nil {
+		return 0, err
+	}
+	if continued {
 		return 0, ErrTransition
 	}
 	var result int64

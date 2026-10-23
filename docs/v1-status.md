@@ -22,7 +22,7 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: connect the native worker's launch/stream path to the saved continuation
+Next: connect the native worker's launch path to the saved continuation
 binding and connect the native review screen to the checkout, installation and
 return-handoff coordinators, then finish
 attachments and the remaining transfer cases,
@@ -235,6 +235,32 @@ and cache erasure. An initially invalid test assumption about inherited permissi
 settings was corrected to use an unsupported value. The Go helper race suite,
 fixture vet, shell checks and staged secret scan pass. The API and native provider
 fixtures are synthetic; this is not live-model, UI or full transfer acceptance.
+
+Schema 37 now connects admitted local continuation requests to the existing
+ordered stream and control log. The assigned owner device and lease authorize
+events; a committed handoff binds the provider conversation ID. Completion appends
+messages after imported history without changing the ticket identity, and repeat
+events/finish responses cannot duplicate them. Ordinary transcript writes and
+duplicate publication of the bound provider conversation are refused. Stream
+headers identify local turns for native controls, settings and saved/live message
+deduplication. The worker launch/adoption and transfer review UI remain open.
+
+The full server race suite and vet pass (`build/continuation-stream-server.log`).
+Focused continuation/migration and lease regressions after the final fixes pass
+(`build/continuation-stream-lease-regression.log`). They cover identity replay,
+source-device denial, expired leases, changed execution/permissions, preserved
+history, steering and conservative downgrade. Review caught and fixed expired
+local continuations retaining a running card; the reaper now marks them Needs you.
+
+All six native suites and the real API journeys pass
+(`build/continuation-stream-verified.log`). Both provider fixtures retain their
+imported history and append two new turns, recover lost stream acknowledgements,
+deliver owner-only approvals, display them through the native stream reader and
+remove live output once saved. Native launch reservation also refuses disagreement
+between the server and local provider IDs. Linux server/migration builds, shell
+checks and the staged secret scan pass. These are synthetic provider fixtures,
+not live-model or native visual acceptance. Worker launch/adoption and transfer
+review integration remain the next step.
 
 Cloud source inspection and selected-file capture are now implemented at schema
 34. The owner creates a bounded export; only its assigned runner can claim it.

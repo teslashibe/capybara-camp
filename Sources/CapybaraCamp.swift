@@ -286,7 +286,7 @@ final class TranscriptWatch {
         set { guard let selectedID else { return }; pauseQueue(selectedID, newValue) }
     }
     func controlsCloudTurn(_ session: CampSession) -> Bool {
-        guard let remote = cloudSessions[session.id], remote.executionLocation == "cloud",
+        guard let remote = cloudSessions[session.id], (remote.executionLocation == "cloud" || cloud.live.head?.localContinuation == true),
               remote.ownerUserId == cloud.credential?.actor.userId, cloud.live.sessionID == remote.id else { return false }
         return cloud.live.head?.running == true
     }

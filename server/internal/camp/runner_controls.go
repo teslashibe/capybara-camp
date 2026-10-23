@@ -50,7 +50,7 @@ func (s *Store) ControlStatus(ctx context.Context, a auth.Actor, campID, request
 	if err != nil {
 		return out, err
 	}
-	if r.OwnerUserID != a.UserID || (r.ExecutionLocation != "cloud" && r.Kind != "implementation") {
+	if r.OwnerUserID != a.UserID || (r.ExecutionLocation != "cloud" && r.Kind != "implementation" && !r.LocalContinuation) {
 		return out, ErrDenied
 	}
 	if _, err = s.requestAccess(ctx, tx, r); err != nil {
@@ -126,7 +126,7 @@ func (s *Store) SendControl(ctx context.Context, a auth.Actor, campID, id string
 	if err != nil {
 		return out, err
 	}
-	if r.OwnerUserID != a.UserID || (r.ExecutionLocation != "cloud" && r.Kind != "implementation") {
+	if r.OwnerUserID != a.UserID || (r.ExecutionLocation != "cloud" && r.Kind != "implementation" && !r.LocalContinuation) {
 		return out, ErrDenied
 	}
 	if _, err = s.requestAccess(ctx, tx, r); err != nil {
@@ -236,7 +236,7 @@ func (s *Store) LocalImplementationControls(ctx context.Context, a auth.Actor, c
 	if err != nil {
 		return nil, err
 	}
-	if r.Kind != "implementation" || r.ExecutionLocation != "local" || r.OwnerUserID != a.UserID || r.OwnerDeviceID != a.DeviceID || subtle.ConstantTimeCompare([]byte(r.LeaseToken), []byte(lease)) != 1 {
+	if (r.Kind != "implementation" && !r.LocalContinuation) || r.ExecutionLocation != "local" || r.OwnerUserID != a.UserID || r.OwnerDeviceID != a.DeviceID || subtle.ConstantTimeCompare([]byte(r.LeaseToken), []byte(lease)) != 1 {
 		return nil, ErrDenied
 	}
 	return s.requestControls(ctx, tx, r)

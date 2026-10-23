@@ -516,7 +516,7 @@ func corrupt(){malformed=true}
                     requesterUserId:scope.userId,ownerUserId:scope.userId,ownerDeviceId:assigned.ownerDeviceId,
                     permissionRevision:assigned.permissionRevision,revision:1,prompt:"Continue",model:"",effort:"",speed:"standard",state:"started",
                     leaseToken:UUID().uuidString,leaseUntil:Date().addingTimeInterval(120),createdAt:Date(),sources:[])
-                request.kind="chat";request.executionLocation="local";request.executionEpoch=assigned.executionEpoch
+                request.kind="chat";request.localContinuation=true;request.executionLocation="local";request.executionEpoch=assigned.executionEpoch
                 request.mode="implementation";request.permissions=finished.permissions
                 let first = CloudAttempt(id:request.id,scope:scope.key,request:request,localSessionId:assigned.localSessionId,
                     state:"running",startKey:UUID().uuidString,finishKey:UUID().uuidString)
@@ -525,13 +525,15 @@ func corrupt(){malformed=true}
                 await rejects("Old execution epoch launched") { _ = try await cache.reserveContinuation(session:moved,requestID:request.id,scope:scope,expectedEpoch:localEpoch) }
                 moved=assigned;moved.ownerDeviceId=UUID().uuidString
                 await rejects("Other device launched") { _ = try await cache.reserveContinuation(session:moved,requestID:request.id,scope:scope,expectedEpoch:localEpoch) }
-                for violation in ["lease","permissions","revision","epoch","restricted"] {
+                for violation in ["lease","permissions","revision","epoch","restricted","identity","continuation"] {
                     var invalid=first
                     switch violation {
                     case "lease": invalid.request.leaseUntil = Date().addingTimeInterval(-1)
                     case "permissions": invalid.request.permissions = ["sandbox":"unsupported"]
                     case "revision": invalid.request.permissionRevision += 1
                     case "epoch": invalid.request.executionEpoch! += 1
+                    case "identity": invalid.request.providerSessionId = UUID().uuidString
+                    case "continuation": invalid.request.localContinuation = false
                     default: invalid.request.contentRestricted = true
                     }
                     try await cache.saveWorkerAttempt(invalid,scope:scope,expectedEpoch:localEpoch)
@@ -562,6 +564,9 @@ func corrupt(){malformed=true}
                 try await cache.bindContinuation(sessionID:assigned.id,executionEpoch:assigned.executionEpoch!,requestID:request.id,providerSessionID:providerID,scope:scope,expectedEpoch:localEpoch)
                 try await cache.bindContinuation(sessionID:assigned.id,executionEpoch:assigned.executionEpoch!,requestID:request.id,providerSessionID:providerID,scope:scope,expectedEpoch:localEpoch)
                 await rejects("Conversation identity overwritten") { try await cache.bindContinuation(sessionID:assigned.id,executionEpoch:assigned.executionEpoch!,requestID:request.id,providerSessionID:UUID().uuidString,scope:scope,expectedEpoch:localEpoch) }
+                await rejects("Local provider identity accepted without server binding") { _ = try await cache.reserveContinuation(session:assigned,requestID:next.id,scope:scope,expectedEpoch:localEpoch) }
+                next.request.providerSessionId=providerID
+                try await cache.saveWorkerAttempt(next,scope:scope,expectedEpoch:localEpoch)
                 let followup = try await cache.reserveContinuation(session:assigned,requestID:next.id,scope:scope,expectedEpoch:localEpoch)
                 precondition(!followup.newSession && followup.providerSessionID == providerID && followup.binding.session.localSessionId == target.sessionID)
                 let reopened = try CampCache(directory:root)

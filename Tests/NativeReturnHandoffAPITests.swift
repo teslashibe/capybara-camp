@@ -20,6 +20,20 @@ private actor LostReturnResponses: CampAccountTransport {
     }
 }
 
+private actor LostContinuationEvent: CampPublishingTransport {
+    let api: CampHTTP
+    let token: String
+    var lost = false
+    init(api:CampHTTP,token:String) { self.api=api;self.token=token }
+    func perform(_ operation:CampPublication) async throws -> Data {
+        let data = try await api.data(operation.method,path:operation.path,body:operation.body,key:operation.key,token:token)
+        if operation.path.hasSuffix("/continuation-events") && !lost {
+            lost=true;throw URLError(.networkConnectionLost)
+        }
+        return data
+    }
+}
+
 @main struct NativeReturnHandoffAPITests {
     struct Fixture:Decodable {var url:String;var campId:String}
     struct Driver:Decodable {var token:String}
@@ -33,7 +47,7 @@ private actor LostReturnResponses: CampAccountTransport {
         catch CampCloudError.server(let status,let code){precondition(status==404 && code=="not_available",label)}
         catch{preconditionFailure("Unexpected authorization failure: \(error)")}
     }
-    static func main()async throws {
+    @MainActor static func main()async throws {
         guard let directory=ProcessInfo.processInfo.environment["CAMP_NATIVE_API_FIXTURE"],
               ProcessInfo.processInfo.environment["CAMP_NATIVE_FIXTURE_RETURN"]=="1" else {
             print("SKIP: run CAMP_NATIVE_FIXTURE_HISTORY=1 CAMP_NATIVE_FIXTURE_RETURN=1 tools/test-native-api.sh NativeReturnHandoffAPITests");return
@@ -137,6 +151,7 @@ private actor LostReturnResponses: CampAccountTransport {
             let replay = try await cache.adoptReturnHandoff(finished,scope:scope,expectedEpoch:epoch)
             precondition(replay == binding)
             let providerID = UUID().uuidString.lowercased()
+            let live = CloudLiveConversation()
             for turn in 0..<2 {
                 let queued = try CampWire.decoder().decode(CloudRequest.self,from:await api.data("POST",path:base+"/requests",
                     body:CampWire.body(["prompt":"Synthetic continuation admission", "model":"", "effort":"high", "speed":"standard", "sources":[]]),key:UUID().uuidString,token:token))
@@ -147,6 +162,7 @@ private actor LostReturnResponses: CampAccountTransport {
                 var started = try CampWire.decoder().decode(CloudRequest.self,from:await api.data("POST",path:requestBase+"/\(queued.id)/actions",
                     body:CampWire.body(["action":"start","lease_token":claimed.leaseToken!]),key:UUID().uuidString,token:token))
                 started.leaseToken = claimed.leaseToken
+                precondition(started.localContinuation == true && (turn == 0 || started.providerSessionId == providerID))
                 let attempt = CloudAttempt(id:started.id,scope:scope.key,request:started,localSessionId:binding.session.localSessionId,
                     state:"running",startKey:UUID().uuidString,finishKey:UUID().uuidString)
                 try await cache.saveWorkerAttempt(attempt,scope:scope,expectedEpoch:epoch)
@@ -158,10 +174,46 @@ private actor LostReturnResponses: CampAccountTransport {
                         providerSessionID:providerID,scope:scope,expectedEpoch:epoch)
                 } else { precondition(launch.providerSessionID == providerID) }
                 await rejects("Real request admitted twice") { _ = try await cache.reserveContinuation(session:current,requestID:started.id,scope:scope,expectedEpoch:epoch) }
-                // No model is invoked in this test. Finish the API fixture honestly.
+                let stream = CampLocalImplementationStream(request:started,scope:scope,epoch:epoch,cache:cache,transport:LostContinuationEvent(api:api,token:token))
+                if turn == 0 { try await stream.emit(CampWire.body(["type":"session","sessionID":providerID])) }
+                try await stream.emit(CampWire.body(["type":"started"]))
+                try await stream.emit(CampWire.body(["type":"settings","model":"fixture-actual-model","effort":"high","speed":"fast"]))
+                try await stream.emit(CampWire.body(["type":"text","text":"Synthetic continuation answer \(turn)"]))
+                if turn == 0 {
+                    let approvalID=UUID().uuidString.lowercased()
+                    try await stream.emit(CampWire.body(["type":"approval","id":approvalID,"kind":"file","title":"Synthetic edit","detail":"No file is edited by this test","questions":[],"canApprove":true,"acceptLabel":"Allow edit"]))
+                    live.watch(session:current,scope:scope,client:api,credential:auth)
+                    for _ in 0..<200 { if live.approvals.count == 1 { break }; try await Task.sleep(for:.milliseconds(10)) }
+                    precondition(live.head?.localContinuation == true && live.approvals.first?.id == approvalID && live.messages.last?.text == "Synthetic continuation answer 0")
+                    let waiting = try await api.get(CloudRequest.self,path:requestBase+"/"+started.id,token:token)
+                    let control = try CampWire.body(["id":UUID().uuidString.lowercased(),"approval_seq":waiting.streamSeq!,"control":["type":"approval","id":approvalID,"allow":true]])
+                    await denied("Teammate approved owner continuation") { _ = try await api.data("POST",path:requestBase+"/\(started.id)/controls",body:control,token:teammate.token) }
+                    _ = try await api.data("POST",path:requestBase+"/\(started.id)/controls",body:control,token:token)
+                    let controls = try CampWire.decoder().decode([LocalWorkerControl].self,from:await api.data("POST",path:requestBase+"/\(started.id)/local-controls",body:CampWire.body(["lease_token":claimed.leaseToken!]),token:token))
+                    precondition(controls.count == 1 && controls[0].control.id == approvalID)
+                    try await stream.emit(CampWire.body(["type":"approvalResolved","requestID":approvalID]))
+                }
+                try await stream.emit(CampWire.body(["type":"done"]))
+                // The stream is synthetic; no live model or project command runs.
+                let finishKey=UUID().uuidString
+                for _ in 0..<2 {
                 _ = try await api.data("POST",path:requestBase+"/\(queued.id)/actions",
-                    body:CampWire.body(["action":"finish","lease_token":claimed.leaseToken!,"outcome":"failed","evidence":"Synthetic admission test; no model was started"]),key:UUID().uuidString,token:token)
+                    body:CampWire.body(["action":"finish","lease_token":claimed.leaseToken!,"outcome":"completed","evidence":"Synthetic provider stream; no live model was started"]),key:finishKey,token:token)
+                }
             }
+            var retained:[CloudMessage]=[],before:Int64=0
+            for _ in 0..<4 {
+                let page=try await api.get(CloudTranscript.self,path:base+"/transcript?limit=200&before=\(before)",token:token)
+                retained=page.messages+retained
+                if !page.hasMore { break };before=page.before
+            }
+            precondition(retained.count == 264 && Set(retained.map(\.id)).count == 264)
+            precondition(retained.suffix(4).map(\.text) == ["Synthetic continuation admission","Synthetic continuation answer 0","Synthetic continuation admission","Synthetic continuation answer 1"])
+            let original=archive.conversations[0].messages
+            precondition(Array(retained.prefix(260)) == original)
+            live.acknowledge(retained)
+            precondition(live.messages.isEmpty && live.approvals.isEmpty)
+            live.stop()
             try await cache.clear(scope)
             print("PASS: real API return for \(session.provider), independent destination device, 510 history messages, lost-response recovery and retained permissions")
         }

@@ -29,6 +29,7 @@ type RequestInput struct {
 	Sources []SourceRef `json:"sources"`
 }
 type Request struct {
+	LocalContinuation    bool                        `json:"local_continuation,omitempty"`
 	ImplementationID     string                      `json:"implementation_id,omitempty"`
 	ProviderSessionID    string                      `json:"provider_session_id,omitempty"`
 	ExecutionContext     string                      `json:"execution_context,omitempty"`
@@ -79,12 +80,13 @@ type RequestAction struct {
 }
 
 const requestColumns = `r.id,r.camp_id,r.session_id,r.requester_user_id,r.owner_user_id,r.owner_device_id,r.permission_revision,r.revision,r.prompt,r.model,r.effort,r.speed,r.state,
- COALESCE(r.lease_token::text,''),r.lease_until,r.created_at,r.outcome_evidence,r.reason,r.kind,COALESCE(r.plan_id::text,''),COALESCE(r.plan_version,0),COALESCE(r.plan_step,-1),r.execution_location,r.execution_epoch,COALESCE(r.execution_workspace_id::text,''),r.execution_permissions,r.execution_mode,COALESCE(r.runner_grant_id::text,''),r.context_revision,r.stream_seq,COALESCE(r.implementation_id::text,'')`
+ COALESCE(r.lease_token::text,''),r.lease_until,r.created_at,r.outcome_evidence,r.reason,r.kind,COALESCE(r.plan_id::text,''),COALESCE(r.plan_version,0),COALESCE(r.plan_step,-1),r.execution_location,r.execution_epoch,COALESCE(r.execution_workspace_id::text,''),r.execution_permissions,r.execution_mode,COALESCE(r.runner_grant_id::text,''),r.context_revision,r.stream_seq,COALESCE(r.implementation_id::text,''),(` + localContinuationSQL + `)`
 
 func scanRequest(row rowScanner, extra ...any) (Request, error) {
 	r := Request{Sources: []SourceRef{}}
 	var permissions []byte
 	columns := []any{&r.ID, &r.CampID, &r.SessionID, &r.RequesterUserID, &r.OwnerUserID, &r.OwnerDeviceID, &r.PermissionRevision, &r.Revision, &r.Prompt, &r.Model, &r.Effort, &r.Speed, &r.State, &r.LeaseToken, &r.LeaseUntil, &r.CreatedAt, &r.Evidence, &r.Reason, &r.Kind, &r.PlanID, &r.PlanVersion, &r.PlanStep, &r.ExecutionLocation, &r.ExecutionEpoch, &r.ExecutionWorkspaceID, &permissions, &r.Mode, &r.RunnerGrantID, &r.ContextRevision, &r.StreamSeq, &r.ImplementationID}
+	columns = append(columns, &r.LocalContinuation)
 	err := row.Scan(append(columns, extra...)...)
 	if err == nil {
 		err = json.Unmarshal(permissions, &r.Permissions)
@@ -135,6 +137,12 @@ func loadRequest(ctx context.Context, tx pgx.Tx, campID, id string) (Request, er
 		}
 	}
 
+	if r.LocalContinuation {
+		if err = tx.QueryRow(ctx, `SELECT COALESCE(local_provider_session_id,'') FROM transfer_handoffs
+            WHERE session_id=$1 AND execution_epoch=$2 AND state='committed' AND local_profile_id IS NOT NULL`, r.SessionID, r.ExecutionEpoch).Scan(&r.ProviderSessionID); err != nil {
+			return r, err
+		}
+	}
 	return r, nil
 }
 
@@ -328,6 +336,9 @@ func (s *Store) enqueueRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, cam
 		if _, err = tx.Exec(ctx, `INSERT INTO request_sources(request_id,session_id,transcript_revision,permission_revision,message_ids) VALUES($1,$2,$3,$4,$5)`, r.ID, ref.SessionID, ref.TranscriptRevision, ref.PermissionRevision, ref.MessageIDs); err != nil {
 			return Request{}, err
 		}
+	}
+	if r, err = loadRequest(ctx, tx, campID, r.ID); err != nil {
+		return r, err
 	}
 	if err = emitRequest(ctx, tx, a, r, "request.created", false); err != nil {
 		return r, err
@@ -743,7 +754,7 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 			return r, err
 		}
 	}
-	if r.Kind == "implementation" && terminal && input.Outcome == "completed" && r.ProviderSessionID == "" {
+	if (r.Kind == "implementation" || r.LocalContinuation) && terminal && input.Outcome == "completed" && r.ProviderSessionID == "" {
 		return r, ErrTransition
 	}
 	if r.Kind == "planning" && terminal {
@@ -751,17 +762,17 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 			return r, err
 		}
 	}
-	if r.ExecutionLocation == "cloud" && input.Action != "heartbeat" {
+	if (r.ExecutionLocation == "cloud" || r.LocalContinuation) && input.Action != "heartbeat" {
 		if err = s.cloudActivity(ctx, tx, r); err != nil {
 			return r, err
 		}
 	}
-	if r.ExecutionLocation == "cloud" && terminal {
+	if (r.ExecutionLocation == "cloud" || r.LocalContinuation) && terminal {
 		if err = s.publishRunnerTranscript(ctx, tx, r); err != nil {
 			return r, err
 		}
 	}
-	if terminal && (r.ExecutionLocation == "cloud" || r.Kind == "implementation") {
+	if terminal && (r.ExecutionLocation == "cloud" || r.Kind == "implementation" || r.LocalContinuation) {
 		if _, err = tx.Exec(ctx, `UPDATE request_controls SET encrypted_input=NULL,state='resolved' WHERE request_id=$1`, r.ID); err != nil {
 			return r, err
 		}
@@ -866,7 +877,7 @@ func (s *Store) reapCamp(ctx context.Context, tx pgx.Tx, campID string) error {
 		return err
 	}
 	for _, r := range results {
-		if r.Kind == "implementation" {
+		if r.Kind == "implementation" || r.ExecutionLocation == "local" {
 			r, err = loadRequest(ctx, tx, campID, r.ID)
 			if err != nil {
 				return err

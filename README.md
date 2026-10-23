@@ -325,8 +325,15 @@ binding. The Camp ticket keeps its identity while the binding records the actual
 CLI conversation ID. A durable launch reservation prevents replaying the first
 submission after a crash; an unknown outcome requires review. The native
 transport can persist the ID before forwarding the session event and rejects
-malformed or conflicting identities. Worker launch/stream integration is still
+malformed or conflicting identities. Worker launch and review-screen integration are still
 required before this becomes a runnable transfer in the app.
+Schema 37 lets an admitted continuation on the assigned Mac use the existing
+ordered stream, steering and approval paths. It records the provider conversation
+on the committed handoff and appends new messages after imported history on
+completion. Replayed events and completion acknowledgements do not duplicate
+messages. Ordinary transcript publication cannot replace that history or publish
+the bound provider conversation as another ticket. The native stream reader
+recognizes these local turns and hides their temporary output once saved.
 The review screen integration, missing remote commits, attachments and connecting the
 handoff to actual local continuation remain part of the unfinished transfer flow.
 The native publisher includes saved subagent histories with a shared or private

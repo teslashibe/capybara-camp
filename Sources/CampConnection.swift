@@ -534,7 +534,7 @@ import SwiftUI
             return implementation.sessionId == session.id && implementation.permissionRevision == session.permissionRevision &&
                 implementation.ownerUserId == credential?.actor.userId && conversation.watchesImplementation(implementation, scope: scope)
         }
-        return session.executionLocation == "cloud" && conversation === live && live.sessionID == session.id && live.head?.id == head.id
+        return (session.executionLocation == "cloud" || head.localContinuation == true) && conversation === live && live.sessionID == session.id && live.head?.id == head.id
     }
     func queueControl(session: CloudSession, head: CloudStreamHead, value: CloudControlEnvelope, implementation: CloudRequest? = nil, conversation: CloudLiveConversation? = nil) async throws {
         guard let scope, let cache, session.campId == scope.campId, session.ownerUserId == credential?.actor.userId,
@@ -556,7 +556,7 @@ import SwiftUI
     }
     func cancelRunning(session: CloudSession, head: CloudStreamHead) async {
         guard let scope, let cache, session.campId == scope.campId, session.ownerUserId == credential?.actor.userId,
-              session.executionLocation == "cloud", live.sessionID == session.id, live.head?.id == head.id, head.running else { return }
+              (session.executionLocation == "cloud" || head.localContinuation == true), live.sessionID == session.id, live.head?.id == head.id, head.running else { return }
         let token = generation
         do {
             _ = try await cache.enqueue(scope: scope, method: "POST", path: "/v1/camps/\(scope.campId)/requests/\(head.id)/actions", body: CampWire.body(["action":"cancel"]), expectedEpoch: cacheEpoch)

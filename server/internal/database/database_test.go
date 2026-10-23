@@ -208,6 +208,34 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,'planning',$9,0)`, localHandoff, transfer, camp, session, id, device, profile, uuid.NewString(), strings.Repeat("f", 64)); err != nil {
 		t.Fatal(err)
 	}
+	continuedID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `UPDATE transfer_handoffs SET state='committed',claim_id=$2,claim_device_id=$3,ack_hash=$4,
+        commit_nonce=$2,commit_permissions='{}',commit_approved=false,commit_requested_at=now(),commit_hash=$4,execution_epoch=2,
+        local_provider_session_id=$5 WHERE id=$1`, localHandoff, uuid.NewString(), device, bytes.Repeat([]byte{25}, 32), continuedID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 36); err == nil {
+		t.Fatal("Downgrade discarded provider continuation identity")
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal("Refused continuation downgrade changed readiness", err)
+	}
+	var continued string
+	if err = pool.QueryRow(ctx, `SELECT local_provider_session_id FROM transfer_handoffs WHERE id=$1`, localHandoff).Scan(&continued); err != nil || continued != continuedID {
+		t.Fatal("Continuation identity lost", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE transfer_handoffs SET local_provider_session_id=NULL WHERE id=$1`, localHandoff); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE prompt_requests SET execution_epoch=2,stream_seq=1 WHERE id=$1`, request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 36); err == nil {
+		t.Fatal("Downgrade discarded unbound continuation stream")
+	}
+	if _, err = pool.Exec(ctx, `UPDATE prompt_requests SET execution_epoch=1,stream_seq=0 WHERE id=$1`, request); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = provider.DownTo(ctx, 34); err == nil {
 		t.Fatal("Downgrade discarded local destination receipt")
 	}
@@ -239,6 +267,9 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	}
 	if _, err = provider.DownTo(ctx, 35); err == nil {
 		t.Fatal("Downgrade discarded export grant replay fence")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal("Reapply empty continuation migration", err)
 	}
 	if err = Ready(ctx, pool); err != nil {
 		t.Fatal("Refused grant downgrade changed readiness", err)

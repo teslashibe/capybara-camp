@@ -286,7 +286,9 @@ actor CampCache {
                   attempt.state == "running", attempt.continuationReserved != true else { throw CampCloudError.invalidResponse }
             let request = attempt.request
             guard request.id == requestID, UUID(uuidString: requestID) != nil, request.supportedWork,
-                  request.kind == "chat", request.campId == scope.campId, request.sessionId == session.id,
+                  request.kind == "chat", request.localContinuation == true,
+                  (request.providerSessionId ?? "") == (binding.providerSessionID ?? ""),
+                  request.campId == scope.campId, request.sessionId == session.id,
                   request.ownerUserId == scope.userId, request.ownerDeviceId == session.ownerDeviceId,
                   request.executionLocation == "local", request.executionEpoch == session.executionEpoch,
                   request.permissionRevision == session.permissionRevision,
@@ -626,7 +628,7 @@ actor CampCache {
             if let old = try workerAttempt(value.id, scope: scope), old.continuationReserved == true {
                 value.continuationReserved = true
             }
-            if let old = try workerAttempt(value.id, scope: scope), old.request.isImplementation {
+            if let old = try workerAttempt(value.id, scope: scope), old.request.isStreamedLocal {
                 value.pendingStream = old.pendingStream
                 value.request.streamSeq = old.request.streamSeq
                 value.deliveredControls = old.deliveredControls
@@ -652,7 +654,7 @@ actor CampCache {
     func stageWorkerEvent(_ id: String, event: Data, scope: CloudScope, expectedEpoch: Int64) throws -> Data {
         try transaction {
             try checkEpoch(scope, expectedEpoch)
-            guard var attempt = try workerAttempt(id, scope: scope), attempt.request.isImplementation,
+            guard var attempt = try workerAttempt(id, scope: scope), attempt.request.isStreamedLocal,
                   attempt.state == "running", event.count <= 128 << 10 else { throw CampCloudError.invalidResponse }
             if let pending = attempt.pendingStream {
                 guard let value = try JSONSerialization.jsonObject(with: pending) as? [String: Any],

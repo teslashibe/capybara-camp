@@ -8,6 +8,7 @@ struct CloudStreamHead: Codable, Equatable, Sendable {
     var model: String
     var effort: String
     var speed: String
+    var localContinuation: Bool? = nil
     var running: Bool { ["claimed", "started", "cancel_requested"].contains(state) }
 }
 struct CloudStreamEvent: Decodable, Sendable {
@@ -115,7 +116,7 @@ struct CloudStreamPage: Decodable, Sendable { var events: [CloudStreamEvent]; va
     func acknowledge(_ values: [CloudMessage]) {
         committed = Set(values.compactMap { value in
             let parts = value.id.split(separator: ":")
-            return parts.count == 3 && parts[0] == "cloud" ? String(parts[1]) : nil
+            return parts.count == 3 && (parts[0] == "cloud" || parts[0] == "camp") ? String(parts[1]) : nil
         })
         publish()
     }

@@ -40,7 +40,8 @@ import Foundation
     func flush(_ body: Data) async throws {
         struct Ack: Decodable { var seq: Int64 }
         guard let value = try JSONSerialization.jsonObject(with: body) as? [String: Any], let seq = (value["seq"] as? NSNumber)?.int64Value else { throw CampCloudError.invalidResponse }
-        let command = CampPublication(kind: "implementation-stream", method: "POST", path: "/v1/camps/\(scope.campId)/requests/\(request.id)/implementation-events", body: body)
+        let endpoint = request.localContinuation == true ? "continuation-events" : "implementation-events"
+        let command = CampPublication(kind: "implementation-stream", method: "POST", path: "/v1/camps/\(scope.campId)/requests/\(request.id)/\(endpoint)", body: body)
         for retry in 0..<3 {
             guard !stopped else { throw CancellationError() }
             do {

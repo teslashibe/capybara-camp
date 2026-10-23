@@ -97,6 +97,7 @@ struct CloudRequest: Codable, Identifiable, Equatable, Sendable {
     var streamSeq: Int64? = nil
     var executionEpoch: Int64? = nil
     var quotedSources: [ImportedPlanningSource]? = nil
+    var localContinuation: Bool? = nil
     var quotedContextDigest: String? = nil
     var isPlanning: Bool { kind == "planning" }
     var implementationId: String? = nil
@@ -105,6 +106,7 @@ struct CloudRequest: Codable, Identifiable, Equatable, Sendable {
     var permissions: [String: String]? = nil
     var mode: String? = nil
     var isImplementation: Bool { kind == "implementation" }
+    var isStreamedLocal: Bool { isImplementation || localContinuation == true }
     var isIsolatedWork: Bool { isPlanning || isImplementation }
     var permissionSettings: PermissionSettings? {
         guard let p = permissions, Set(p.keys).isSubset(of: ["profile", "sandbox", "approval", "reviewer", "claudeMode"]) else { return nil }
