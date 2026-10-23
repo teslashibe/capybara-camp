@@ -71,7 +71,7 @@ func (s *Store) executionTarget(ctx context.Context, tx pgx.Tx, session Session)
  JOIN git_connections g ON g.id=w.git_connection_id
  JOIN projects j ON j.id=w.project_id
  WHERE s.id=$1 AND w.camp_id=s.camp_id AND w.session_id=s.id AND w.owner_user_id=s.owner_user_id AND w.project_id=s.project_id
- AND w.state='ready' AND w.project_revision=j.revision AND NOT j.archived
+ AND w.state='ready' AND w.project_revision=j.authority_revision AND NOT j.archived
  AND p.epoch=w.provider_epoch AND p.state='connected' AND (p.credential_expires_at IS NULL OR p.credential_expires_at>clock_timestamp())
  AND g.epoch=w.git_epoch AND g.state='connected'`, session.ID).Scan(&raw, &purpose)
 	if errors.Is(err, pgx.ErrNoRows) {

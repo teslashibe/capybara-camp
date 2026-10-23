@@ -42,6 +42,8 @@ type Project struct {
 	Archived     bool     `json:"archived"`
 	Inbox        bool     `json:"inbox"`
 	Repositories []string `json:"repositories"`
+	// Changes only when repository links or archiving change; workspaces pin it.
+	AuthorityRevision int64 `json:"-"`
 }
 type Member struct {
 	UserID string `json:"user_id"`

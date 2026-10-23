@@ -29,7 +29,7 @@ func (g *GitStore) NextWorkspaceExport(ctx context.Context, token string) (*Work
  WHERE w.provider_installation_id=$1 AND w.provider_epoch=$2 AND e.state IN ('pending','claimed') AND e.expires_at>clock_timestamp()
  AND w.state='ready' AND w.revision=e.workspace_revision AND s.execution_location='cloud' AND s.execution_workspace_id=w.id
  AND s.execution_epoch=e.source_epoch AND s.revision=e.source_revision AND s.transcript_revision=e.transcript_revision AND s.permission_revision=e.permission_revision
- AND `+workspaceSourceCurrentSQL+` AND s.project_id=w.project_id AND p.revision=w.project_revision AND NOT p.archived
+ AND `+workspaceSourceCurrentSQL+` AND s.project_id=w.project_id AND p.authority_revision=w.project_revision AND NOT p.archived
  AND g.state='connected' AND g.epoch=w.git_epoch AND m.role<>'viewer'
  AND NOT EXISTS(SELECT 1 FROM prompt_requests r WHERE r.session_id=s.id AND r.state IN ('queued','claimed','started','cancel_requested','outcome_unknown'))
  ORDER BY e.created_at,e.id LIMIT 1`, state.InstallationID, state.Epoch).Scan(&id)

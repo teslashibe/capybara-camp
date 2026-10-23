@@ -184,7 +184,7 @@ func TestWorkspaceExportInspectionExpiryAndSourceChanges(t *testing.T) {
 			case "git":
 				_, err = g.store.pool.Exec(t.Context(), `UPDATE git_connections SET epoch=epoch+1 WHERE id=$1`, w.GitConnectionID)
 			case "project":
-				_, err = g.store.pool.Exec(t.Context(), `UPDATE projects SET revision=revision+1 WHERE id=$1`, w.ProjectID)
+				_, err = g.store.pool.Exec(t.Context(), `UPDATE projects SET authority_revision=authority_revision+1 WHERE id=$1`, w.ProjectID)
 			case "account":
 				_, err = g.store.pool.Exec(t.Context(), `UPDATE provider_installations SET epoch=epoch+1 WHERE id=$1`, w.ProviderInstallationID)
 			}

@@ -3,6 +3,7 @@ package camp
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -441,5 +442,79 @@ func TestControllerDefersGrantRotationDuringCloudTurn(t *testing.T) {
 	retained, err := s.EnsureControllerGrant(t.Context(), account, 4)
 	if err != nil || retained.ID != managed.ID {
 		t.Fatal("controller rotated a live execution grant", err)
+	}
+}
+
+func TestProjectRenameKeepsAssignedCloudWorkspace(t *testing.T) {
+	g, w, grant, owner, input := executionFixture(t, "planning")
+	s := g.store
+	if _, err := s.AssignExecution(t.Context(), owner, w.CampID, w.SessionID, uuid.NewString(), input); err != nil {
+		t.Fatal(err)
+	}
+	project, err := readProjectForTest(t, s, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed, err := s.UpdateProject(t.Context(), owner, w.CampID, w.ProjectID, uuid.NewString(), ProjectUpdate{Name: "Renamed project", Repositories: project.Repositories, ExpectedRevision: project.Revision})
+	if err != nil || renamed.Revision == project.Revision {
+		t.Fatal("rename did not change the project revision", err)
+	}
+	if err = g.ReapWorkspaces(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if target, err := s.Execution(t.Context(), owner, w.CampID, w.SessionID); err != nil || !target.Available {
+		t.Fatal("rename made the assigned workspace unavailable", target, err)
+	}
+	if _, err = s.CreateRequest(t.Context(), owner, w.CampID, w.SessionID, uuid.NewString(), RequestInput{Prompt: "After rename"}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := g.ClaimRunnerRequest(t.Context(), grant.Token, w.ID, uuid.NewString()); err != nil || claimed == nil {
+		t.Fatal("rename blocked the runner", claimed, err)
+	}
+	// Changing the repository links still fences the workspace.
+	if _, err = s.UpdateProject(t.Context(), owner, w.CampID, w.ProjectID, uuid.NewString(), ProjectUpdate{Name: renamed.Name, Repositories: []string{}, ExpectedRevision: renamed.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	if err = g.ReapWorkspaces(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if fenced, err := g.Workspace(t.Context(), owner, w.CampID, w.ID); err != nil || fenced.State != "failed" {
+		t.Fatal("changed repository links did not fence the workspace", fenced.State, err)
+	}
+}
+
+func readProjectForTest(t *testing.T, s *Store, w Workspace) (Project, error) {
+	t.Helper()
+	tx, err := s.pool.Begin(t.Context())
+	if err != nil {
+		return Project{}, err
+	}
+	defer tx.Rollback(t.Context())
+	return readProject(t.Context(), tx, w.CampID, w.ProjectID)
+}
+
+func TestCloudSessionCannotBeAdopted(t *testing.T) {
+	g, w, _, owner, input := executionFixture(t, "planning")
+	s := g.store
+	if _, err := s.AssignExecution(t.Context(), owner, w.CampID, w.SessionID, uuid.NewString(), input); err != nil {
+		t.Fatal(err)
+	}
+	device := auth.Actor{UserID: owner.UserID, DeviceID: uuid.NewString(), Email: owner.Email, Name: owner.Name}
+	if _, err := s.pool.Exec(t.Context(), `INSERT INTO devices(id,user_id,name,token_hash,expires_at) VALUES($1,$2,'New Mac',$3,now()+interval '1 day')`, device.DeviceID, device.UserID, auth.HashToken(device.DeviceID)); err != nil {
+		t.Fatal(err)
+	}
+	session, err := s.Session(t.Context(), owner, w.CampID, w.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := s.RegisterProfile(t.Context(), device, uuid.NewString(), ProfileInput{LocalID: strings.Repeat("c", 64), Provider: session.Provider, Label: "New Mac"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AdoptSession(t.Context(), device, w.CampID, w.SessionID, uuid.NewString(), OwnershipInput{ProfileID: profile.ID, ExpectedRevision: session.Revision}); !errors.Is(err, ErrTransition) {
+		t.Fatal("cloud session was adopted", err)
+	}
+	if after, err := s.Session(t.Context(), owner, w.CampID, w.SessionID); err != nil || after.ExternalOwner {
+		t.Fatal("adoption marked the cloud session externally owned", err)
 	}
 }

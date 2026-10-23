@@ -171,7 +171,7 @@ func (g *GitStore) CreateWorkspaceExport(ctx context.Context, a auth.Actor, camp
 	if err != nil {
 		return e, err
 	}
-	if authority.git.Epoch != w.GitEpoch || authority.account.Epoch != w.ProviderEpoch || authority.project.Revision != w.ProjectRevision {
+	if authority.git.Epoch != w.GitEpoch || authority.account.Epoch != w.ProviderEpoch || authority.project.AuthorityRevision != w.ProjectRevision {
 		return e, ErrRevision
 	}
 	var count int
@@ -318,7 +318,7 @@ func (g *GitStore) authorizedWorkspaceExport(ctx context.Context, tx pgx.Tx, a a
 	if err != nil {
 		return e, workspaceLease{}, err
 	}
-	if authority.git.Epoch != w.GitEpoch || authority.account.Epoch != w.ProviderEpoch || authority.project.ID != w.ProjectID || authority.project.Revision != w.ProjectRevision {
+	if authority.git.Epoch != w.GitEpoch || authority.account.Epoch != w.ProviderEpoch || authority.project.ID != w.ProjectID || authority.project.AuthorityRevision != w.ProjectRevision {
 		return e, workspaceLease{}, ErrRevision
 	}
 	l := workspaceLease{value: w}

@@ -188,30 +188,9 @@ func (g *GitStore) runnerTurn(ctx context.Context, token, workspaceID, id string
 		}
 	}
 	for index, ref := range refs {
-		var messages []Message
-		if len(ref.MessageIDs) > 0 {
-			messages, err = readContextMessages(ctx, tx, ref)
-		} else {
-			rows, e := tx.Query(ctx, `SELECT m.local_id,m.ordinal,v.role,v.text,v.removed,v.revision,v.model,v.effort,v.speed,v.attachments FROM messages m CROSS JOIN LATERAL(SELECT * FROM message_revisions WHERE session_id=m.session_id AND local_id=m.local_id AND revision<=$2 ORDER BY revision DESC LIMIT 1) v WHERE m.session_id=$1 AND NOT v.removed ORDER BY m.ordinal LIMIT 121`, ref.SessionID, ref.TranscriptRevision)
-			if e != nil {
-				return RunnerTurn{}, e
-			}
-			for rows.Next() {
-				var m Message
-				if e = rows.Scan(&m.ID, &m.Ordinal, &m.Role, &m.Text, &m.Removed, &m.Revision, &m.Model, &m.Effort, &m.Speed, &m.Attachments); e != nil {
-					rows.Close()
-					return RunnerTurn{}, e
-				}
-				messages = append(messages, m)
-			}
-			err = rows.Err()
-			rows.Close()
-		}
+		messages, err := contextRefMessages(ctx, tx, ref)
 		if err != nil {
 			return RunnerTurn{}, err
-		}
-		if len(messages) > 120 {
-			return RunnerTurn{}, ErrInput
 		}
 		if len(messages) == 0 {
 			continue
@@ -242,6 +221,34 @@ func (g *GitStore) runnerTurn(ctx context.Context, token, workspaceID, id string
 	}
 	contextJSON, _ := json.Marshal(sources)
 	return RunnerTurn{Request: r, Context: contextJSON, ProviderSessionID: providerSession, History: history}, nil
+}
+
+// contextRefMessages reads one source as a turn sends it: the selected
+// messages, or the whole session up to 120 messages at the pinned revision.
+func contextRefMessages(ctx context.Context, tx pgx.Tx, ref SourceRef) ([]Message, error) {
+	if len(ref.MessageIDs) > 0 {
+		return readContextMessages(ctx, tx, ref)
+	}
+	rows, err := tx.Query(ctx, `SELECT m.local_id,m.ordinal,v.role,v.text,v.removed,v.revision,v.model,v.effort,v.speed,v.attachments FROM messages m CROSS JOIN LATERAL(SELECT * FROM message_revisions WHERE session_id=m.session_id AND local_id=m.local_id AND revision<=$2 ORDER BY revision DESC LIMIT 1) v WHERE m.session_id=$1 AND NOT v.removed ORDER BY m.ordinal LIMIT 121`, ref.SessionID, ref.TranscriptRevision)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var messages []Message
+	for rows.Next() {
+		var m Message
+		if err = rows.Scan(&m.ID, &m.Ordinal, &m.Role, &m.Text, &m.Removed, &m.Revision, &m.Model, &m.Effort, &m.Speed, &m.Attachments); err != nil {
+			return nil, err
+		}
+		messages = append(messages, m)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(messages) > 120 {
+		return nil, ErrInput
+	}
+	return messages, nil
 }
 
 func validStreamEvent(raw json.RawMessage) (map[string]any, []byte, error) {

@@ -55,7 +55,9 @@ func (s *Store) AdoptSession(ctx context.Context, a auth.Actor, campID, id, key 
 	if !profileAllowed {
 		return current, ErrDenied
 	}
-	if active || current.ExternalOwner || current.State == "running" {
+	// A cloud session is run by its assigned runner. Adoption would set an
+	// external owner that no cloud path can clear.
+	if active || current.ExternalOwner || current.State == "running" || current.ExecutionLocation == "cloud" {
 		return current, ErrTransition
 	}
 	if _, err = tx.Exec(ctx, `UPDATE sessions SET profile_id=$2,owner_device_id=$3,revision=revision+1,permission_revision=permission_revision+1,external_owner=true,updated_at=now() WHERE id=$1`, id, input.ProfileID, a.DeviceID); err != nil {

@@ -171,7 +171,7 @@ func (s *Store) validateHandoff(ctx context.Context, tx pgx.Tx, a auth.Actor, h 
 		return t, ErrRevision
 	}
 	var allowed bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM git_connections g JOIN projects p ON p.id=$4 WHERE g.id=$1 AND g.owner_user_id=$2 AND g.state='connected' AND g.epoch=$3 AND p.camp_id=$5 AND p.revision=$6 AND NOT p.archived)`, w.GitConnectionID, a.UserID, w.GitEpoch, w.ProjectID, h.CampID, w.ProjectRevision).Scan(&allowed); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM git_connections g JOIN projects p ON p.id=$4 WHERE g.id=$1 AND g.owner_user_id=$2 AND g.state='connected' AND g.epoch=$3 AND p.camp_id=$5 AND p.authority_revision=$6 AND NOT p.archived)`, w.GitConnectionID, a.UserID, w.GitEpoch, w.ProjectID, h.CampID, w.ProjectRevision).Scan(&allowed); err != nil {
 		return t, err
 	}
 	if !allowed {

@@ -56,7 +56,7 @@ func TestPlanningSourcesAreOwnerScopedAndRequireCurrentAssignments(t *testing.T)
 		{"expired provider", `UPDATE provider_installations SET credential_expires_at=now()-interval '1 minute' WHERE id=$1`, `UPDATE provider_installations SET credential_expires_at=NULL WHERE id=$1`, w.ProviderInstallationID},
 		{"changed provider", `UPDATE provider_installations SET epoch=epoch+1 WHERE id=$1`, `UPDATE provider_installations SET epoch=epoch-1 WHERE id=$1`, w.ProviderInstallationID},
 		{"changed Git login", `UPDATE git_connections SET epoch=epoch+1 WHERE id=$1`, `UPDATE git_connections SET epoch=epoch-1 WHERE id=$1`, w.GitConnectionID},
-		{"changed project", `UPDATE projects SET revision=revision+1 WHERE id=$1`, `UPDATE projects SET revision=revision-1 WHERE id=$1`, w.ProjectID},
+		{"changed project links", `UPDATE projects SET authority_revision=authority_revision+1 WHERE id=$1`, `UPDATE projects SET authority_revision=authority_revision-1 WHERE id=$1`, w.ProjectID},
 		{"archived project", `UPDATE projects SET archived=true WHERE id=$1`, `UPDATE projects SET archived=false WHERE id=$1`, w.ProjectID},
 	} {
 		t.Run(change.name, func(t *testing.T) {

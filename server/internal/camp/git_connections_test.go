@@ -23,6 +23,7 @@ type fixtureGit struct {
 	started                                     chan struct{}
 	proceed                                     chan struct{}
 	refreshError                                error
+	userError                                   error
 }
 
 func (f *fixtureGit) AuthorizeURL(state, verifier string) string {
@@ -65,6 +66,9 @@ func (f *fixtureGit) Refresh(ctx context.Context, c gitprovider.Credentials) (gi
 func (f *fixtureGit) User(ctx context.Context, token string) (gitprovider.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.userError != nil {
+		return gitprovider.User{}, f.userError
+	}
 	return gitprovider.User{ID: f.user, Login: "fixture-user"}, nil
 }
 func (f *fixtureGit) Revoke(context.Context, gitprovider.Credentials) error {
@@ -278,6 +282,30 @@ func TestGitAmbiguousRefreshRequiresNewConsent(t *testing.T) {
 	status, err := g.Status(ctx, a[0], c.ID)
 	if err != nil || status.Connection.State != "needs_login" {
 		t.Fatal("ambiguous refresh not visible", err)
+	}
+}
+
+func TestGitRefreshKeepsCredentialsWhenIdentityCheckIsUnavailable(t *testing.T) {
+	g, f, a := gitFixture(t)
+	ctx := t.Context()
+	c := connectGit(t, g, a[0])
+	setGitExpiry(t, g, c)
+	f.mu.Lock()
+	f.userError = gitprovider.ErrUnavailable
+	f.mu.Unlock()
+	if _, err := g.Installations(ctx, a[0], c.ID, 1); err != nil {
+		t.Fatal("a brief identity failure discarded refreshed credentials", err)
+	}
+	status, err := g.Status(ctx, a[0], c.ID)
+	if err != nil || status.Connection.State != "connected" || status.Connection.Epoch != c.Epoch {
+		t.Fatal("connection was forced to sign in again", status.Connection.State, err)
+	}
+	f.mu.Lock()
+	f.userError = gitprovider.ErrAuthorization
+	f.mu.Unlock()
+	setGitExpiry(t, g, c)
+	if _, err = g.Installations(ctx, a[0], c.ID, 1); !errors.Is(err, gitprovider.ErrAuthorization) {
+		t.Fatal("a rejected token kept the connection", err)
 	}
 }
 

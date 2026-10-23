@@ -669,6 +669,9 @@ func (s *Store) advancePlanning(ctx context.Context, tx pgx.Tx, p PlanningTicket
 		if _, err = s.executionTarget(ctx, tx, session); err != nil {
 			return err
 		}
+		if err = requireUnheldSession(ctx, tx, session.ID); err != nil {
+			return err
+		}
 	}
 	for _, ordinal := range next {
 		if err := s.enqueuePlanningStep(ctx, tx, p, ordinal); err != nil {
@@ -897,7 +900,7 @@ func (s *Store) planningRequestFinished(ctx context.Context, tx pgx.Tx, a auth.A
 				return err
 			}
 		} else if err = s.advancePlanning(ctx, tx, p); err != nil {
-			if !errors.Is(err, ErrDenied) && !errors.Is(err, ErrInput) && !errors.Is(err, ErrRevision) && !errors.Is(err, ErrTransition) {
+			if !errors.Is(err, ErrDenied) && !errors.Is(err, ErrInput) && !errors.Is(err, ErrRevision) && !errors.Is(err, ErrTransition) && !errors.Is(err, ErrTransferHeld) {
 				return err
 			}
 			if _, err = tx.Exec(ctx, `UPDATE planning_versions SET state='failed' WHERE plan_id=$1 AND version=$2`, p.ID, p.Version.Version); err != nil {
@@ -908,8 +911,12 @@ func (s *Store) planningRequestFinished(ctx context.Context, tx pgx.Tx, a auth.A
 			}
 		}
 	}
-	if _, err = tx.Exec(ctx, `UPDATE planning_tickets SET revision=revision+1,updated_at=now() WHERE id=$1`, p.ID); err != nil {
-		return err
+	// A late result from a superseded version keeps its step output but must
+	// not change the active ticket, which consent and dispatch are bound to.
+	if p.ActiveVersion == r.PlanVersion {
+		if _, err = tx.Exec(ctx, `UPDATE planning_tickets SET revision=revision+1,updated_at=now() WHERE id=$1`, p.ID); err != nil {
+			return err
+		}
 	}
 	p, err = s.loadPlanning(ctx, tx, creator, r.CampID, r.PlanID, r.PlanVersion)
 	if err != nil {

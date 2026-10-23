@@ -145,7 +145,7 @@ retain their referenced bodies. A queued publication whose upload has expired
 must upload the original bytes again before its descriptors can be committed.
 
 Stop schema-39 writers, back up the database and encryption key, run the existing
-migration command, and start the schema-41 server. Readiness requires schema 41.
+migration command, and start the current server (see `SchemaVersion`).
 Existing uploads receive a fresh seven-day window on upgrade. Downgrading to 39
 stops expiry cleanup and retains the bodies; stop schema-40 processes before the
 downgrade. Downgrade below 39 refuses while any attachment blob or message

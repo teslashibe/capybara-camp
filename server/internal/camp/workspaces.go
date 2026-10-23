@@ -294,7 +294,7 @@ func (g *GitStore) createWorkspace(ctx context.Context, a auth.Actor, campID, se
  git_connection_id,git_epoch,github_user_id,github_login,github_installation_id,repository_id,repository_name,requested_ref,base_commit,branch,purpose,source_revision,project_revision,installation_page,repository_page,transfer_id,remote_base_commit)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,NULLIF($24,'')::uuid,NULLIF($25,''))
  ON CONFLICT DO NOTHING`, id, campID, sessionID, after.project.ID, a.UserID, after.account.ID, after.account.InstallationID, after.account.Epoch,
-		after.git.ID, after.git.Epoch, after.git.GitHubUserID, after.git.Login, installation.ID, repository.ID, repository.FullName, ref, baseCommit, "camp/"+sessionID+"/"+id, input.Purpose, after.session.Revision, after.project.Revision, input.InstallationPage, input.RepositoryPage, transferID, reviewed.RemoteBaseCommit)
+		after.git.ID, after.git.Epoch, after.git.GitHubUserID, after.git.Login, installation.ID, repository.ID, repository.FullName, ref, baseCommit, "camp/"+sessionID+"/"+id, input.Purpose, after.session.Revision, after.project.AuthorityRevision, input.InstallationPage, input.RepositoryPage, transferID, reviewed.RemoteBaseCommit)
 	if err != nil {
 		return Workspace{}, err
 	}

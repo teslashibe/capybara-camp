@@ -226,7 +226,7 @@ func (g *GitStore) ReapWorkspaces(ctx context.Context) error {
 	rows, err := g.store.pool.Query(ctx, `SELECT w.id,w.camp_id,w.owner_user_id FROM ticket_workspaces w
  JOIN provider_installations p ON p.id=w.provider_installation_id JOIN git_connections g ON g.id=w.git_connection_id JOIN sessions s ON s.id=w.session_id JOIN projects j ON j.id=w.project_id
  LEFT JOIN runner_grants r ON r.id=w.claim_grant_id LEFT JOIN memberships m ON m.camp_id=w.camp_id AND m.user_id=w.owner_user_id
- WHERE w.state IN ('queued','preparing','ready') AND (p.state<>'connected' OR p.epoch<>w.provider_epoch OR p.credential_expires_at<=clock_timestamp() OR g.state<>'connected' OR g.epoch<>w.git_epoch OR m.role IS NULL OR m.role='viewer' OR NOT `+workspaceSourceCurrentSQL+` OR s.project_id<>w.project_id OR j.revision<>w.project_revision OR j.archived
+ WHERE w.state IN ('queued','preparing','ready') AND (p.state<>'connected' OR p.epoch<>w.provider_epoch OR p.credential_expires_at<=clock_timestamp() OR g.state<>'connected' OR g.epoch<>w.git_epoch OR m.role IS NULL OR m.role='viewer' OR NOT `+workspaceSourceCurrentSQL+` OR s.project_id<>w.project_id OR j.authority_revision<>w.project_revision OR j.archived
  OR NOT `+validWorkspaceTransferSQL+`
  OR (w.state='preparing' AND (w.lease_until<=clock_timestamp() OR w.prepare_deadline<=clock_timestamp() OR r.revoked_at IS NOT NULL OR r.expires_at<=clock_timestamp()))) ORDER BY w.created_at LIMIT 32`)
 	if err != nil {
@@ -269,7 +269,7 @@ func (g *GitStore) reapWorkspace(ctx context.Context, id, campID, owner string) 
 	err = tx.QueryRow(ctx, `SELECT w.state,CASE WHEN w.state='preparing' AND (w.lease_until<=clock_timestamp() OR w.prepare_deadline<=clock_timestamp()) THEN 'lease_expired' ELSE 'authority_changed' END
  FROM ticket_workspaces w JOIN provider_installations p ON p.id=w.provider_installation_id JOIN git_connections g ON g.id=w.git_connection_id JOIN sessions s ON s.id=w.session_id JOIN projects j ON j.id=w.project_id
  LEFT JOIN runner_grants r ON r.id=w.claim_grant_id LEFT JOIN memberships m ON m.camp_id=w.camp_id AND m.user_id=w.owner_user_id
- WHERE w.id=$1 AND w.state IN ('queued','preparing','ready') AND (p.state<>'connected' OR p.epoch<>w.provider_epoch OR p.credential_expires_at<=clock_timestamp() OR g.state<>'connected' OR g.epoch<>w.git_epoch OR m.role IS NULL OR m.role='viewer' OR NOT `+workspaceSourceCurrentSQL+` OR s.project_id<>w.project_id OR j.revision<>w.project_revision OR j.archived
+ WHERE w.id=$1 AND w.state IN ('queued','preparing','ready') AND (p.state<>'connected' OR p.epoch<>w.provider_epoch OR p.credential_expires_at<=clock_timestamp() OR g.state<>'connected' OR g.epoch<>w.git_epoch OR m.role IS NULL OR m.role='viewer' OR NOT `+workspaceSourceCurrentSQL+` OR s.project_id<>w.project_id OR j.authority_revision<>w.project_revision OR j.archived
  OR NOT `+validWorkspaceTransferSQL+`
  OR (w.state='preparing' AND (w.lease_until<=clock_timestamp() OR w.prepare_deadline<=clock_timestamp() OR r.revoked_at IS NOT NULL OR r.expires_at<=clock_timestamp()))) FOR UPDATE OF w`, id).Scan(&state, &reason)
 	if errors.Is(err, pgx.ErrNoRows) {

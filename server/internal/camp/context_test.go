@@ -3,6 +3,8 @@ package camp
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -78,5 +80,44 @@ func TestPinnedContextRangesAndRevocation(t *testing.T) {
 	read, err = s.Request(ctx, owner, c.ID, request.ID)
 	if err != nil || read.State != "cancelled" {
 		t.Fatal("range request survived revocation", err)
+	}
+}
+
+func TestRequestContextMatchesWhatATurnCanSend(t *testing.T) {
+	s, _, actors, c, p, profile := sessionFixture(t)
+	ctx := t.Context()
+	owner, member := actors[0], actors[1]
+	source := func(text string, count int) SourceRef {
+		t.Helper()
+		session, err := s.PublishSession(ctx, owner, c.ID, uuid.NewString(), sessionInput(p, profile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var messages []MessageInput
+		for i := range count {
+			messages = append(messages, MessageInput{ID: fmt.Sprint("m", i), Ordinal: int64(i), Role: "assistant", Text: text})
+		}
+		revision, err := s.WriteTranscript(ctx, owner, c.ID, session.ID, uuid.NewString(), TranscriptInput{Messages: messages})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return SourceRef{SessionID: session.ID, TranscriptRevision: revision, PermissionRevision: session.PermissionRevision}
+	}
+	target, err := s.PublishSession(ctx, owner, c.ID, uuid.NewString(), sessionInput(p, profile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := strings.Repeat("x", 40<<10)
+	first, second := source(block, 4), source(block, 4)
+	if _, err = s.CreateRequest(ctx, member, c.ID, target.ID, uuid.NewString(), RequestInput{Prompt: "One large source", Sources: []SourceRef{first}}); err != nil {
+		t.Fatal("source within the turn budget was refused", err)
+	}
+	// 320 KiB across two sources is more than a turn can send.
+	if _, err = s.CreateRequest(ctx, member, c.ID, target.ID, uuid.NewString(), RequestInput{Prompt: "Two large sources", Sources: []SourceRef{first, second}}); !errors.Is(err, ErrInput) {
+		t.Fatal("aggregate context over 256 KiB was accepted", err)
+	}
+	oversized := source(strings.Repeat("y", 50<<10), 1)
+	if _, err = s.CreateRequest(ctx, member, c.ID, target.ID, uuid.NewString(), RequestInput{Prompt: "One oversized message", Sources: []SourceRef{oversized}}); !errors.Is(err, ErrInput) {
+		t.Fatal("message over 48 KiB was accepted", err)
 	}
 }

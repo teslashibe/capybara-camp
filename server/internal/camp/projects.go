@@ -5,6 +5,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -67,7 +68,7 @@ func readProject(ctx context.Context, tx pgx.Tx, campID, id string) (Project, er
 		return Project{}, ErrInput
 	}
 	var p Project
-	err := tx.QueryRow(ctx, `SELECT p.id,p.name,p.revision,p.archived,p.inbox,ARRAY(SELECT url FROM project_repository_links r WHERE r.project_id=p.id ORDER BY url) FROM projects p WHERE camp_id=$1 AND p.id=$2`, campID, id).Scan(&p.ID, &p.Name, &p.Revision, &p.Archived, &p.Inbox, &p.Repositories)
+	err := tx.QueryRow(ctx, `SELECT p.id,p.name,p.revision,p.archived,p.inbox,ARRAY(SELECT url FROM project_repository_links r WHERE r.project_id=p.id ORDER BY url),p.authority_revision FROM projects p WHERE camp_id=$1 AND p.id=$2`, campID, id).Scan(&p.ID, &p.Name, &p.Revision, &p.Archived, &p.Inbox, &p.Repositories, &p.AuthorityRevision)
 	if err == pgx.ErrNoRows {
 		return p, ErrDenied
 	}
@@ -123,7 +124,9 @@ func (s *Store) UpdateProject(ctx context.Context, a auth.Actor, campID, id, key
 	if current.Revision != input.ExpectedRevision {
 		return current, ErrRevision
 	}
-	if _, err = tx.Exec(ctx, `UPDATE projects SET name=$2,archived=$3,revision=revision+1 WHERE id=$1`, id, input.Name, input.Archived); err != nil {
+	sortedLinks := slices.Sorted(slices.Values(urls))
+	authority := current.Archived != input.Archived || !slices.Equal(sortedLinks, current.Repositories)
+	if _, err = tx.Exec(ctx, `UPDATE projects SET name=$2,archived=$3,revision=revision+1,authority_revision=authority_revision+CASE WHEN $4 THEN 1 ELSE 0 END WHERE id=$1`, id, input.Name, input.Archived, authority); err != nil {
 		return current, err
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM project_repository_links WHERE project_id=$1`, id); err != nil {

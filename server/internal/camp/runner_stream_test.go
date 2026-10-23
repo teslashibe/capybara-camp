@@ -143,3 +143,45 @@ func TestRunnerStreamRejectsMalformedEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestRevokedTurnOutputStaysOutOfTranscript(t *testing.T) {
+	g, w, grant, owner, r := streamFixture(t)
+	s := g.store
+	appendFixtureEvent(t, g, w, grant, r, 1, map[string]any{"type": "delta", "text": "Derived from a revoked source"})
+	source, err := s.Session(t.Context(), owner, w.CampID, w.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unshare := SessionInput{ID: source.ID, ProjectID: source.ProjectID, ProfileID: source.ProfileID, LocalSessionID: source.LocalSessionID, Title: source.Title, Model: source.Model, State: source.State, Stage: source.Stage, ExpectedRevision: source.Revision}
+	if _, err = s.PublishSession(t.Context(), owner, w.CampID, uuid.NewString(), unshare); err != nil {
+		t.Fatal(err)
+	}
+	finished, err := g.ActOnRunnerRequest(t.Context(), grant.Token, w.ID, r.ID, uuid.NewString(), RequestAction{Action: "finish", LeaseToken: r.LeaseToken, Outcome: "cancelled", Evidence: "Stopped after revocation"})
+	if err != nil || finished.Reason != "permission_changed" {
+		t.Fatal(finished.Reason, err)
+	}
+	var published int
+	if err = s.pool.QueryRow(t.Context(), `SELECT count(*) FROM messages WHERE session_id=$1`, w.SessionID).Scan(&published); err != nil || published != 0 {
+		t.Fatal("revoked turn was published into the transcript", published, err)
+	}
+}
+
+func TestHeartbeatsKeepNoReceipts(t *testing.T) {
+	g, w, grant, _, r := streamFixture(t)
+	count := func() int {
+		var n int
+		if err := g.store.pool.QueryRow(t.Context(), `SELECT count(*) FROM command_results`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := count()
+	for range 3 {
+		if beat, err := g.ActOnRunnerRequest(t.Context(), grant.Token, w.ID, r.ID, uuid.NewString(), RequestAction{Action: "heartbeat", LeaseToken: r.LeaseToken}); err != nil || beat.State != "started" {
+			t.Fatal(beat.State, err)
+		}
+	}
+	if after := count(); after != before {
+		t.Fatal("heartbeats stored receipts", before, after)
+	}
+}

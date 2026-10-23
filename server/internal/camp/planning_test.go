@@ -204,6 +204,11 @@ func TestPlanningPauseCancelRestartAndLateCompletion(t *testing.T) {
 	if err != nil || current.Version.State != "draft" || len(current.Version.Steps) != 0 {
 		t.Fatal("late result advanced new version", err)
 	}
+	// Consent and dispatch bind the ticket revision; an old version's result
+	// must not change it.
+	if current.Revision != p.Revision {
+		t.Fatal("late result changed the active ticket revision", p.Revision, current.Revision)
+	}
 	previous, err := s.Planning(ctx, a, c.ID, p.ID, 1)
 	if err != nil || previous.Version.State != "cancelled" {
 		t.Fatal("old history lost", err)

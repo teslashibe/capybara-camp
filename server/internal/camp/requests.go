@@ -300,7 +300,7 @@ func (s *Store) enqueueRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, cam
 	if a.UserID == session.OwnerUserID {
 		r.State = "queued"
 	}
-	seen := map[string]bool{}
+	seen, contextBytes := map[string]bool{}, 0
 	for _, ref := range input.Sources {
 		if seen[ref.SessionID] || ref.TranscriptRevision < 1 {
 			return r, ErrInput
@@ -314,11 +314,20 @@ func (s *Store) enqueueRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, cam
 			return r, ErrDenied
 		}
 		ref.PermissionRevision = source.PermissionRevision
-		if len(ref.MessageIDs) > 0 {
-			if _, err = readContextMessages(ctx, tx, ref); err != nil {
-				return r, err
+		// Accept only context a turn can send: the runner refuses a message
+		// over 48 KiB or more than 256 KiB across sources, and a request it
+		// can never read would be claimed and requeued forever.
+		messages, err := contextRefMessages(ctx, tx, ref)
+		if err != nil {
+			return r, err
+		}
+		for _, m := range messages {
+			contextBytes += len(m.Text)
+			if len(m.Text) > 48<<10 || contextBytes > 256<<10 {
+				return r, ErrInput
 			}
-		} else {
+		}
+		if len(ref.MessageIDs) == 0 {
 			ref.MessageIDs = []string{}
 		}
 		r.Sources = append(r.Sources, ref)
@@ -627,10 +636,16 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 			return r, err
 		}
 	}
+	// Heartbeats are fenced by the lease token and change nothing but the lease,
+	// so they keep no receipt; a receipt would copy the prompt once a second.
 	var prior Request
-	if hit, err := s.beginCommand(ctx, tx, a, key, receiptScope, input, &prior); err != nil {
-		return r, err
-	} else if hit {
+	receipt, hit := input.Action != "heartbeat", false
+	if receipt {
+		if hit, err = s.beginCommand(ctx, tx, a, key, receiptScope, input, &prior); err != nil {
+			return r, err
+		}
+	}
+	if hit {
 		if oneOf(input.Action, "start", "heartbeat") && (r.State != prior.State || !leaseValid) {
 			return r, ErrTransition
 		}
@@ -762,7 +777,9 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 			return r, err
 		}
 	}
-	if (r.ExecutionLocation == "cloud" || r.LocalContinuation) && terminal {
+	// Output from a turn cancelled because a source was revoked may contain that
+	// source; it must not reach the shared transcript.
+	if (r.ExecutionLocation == "cloud" || r.LocalContinuation) && terminal && r.Reason != "permission_changed" {
 		if err = s.publishRunnerTranscript(ctx, tx, r); err != nil {
 			return r, err
 		}
@@ -773,8 +790,10 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 		}
 	}
 	r.LeaseToken = ""
-	if err = s.finishCommand(ctx, tx, a, key, r); err != nil {
-		return r, err
+	if receipt {
+		if err = s.finishCommand(ctx, tx, a, key, r); err != nil {
+			return r, err
+		}
 	}
 	return r, tx.Commit(ctx)
 }

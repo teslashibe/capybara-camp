@@ -79,9 +79,12 @@ func (g *GitStore) token(ctx context.Context, a auth.Actor, id string) (string, 
 	defer cancel()
 	fresh, err := g.provider.Refresh(work, old)
 	if err == nil {
-		var user gitprovider.User
-		user, err = g.provider.User(work, fresh.AccessToken)
-		if err == nil && user.ID != c.GitHubUserID {
+		// The refresh already rotated the pair, so the outcome is known. Only a
+		// rejected token or a different GitHub user forces sign-in; a brief
+		// /user failure keeps the new credentials, which come from the same
+		// refresh token and so belong to the same user.
+		user, identityErr := g.provider.User(work, fresh.AccessToken)
+		if errors.Is(identityErr, gitprovider.ErrAuthorization) || identityErr == nil && user.ID != c.GitHubUserID {
 			err = gitprovider.ErrAuthorization
 		}
 	}
@@ -102,7 +105,10 @@ func (g *GitStore) token(ctx context.Context, a auth.Actor, id string) (string, 
 	if err != nil {
 		return "", err
 	}
-	tag, err := g.store.pool.Exec(ctx, `UPDATE git_connections SET encrypted_credentials=$4,access_expires_at=$5,revision=revision+1,refresh_claim_id=NULL,refresh_started_at=NULL,updated_at=now() WHERE id=$1 AND epoch=$2 AND refresh_claim_id=$3 AND state='connected'`, c.ID, c.Epoch, claimID, encrypted, fresh.ExpiresAt)
+	// Save the rotated pair even if the caller has gone; the old pair is spent.
+	persist, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer done()
+	tag, err := g.store.pool.Exec(persist, `UPDATE git_connections SET encrypted_credentials=$4,access_expires_at=$5,revision=revision+1,refresh_claim_id=NULL,refresh_started_at=NULL,updated_at=now() WHERE id=$1 AND epoch=$2 AND refresh_claim_id=$3 AND state='connected'`, c.ID, c.Epoch, claimID, encrypted, fresh.ExpiresAt)
 	if err != nil || tag.RowsAffected() != 1 {
 		cleanup, done := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer done()
