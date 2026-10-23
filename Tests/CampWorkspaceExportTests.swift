@@ -79,6 +79,46 @@ private actor ExportFixture: CampAccountTransport {
     }
 }
 
+private actor DestinationBridgeFixture {
+    let review: TransferCapture
+    var checkoutCalls=0
+    var installCalls=0
+    var loseCheckout=false
+    var loseInstall=false
+    var delayInstall=false
+    var installStarted=false
+    init(_ review:TransferCapture) { self.review=review }
+    func lose(_ phase:String) { loseCheckout=phase=="checkout";loseInstall=phase=="install" }
+    func delay() { delayInstall=true }
+    func started() -> Bool { installStarted }
+    func counts() -> (Int,Int) { (checkoutCalls,installCalls) }
+    func call(_ action:String,_ data:Data) async throws -> Data {
+        if action=="transfer-review" { return try CampWire.encoder().encode(review) }
+        let input=try JSONSerialization.jsonObject(with:data) as! [String:Any]
+        if action=="transfer-checkout" {
+            checkoutCalls+=1
+            let scope=input["scope"] as! String,id=input["transferID"] as! String
+            let receipt=TransferCheckoutReceipt(version:1,scope:scope,transferID:id,repository:"fixture/repo",baseCommit:review.baseCommit,branch:review.branch,destination:"/fixture/workspace-\(scope)-\(id)")
+            if loseCheckout { loseCheckout=false;throw URLError(.networkConnectionLost) }
+            return try JSONEncoder().encode(receipt)
+        }
+        precondition(action=="transfer-install")
+        installCalls+=1;installStarted=true
+        if delayInstall { try await Task.sleep(for:.milliseconds(180)) }
+        let target=try JSONDecoder().decode(TransferInstallationTarget.self,from:JSONSerialization.data(withJSONObject:input["target"]!))
+        let exported=try CampWire.decoder().decode(CloudWorkspaceExport.self,from:JSONSerialization.data(withJSONObject:input["export"]!))
+        let receipt=TransferInstallationReceipt(version:1,scope:input["scope"] as! String,transferID:input["transferID"] as! String,
+            exportID:exported.id,destination:input["destination"] as! String,target:target,
+            payloadSHA256:input["payloadSHA256"] as! String,historySHA256:input["historySHA256"] as! String,
+            sourceID:exported.sessionId,transcriptRevision:exported.transcriptRevision,
+            files:.init(reviewSHA256:review.reviewSha256,baseCommit:review.baseCommit,branch:review.branch,files:review.files.count))
+        let encoder=JSONEncoder();encoder.outputFormatting = .sortedKeys
+        let result=TransferInstallationResult(receipt:receipt,receiptSHA256:PublishMessage.hash(try encoder.encode(receipt)))
+        if loseInstall { loseInstall=false;throw URLError(.networkConnectionLost) }
+        return try JSONEncoder().encode(result)
+    }
+}
+
 @main struct CampWorkspaceExportTests {
     static func rejects(_ label:String,_ action:()async throws->Void)async {
         do { try await action(); preconditionFailure(label) } catch {}
@@ -259,7 +299,75 @@ private actor ExportFixture: CampAccountTransport {
                 }
             }
         }
-        print("PASS: cloud export recovery, device-bound checkout, installation, changed permissions, cancellation, erasure and integrity")
+        for (provider,loss) in ["Codex","Claude"].flatMap({ provider in ["none","checkout","install","cancel","erase"].map { (provider,$0) } }) {
+            var scenarioSession=session;scenarioSession.provider=provider
+            try await cache.clear(scope)
+            let fixture=ExportFixture(value,payload:payload)
+            await fixture.checkout(device:credential.actor.deviceId)
+            await fixture.history(scenarioSession)
+            let destinationEpoch=try await cache.epoch(scope)
+            let files=try CampWorkspaceExport(cache:cache,scope:scope,credential:credential,transport:fixture,epoch:destinationEpoch)
+            let history=try CampTransferHistory(cache:cache,scope:scope,credential:credential,transport:fixture,epoch:destinationEpoch)
+            try await files.begin(session:scenarioSession,kind:"capture",paths:["notes.txt"])
+            await rejects("Expected lost create") { try await files.advance() }
+            try await files.advance();try await files.advance()
+            try await history.begin(session:scenarioSession);try await history.advance()
+            let review=TransferCapture(payloadSha256:value.resultSha256,reviewSha256:String(repeating:"b",count:64),baseCommit:String(repeating:"c",count:40),branch:"main",files:[.init(path:"notes.txt",bytes:payload.count,deleted:false)],excluded:[])
+            let bridge=DestinationBridgeFixture(review)
+            await bridge.lose(loss)
+            let target=TransferInstallationTarget(profileID:UUID().uuidString.lowercased(),sourceID:"fixture-source",provider:provider,root:"/fixture/profile",sessionID:UUID().uuidString.lowercased(),purpose:"implementation")
+            func destination(_ login:CloudCredential=credential) throws -> CampLocalDestination {
+                try CampLocalDestination(cache:cache,scope:scope,credential:login,transport:fixture,epoch:destinationEpoch,callLocal:{try await bridge.call($0,$1)})
+            }
+            let first=try destination()
+            try await first.begin(target:target,reviewedSHA256:review.reviewSha256)
+            let initial=try await first.current()!
+            precondition(initial.phase=="checkout" && initial.target==target)
+            await rejects("Duplicate preparation replaced the saved target") { try await destination().begin(target:target,reviewedSHA256:review.reviewSha256) }
+            var foreign=credential;foreign.actor.deviceId=UUID().uuidString
+            await rejects("Another device adopted local preparation") { _=try await destination(foreign).current() }
+            if loss=="checkout" { await rejects("Lost checkout did not throw") { _=try await first.advance() } }
+            let restarted=try destination()
+            let checkout=try await restarted.advance()!
+            precondition(checkout.id==initial.id && checkout.phase=="installing" && checkout.checkout?.transferID==initial.id)
+            if loss=="install" { await rejects("Lost installer did not throw") { _=try await restarted.advance() } }
+            if ["cancel","erase"].contains(loss) {
+                await bridge.delay()
+                let running=Task {try await restarted.advance()}
+                for _ in 0..<500 { if await bridge.started(){break};try await Task.sleep(for:.milliseconds(2)) }
+                let started=await bridge.started();precondition(started)
+                if loss=="cancel" { try await first.requestCancellation() } else { try await cache.clear(scope) }
+                await rejects("Late helper receipt survived \(loss)") { _=try await running.value }
+                if loss=="cancel" {
+                    let cancelled=try await destination().advance()!
+                    precondition(cancelled.phase=="cancelled" && cancelled.installation==nil)
+                    try await destination().discardCancelled()
+                    let discarded=try await destination().current()
+                    let discardedExport=try await files.current()
+                    let discardedHistory=try await history.current()
+                    precondition(discarded==nil && discardedExport==nil && discardedHistory==nil)
+                    await rejects("A discarded preparation was recreated") { try await cache.saveLocalDestination(cancelled,scope:scope,expectedEpoch:destinationEpoch,previousRevision:cancelled.revision-1) }
+
+                    await rejects("Stale saved progress removed cancellation") { try await cache.saveLocalDestination(checkout,scope:scope,expectedEpoch:destinationEpoch,previousRevision:initial.revision) }
+                } else { let cleared=try await cache.metadata("local-destination:"+scope.key);precondition(cleared==nil) }
+            } else {
+                let installed=try await destination().advance()!
+                precondition(installed.phase=="installed" && installed.target==target && installed.installation?.receipt.transferID==initial.id)
+                let verified=try await destination().advance()!
+                precondition(verified.installation==installed.installation)
+                let counts=await bridge.counts()
+                precondition(counts.0==(loss=="checkout" ? 2 : 1),"Restart reset an installed checkout")
+                precondition(counts.1==(loss=="install" ? 3 : 2))
+                let raw=try await cache.metadata("local-destination:"+scope.key)!
+                precondition(!String(decoding:raw,as:UTF8.self).contains("ghu_"),"Destination journal contains a Git token")
+                var changed=installed;changed.target.root="/another/profile";changed.revision+=1
+                await rejects("Preparation target was rebound") { try await cache.saveLocalDestination(changed,scope:scope,expectedEpoch:destinationEpoch,previousRevision:installed.revision) }
+                await fixture.revokeHistory()
+                await rejects("Installed receipt returned after source permissions changed") { _=try await destination().advance() }
+            }
+        }
+        print("PASS: export, checkout/install restart composition, profile binding, cancellation, erasure and integrity")
+
 
 
     }

@@ -156,6 +156,24 @@ pass. These tests use synthetic Git/provider credentials; they do not establish
 live GitHub authorization, native screen acceptance or provider continuation.
 
 
+The native destination coordinator now saves progress across checkout and
+history/file installation. It pins the reviewed export, source, selected device
+and profile, and retains the checkout receipt before starting installation.
+Retries after installation do not reset the checkout. Revision checks prevent
+stale results from changing the destination or undoing a cancellation. Cache
+erasure invalidates pending operations. A confirmed cancellation can reset its
+review cache without deleting restored files. The coordinator still needs the native
+selection/review screen and committed local continuation connected to it.
+The freshly rebuilt native coordinator/history/transfer/bridge suites pass
+(`build/local-destination-verified.log`). Codex and Claude fixtures cover lost
+checkout/install replies, restart between phases, target/device isolation,
+source permission changes, cancellation during installation, cache erasure and
+reset after acknowledged cancellation. The test receipt serializer now sorts
+keys before hashing; Go's real installer already produces stable receipt bytes.
+These are synthetic coordinator tests alongside the real bundled installer
+regressions, not a live provider transfer or native visual acceptance.
+
+
 Cloud source inspection and selected-file capture are now implemented at schema
 34. The owner creates a bounded export; only its assigned runner can claim it.
 The runner captures its isolated Git checkout, excludes credentials and uploads

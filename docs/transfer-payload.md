@@ -811,6 +811,30 @@ local session and starts no model. It is an approved context-continuation
 candidate, not native provider resume. The remaining native handoff integration
 must verify the receipt and committed assignment before executing it.
 
+## Resuming local preparation
+
+`CampLocalDestination` composes the native export, complete history downloader,
+checkout preparer and installer. It begins only after the selected capture and
+complete history have been reviewed. A private cache journal pins the source,
+export, review hash, destination device/profile and new conversation UUID. One
+advance prepares the checkout; the next installs files and history. The checkout
+receipt is saved before installation starts, so restarting after installation
+never reruns checkout preparation against the restored changes.
+
+Each save compares the journal revision and preserves its original target and
+receipts. Cancellation is durable while a helper is running, and a late result
+cannot replace it. Account-cache erasure invalidates in-flight work. Resuming an
+installed candidate re-verifies the installer receipt and current source access;
+changing the selected device, profile, review or files requires a new reviewed
+move. Cancellation preserves already written local files rather than deleting
+potential user edits. After cancellation is acknowledged, resetting the flow
+atomically removes only its matching review journal and cached export/history
+pages. Stale operations cannot recreate the discarded journal.
+
+This coordinator prepares a destination; it does not publish a local session,
+start a provider or change execution ownership. Its integration with the native
+selection/review screen and committed handoff remains required.
+
 ## Local destination receipts
 
 Schema 35 extends the existing source-hold protocol to a local destination.

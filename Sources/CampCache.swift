@@ -163,6 +163,50 @@ actor CampCache {
         guard UUID(uuidString:id) != nil else {throw CampCloudError.invalidResponse}
         try transaction {try checkEpoch(scope,expectedEpoch);try setMetadata("transfer-cancel:"+scope.key,Data(id.utf8))}
     }
+    func saveLocalDestination(_ value: LocalDestinationJournal, scope: CloudScope, expectedEpoch: Int64, previousRevision: Int64?) throws {
+        let raw=try JSONEncoder().encode(value)
+        guard raw.count<=128<<10,value.session.campId==scope.campId,value.session.ownerUserId==scope.userId else { throw CampCloudError.invalidResponse }
+        try transaction {
+            try checkEpoch(scope,expectedEpoch)
+            let key="local-destination:"+scope.key
+            if let previousRevision {
+                guard let saved=try metadata(key) else { throw CancellationError() }
+                let old=try JSONDecoder().decode(LocalDestinationJournal.self,from:saved)
+                guard old.id==value.id,old.revision==previousRevision,value.revision==previousRevision+1,
+                      old.deviceId==value.deviceId,old.session==value.session,old.exportId==value.exportId,
+                      old.target==value.target,old.reviewedSha256==value.reviewedSha256,
+                      !old.cancelling || value.cancelling,
+                      old.checkout==nil || old.checkout==value.checkout,
+                      old.installation==nil || old.installation==value.installation else { throw CancellationError() }
+            } else {
+                guard try metadata(key)==nil,value.revision==1,value.phase=="checkout",!value.cancelling,
+                      value.checkout==nil,value.installation==nil else { throw CampCloudError.invalidResponse }
+            }
+            try setMetadata(key,raw)
+        }
+    }
+    func discardLocalDestination(_ expected: LocalDestinationJournal, scope: CloudScope, expectedEpoch: Int64) throws {
+        try transaction {
+            try checkEpoch(scope,expectedEpoch)
+            let key="local-destination:"+scope.key
+            guard let raw=try metadata(key) else { throw CancellationError() }
+            let old=try JSONDecoder().decode(LocalDestinationJournal.self,from:raw)
+            guard old.id==expected.id,old.revision==expected.revision,old.phase=="cancelled",old.cancelling,
+                  let exportRaw=try metadata("workspace-export:"+scope.key) else { throw CancellationError() }
+            let export=try CampWire.decoder().decode(WorkspaceExportJournal.self,from:exportRaw)
+            guard export.export?.id==old.exportId,let state=export.export?.state,
+                  ["cancelled","expired","failed"].contains(state) else { throw CancellationError() }
+            if let historyRaw=try metadata("transfer-history:"+scope.key) {
+                let history=try CampWire.decoder().decode(TransferHistoryJournal.self,from:historyRaw)
+                guard history.session==old.session else { throw CancellationError() }
+                try execute("DELETE FROM metadata WHERE key LIKE ?",[.text("transfer-history-page:"+scope.key+":"+history.id+":%")])
+                try execute("DELETE FROM metadata WHERE key=?",[.text("transfer-history:"+scope.key)])
+            }
+            try execute("DELETE FROM metadata WHERE key LIKE ?",[.text("workspace-export-chunk:"+scope.key+":"+old.exportId+":%")])
+            try execute("DELETE FROM metadata WHERE key=?",[.text("workspace-export:"+scope.key)])
+            try execute("DELETE FROM metadata WHERE key=?",[.text(key)])
+        }
+    }
     func saveTransferHistory(_ value: TransferHistoryJournal, scope: CloudScope, expectedEpoch: Int64, previousRevision: Int64?, page: Data? = nil, streamID: String? = nil, pageIndex: Int? = nil) throws {
         let raw=try CampWire.encoder().encode(value)
         guard UUID(uuidString:value.id) != nil, raw.count<=2<<20, value.session.campId==scope.campId,
@@ -638,6 +682,7 @@ actor CampCache {
             try execute("DELETE FROM metadata WHERE key=?", [.text("transfer-cancel:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("workspace-export:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("transfer-history:" + scope.key)])
+            try execute("DELETE FROM metadata WHERE key=?", [.text("local-destination:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-history-page:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("workspace-export-chunk:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-payload:" + scope.key + ":%")])

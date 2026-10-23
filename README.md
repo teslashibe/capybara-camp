@@ -308,6 +308,9 @@ The Go checkout preparer can create that private workspace at an exact remote
 commit, sharing the cloud runner's Git safeguards. The API issues a short-lived,
 repository-scoped read grant to the signed-in owner device, and the native
 coordinator passes it directly to the helper after verifying the reviewed export.
+A saved native preparation journal resumes checkout and installation across
+restarts, preserves the selected profile, and prevents cancellation from being
+overwritten by a late helper response.
 The review screen integration, missing remote commits, attachments and connecting the
 handoff to actual local continuation remain part of the unfinished transfer flow.
 The native publisher includes saved subagent histories with a shared or private
