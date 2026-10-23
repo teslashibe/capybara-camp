@@ -16,6 +16,41 @@ import Foundation
         let history=LocalHistoryBinding(parentId:String(repeating:"c",count:64),mainRevision:String(repeating:"d",count:64),children:[],transcriptRevision:session.transcriptRevision)
         let payload=try CampWire.body(["version":1,"base_commit":String(repeating:"a",count:40),"files":[],"excluded":[],"history":JSONSerialization.jsonObject(with:CampWire.encoder().encode(history))])
         let capture=TransferCapture(payload:payload,payloadSha256:PublishMessage.hash(payload),reviewSha256:String(repeating:"b",count:64),baseCommit:String(repeating:"a",count:40),branch:"main",files:[],excluded:[],history:history)
+        for scenario in ["valid","changed-head","changed-ancestor","already-remote"] {
+            let ancestor=scenario=="already-remote" ? capture.baseCommit : String(repeating:"c",count:40)
+            var result=capture
+            if scenario != "already-remote" {
+                var manifest=try JSONSerialization.jsonObject(with:payload) as! [String:Any]
+                manifest["commits"]=["base_commit":ancestor,"fixture":"synthetic objects; Go tests verify Git identity"]
+                result.payload=try CampWire.body(manifest);result.payloadSha256=PublishMessage.hash(result.payload!)
+                result.commits = .init(baseCommit:scenario=="changed-ancestor" ? String(repeating:"d",count:40) : ancestor,headCommit:capture.baseCommit,reviewSha256:String(repeating:"e",count:64),commits:1,objects:3,bytes:500)
+            }
+            if scenario=="changed-head" {result.baseCommit=String(repeating:"f",count:40);result.commits?.headCommit=result.baseCommit}
+            let returned=result
+            let archiveCache=try CampCache(directory:root.appendingPathComponent("ancestor-"+scenario))
+            let archiveModel=CampTransfer(cache:archiveCache,interval:0.01),archiveTransport=TransferFixture(session)
+            archiveModel.callLocal={action,raw in
+                let body=try JSONSerialization.jsonObject(with:raw) as! [String:Any]
+                if action=="transfer-changes" {
+                    precondition(body["repository"] as? String=="fixture/repo" && body["ref"] as? String=="main")
+                    return try JSONEncoder().encode(TransferChanges(baseCommit:capture.baseCommit,branch:"main",files:[],remoteBaseCommit:ancestor))
+                }
+                precondition(action=="transfer-capture" && body["expectedHead"] as? String==capture.baseCommit)
+                precondition(scenario=="already-remote" ? body["remoteBaseCommit"]==nil : body["remoteBaseCommit"] as? String==ancestor)
+                return try JSONEncoder().encode(returned)
+            }
+            archiveModel.attach(scope:scope,credential:credential,transport:archiveTransport)
+            await archiveModel.inspect(local,repository:"fixture/repo",ref:"main")
+            precondition(archiveModel.changes?.remoteBaseCommit==ancestor)
+            await archiveModel.capture(local,session:session,input:input,paths:[],history:history,ancestor:ancestor,expectedHead:capture.baseCommit)
+            if scenario.hasPrefix("changed") {precondition(archiveModel.job==nil && !archiveModel.error.isEmpty)}
+            else {
+                precondition(archiveModel.job?.phase=="review",archiveModel.error)
+                await archiveModel.prepare();await until("Archive destination did not match reviewed head"){archiveModel.job?.phase=="ready"}
+                precondition(archiveModel.job?.workspace?.remoteBaseCommit==returned.commits?.baseCommit)
+            }
+            archiveModel.attach(scope:nil,credential:nil,transport:nil)
+        }
         func setup(_ folder:String,_ fixture:TransferFixture)->CampTransfer {
             let cache=try! CampCache(directory:root.appendingPathComponent(folder))
             let model=CampTransfer(cache:cache,interval:0.01)

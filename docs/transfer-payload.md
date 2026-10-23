@@ -1192,6 +1192,25 @@ receipt binds the archive digest. Retrying a published checkout never resets
 newer files. Working-file and transcript installation and explicit execution
 handoff follow through the existing return flow.
 
-Native ancestor selection for Local-to-Cloud transfers, attachment completion,
-and full live-provider handoff acceptance remain open. The return review uses
-synthetic native fixtures; these do not prove a live provider transfer.
+For Local-to-Cloud moves, the existing repository and branch/revision selection
+also selects the ancestor lookup. The local helper matches the selected GitHub
+repository against configured HTTPS/SSH remotes, reads that branch's cached
+remote-tracking commit and computes its common ancestor with HEAD. A supplied
+40-character commit must itself be an ancestor. Diverged branches are supported;
+ambiguous common ancestors and conflicting cached remotes are refused. Discovery
+is bounded to 30 seconds, 32 configured remotes and 16 matching remotes, and never
+fetches, pushes or changes local history. Remote URLs and embedded credentials
+are not returned in discovery results.
+
+The file-selection screen labels the result as a cached remote ancestor. Capture
+binds that selection to the inspected HEAD and requires another inspection when
+HEAD changes. If ancestor and HEAD match, the transfer uses the existing ordinary
+payload. Otherwise it captures the intervening commits and displays their summary
+using the same component as Cloud-to-Mac review. The server independently resolves
+the exact ancestor through the owner's GitHub connection during preparation;
+cached local refs do not prove remote access. Native responses must preserve the
+reviewed head and ancestor through transfer completion and workspace preparation.
+
+Attachment completion and full live-provider handoff acceptance remain open.
+Native transfer tests use synthetic fixtures; these do not prove a live provider
+transfer or visual acceptance of the latest controls.

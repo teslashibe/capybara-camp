@@ -9,6 +9,7 @@ struct TransferReviewView: View {
     let permissions: Binding<PermissionSettings>
     let catalog: PermissionCatalog
     var accountLabel: String = ""
+    var repositoryName: String = ""
     var history:LocalHistoryBinding? = nil
     var back: ()->Void
     @State private var selected: Set<String> = []
@@ -30,6 +31,7 @@ struct TransferReviewView: View {
                     Text("\(workspace.repositoryName) · @\(workspace.githubLogin)").font(.caption)
                 }
                 Text("Pinned Git revision · \(job.capture.baseCommit.prefix(12))").font(.system(size:11,design:.monospaced))
+                if let commits=job.capture.commits { TransferCommitSummaryView(commits:commits) }
                 Text("\(job.capture.files.count) reviewed project changes").font(.system(size:12,weight:.medium))
                 ForEach(job.capture.files) { file in
                     HStack { Image(systemName:file.deleted ? "minus.circle" : "doc.text");Text(file.path).lineLimit(2);Spacer();Text(file.deleted ? "Deleted" : ByteCountFormatter.string(fromByteCount:Int64(file.bytes),countStyle:.file)).foregroundStyle(campMuted)
@@ -51,6 +53,11 @@ struct TransferReviewView: View {
             } else if let changes=transfer.changes,transfer.inspectionID==local.id {
                 Text("Select the project changes to include").font(.system(size:12,weight:.medium))
                 Text("Pinned Git revision · \(changes.baseCommit.prefix(12))").font(.system(size:11,design:.monospaced))
+                if let ancestor=changes.remoteBaseCommit {
+                    Text("\(repositoryName) · Cached remote ancestor \(ancestor.prefix(12))").font(.caption).foregroundStyle(campMuted)
+                    Text(ancestor==changes.baseCommit ? "This revision is already in the cached remote history" : "Unpublished commits above this ancestor will be included for review").font(.caption).foregroundStyle(campMuted)
+                    Text("Cloud preparation verifies access through your selected GitHub account").font(.caption).foregroundStyle(campMuted)
+                }
                 if changes.files.isEmpty { Text("No working-tree changes").font(.caption).foregroundStyle(campMuted) }
                 ScrollView {
                     LazyVStack(alignment:.leading,spacing:8) {
@@ -69,23 +76,24 @@ struct TransferReviewView: View {
                     Spacer()
                     Button("Review selected changes") {
                         guard let input else{return}
-                        Task {await transfer.capture(local,session:session,input:input,paths:selected.sorted(),history:history)}
-                    }.buttonStyle(.borderedProminent).disabled(input==nil || transfer.working || busy || selected.count>256 || history?.valid != true)
+                        Task {await transfer.capture(local,session:session,input:input,paths:selected.sorted(),history:history,ancestor:changes.remoteBaseCommit,expectedHead:changes.baseCommit)}
+                    }.buttonStyle(.borderedProminent).disabled(input==nil || transfer.working || busy || selected.count>256 || history?.valid != true || changes.remoteBaseCommit==nil)
                 }
                 if selected.count>256 {Text("Select no more than 256 files").font(.caption).foregroundStyle(.orange)}
                 if history?.valid != true {Text("Finish syncing this history before reviewing the move").font(.caption).foregroundStyle(campMuted)}
             } else if transfer.working { ProgressView("Reading project changes") }
             if !transfer.error.isEmpty {
                 Text(transfer.error).font(.caption).foregroundStyle(.orange)
+                if job==nil {Button(action:back){Label("Back",systemImage:"chevron.left")}}
                 Button("Retry") {
-                    if job==nil {Task{await transfer.inspect(local)}} else {transfer.retry()}
+                    if job==nil {Task{await transfer.inspect(local,repository:repositoryName,ref:input?.ref ?? "")}} else {transfer.retry()}
                 }.disabled(transfer.working)
             }
         }
         .task {
             await transfer.restore()
             if let job,["complete","cancelled"].contains(job.phase) {await transfer.resetReview()}
-            if job==nil {await transfer.inspect(local)}
+            if job==nil {await transfer.inspect(local,repository:repositoryName,ref:input?.ref ?? "")}
         }
         .popover(isPresented:Binding(get:{previewPath != nil},set:{if !$0 {previewPath=nil;previewText=""}})) {
             VStack(alignment:.leading,spacing:10) {
@@ -137,4 +145,15 @@ struct TransferReviewView: View {
         }
     }
     private var cancelButton:some View {Button(transfer.cancelling ? "Cancelling…" : "Cancel transfer"){Task{await transfer.cancel()}}.disabled(transfer.cancelling)}
+}
+
+struct TransferCommitSummaryView: View {
+    let commits: TransferCapture.CommitSummary
+    var body: some View {
+        VStack(alignment:.leading,spacing:6) {
+            Label("\(commits.commits) unpublished \(commits.commits == 1 ? "commit" : "commits")",systemImage:"point.topleft.down.to.point.bottomright.curvepath").font(.caption)
+            Text("Git history and authors will be preserved · \(commits.baseCommit.prefix(12)) → \(commits.headCommit.prefix(12))")
+                .font(.caption).foregroundStyle(campMuted).textSelection(.enabled)
+        }
+    }
 }

@@ -22,10 +22,10 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: finish native remote-ancestor selection for Local-to-Cloud transfers and
-attachments, then shared skills and Git publication. Cloud-source commit capture
-and Mac restoration are implemented; live-provider transfer acceptance remains
-open. The native return review/adoption screen and duplicate-card
+Next: finish attachments, then shared skills and Git publication. Native
+Local-to-Cloud ancestor selection, cloud-source commit capture and Mac restoration
+are implemented; live-provider transfer acceptance remains open. The native
+return review/adoption screen and duplicate-card
 suppression are implemented; the latest acceptance evidence is recorded below.
 Continue executor-setup acceptance and the
 native design audit as those surfaces are implemented. Validate the full workflow locally before the owner provisions
@@ -1345,3 +1345,39 @@ Native Local-to-Cloud ancestor selection, attachments and live-provider transfer
 remain open. Shared skills, Git publication, final UI/performance/security/review
 acceptance, joint Hetzner deployment and the signed V1 release/demo remain
 required. Memory/Cortex is excluded. No cloud deployment or V1 release occurred.
+
+### Local-to-Cloud ancestor selection checkpoint — October 22
+
+The repository and branch/revision already selected in Run on now drive local
+ancestor discovery. The Go helper matches configured GitHub remotes and uses
+cached remote-tracking history; it does not fetch, push or alter the source. It
+supports diverged branches and explicit ancestor hashes, rejects conflicting
+cached remotes or ambiguous ancestry, and returns no remote URLs or credentials.
+The source inspection and capture are bound to one HEAD; a later commit requires
+another inspection.
+
+The native review identifies the cached ancestor, captures unpublished commits
+above it, and reuses the return flow's commit summary component. If HEAD already
+matches the ancestor, the ordinary payload remains in use. Transfer completion
+and destination responses must preserve both reviewed revisions. Actual remote
+access is still independently checked through the selected GitHub account during
+cloud workspace preparation.
+
+The transfer-package race suite passes (`build/ancestor-transfer.log`). Focused
+real-Git/helper tests pass after the final lookup changes
+(`build/ancestor-final-focused.log`), covering repository identity, divergent and
+conflicting refs, pinned hashes and source changes after inspection. Local helper
+race tests, vet, Linux helper build and ShellCheck also pass. Four native suites
+pass in `build/ancestor-native.log`, covering both transfer directions, ancestry
+binding and execution recovery. The isolated audit build with real disposable
+Git files passes signature verification (`build/ancestor-ui-build.log`). Computer
+use still reports that the Mac is locked, so the new review has not received
+visual or pointer acceptance. The staged secret scan has no findings
+(`build/ancestor-secrets.json`). Provider/cloud responses in the native tests are
+synthetic; the prior server authorization tests remain separate evidence.
+
+Remaining implementation includes attachments, shared skills and Git publication.
+Live provider transfers, the full native design/pointer audit, performance/soak,
+security and two complete clean reviews remain release gates. Hetzner provisioning
+still happens with the owner after local acceptance. No cloud deployment or V1
+release occurred; memory/Cortex remains excluded.

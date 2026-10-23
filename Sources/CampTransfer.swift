@@ -7,6 +7,7 @@ struct TransferChange: Codable, Identifiable, Sendable {
 }
 struct TransferChanges: Codable, Sendable {
     var baseCommit: String; var branch: String; var files: [TransferChange]
+    var remoteBaseCommit: String? = nil
 }
 struct TransferCapture: Codable, Sendable {
     struct CommitSummary: Codable, Sendable {
@@ -41,6 +42,7 @@ struct CloudTransfer: Codable, Sendable {
     var state: String; var revision: Int64; var expiresAt: Date; var baseCommit: String?; var fileCount: Int
     var sourceWorkspaceId: String? = nil
     var targetDeviceId: String? = nil
+    var remoteBaseCommit: String? = nil
 }
 struct TransferReviewJob: Codable, Sendable {
     var id: String; var session: CloudSession; var input: CloudWorkspaceInput; var capture: TransferCapture
@@ -142,19 +144,23 @@ extension TransferCapture {
         default:error=failure.localizedDescription
         }
     }
-    func inspect(_ local:CampSession) async {
+    func inspect(_ local:CampSession,repository:String="",ref:String="") async {
         guard !working,let c=connection else{return};working=true
+        changes=nil;inspectionID=nil
         defer{if connection?.generation==c.generation{working=false}}
         do {
-            let raw=try await callLocal("transfer-changes",try JSONEncoder().encode(["session":local]))
+            var body:[String:Any] = ["session":try JSONSerialization.jsonObject(with:JSONEncoder().encode(local))]
+            if !repository.isEmpty {body["repository"]=repository;body["ref"]=ref}
+            let raw=try await callLocal("transfer-changes",try CampWire.body(body))
             try check(c)
             let value=try JSONDecoder().decode(TransferChanges.self,from:raw)
             guard value.baseCommit.range(of:"^[a-f0-9]{40}$",options:.regularExpression) != nil,
-                  value.files.count<=4096,Set(value.files.map(\.path)).count==value.files.count else{throw CampCloudError.invalidResponse}
+                  value.files.count<=4096,Set(value.files.map(\.path)).count==value.files.count,
+                  repository.isEmpty || value.remoteBaseCommit?.range(of:"^[a-f0-9]{40}$",options:.regularExpression) != nil else{throw CampCloudError.invalidResponse}
             changes=value;inspectionID=local.id;error=""
         } catch {fail(error,c)}
     }
-    func capture(_ local:CampSession,session:CloudSession,input:CloudWorkspaceInput,paths:[String],history:LocalHistoryBinding?=nil) async {
+    func capture(_ local:CampSession,session:CloudSession,input:CloudWorkspaceInput,paths:[String],history:LocalHistoryBinding?=nil,ancestor:String?=nil,expectedHead:String?=nil) async {
         guard !working,let c=connection else{return};working=true
         defer{if connection?.generation==c.generation{working=false}}
         do {
@@ -163,13 +169,23 @@ extension TransferCapture {
             guard job==nil || ["complete","cancelled"].contains(job!.phase),session.ownerUserId==c.credential.actor.userId,session.campId==c.scope.campId,
                   session.ownerDeviceId==c.credential.actor.deviceId,session.provider==local.provider,session.localSessionId==local.sessionID,
                   session.executionLocation != "cloud",paths.count<=256 else {throw CampCloudError.invalidResponse}
-            let body=try CampWire.body(["session":JSONSerialization.jsonObject(with:JSONEncoder().encode(local)),"paths":paths,"history":JSONSerialization.jsonObject(with:CampWire.encoder().encode(history))])
+            var fields:[String:Any] = ["session":try JSONSerialization.jsonObject(with:JSONEncoder().encode(local)),"paths":paths,"history":try JSONSerialization.jsonObject(with:CampWire.encoder().encode(history))]
+            if let ancestor,let expectedHead {
+                guard [ancestor,expectedHead].allSatisfy({$0.range(of:"^[a-f0-9]{40}$",options:.regularExpression) != nil}) else {throw CampCloudError.invalidResponse}
+                fields["expectedHead"]=expectedHead
+                if ancestor != expectedHead {fields["remoteBaseCommit"]=ancestor}
+            } else if ancestor != nil || expectedHead != nil {throw CampCloudError.invalidResponse}
+            let body=try CampWire.body(fields)
             let raw=try await callLocal("transfer-capture",body);try await authority(c)
             var capture=try await Task.detached {
                 let value=try CampWire.decoder().decode(TransferCapture.self,from:raw)
                 guard value.valid,value.history==history,let bytes=value.payload,(2...(46<<20)).contains(bytes.count),PublishMessage.hash(bytes)==value.payloadSha256 else{throw CampCloudError.invalidResponse}
                 return value
             }.value
+            if let ancestor,let expectedHead {
+                guard capture.baseCommit==expectedHead,
+                      ancestor==expectedHead ? capture.commits==nil : capture.commits?.baseCommit==ancestor else {throw CampCloudError.invalidResponse}
+            }
             guard let payload=capture.payload else{throw CampCloudError.invalidResponse}
             capture.payload=nil
             var choice=input;choice.ref=capture.baseCommit
@@ -276,15 +292,17 @@ extension TransferCapture {
                 }
                 t=try await request(CloudTransfer.self,"POST",path+"/transfers/\(t.id)/complete",c,body:Data("{}".utf8))
             }
-            guard t.state=="ready",t.baseCommit==j.capture.baseCommit,t.fileCount==j.capture.files.count else{throw CampCloudError.invalidResponse}
+            guard t.state=="ready",t.baseCommit==j.capture.baseCommit,t.remoteBaseCommit==j.capture.commits?.baseCommit,t.fileCount==j.capture.files.count else{throw CampCloudError.invalidResponse}
             j.transfer=t;try await save(j,c)
             let workspace=try await request(CloudWorkspace.self,"POST",path+"/transfers/\(t.id)/workspaces",c,body:CampWire.encoder().encode(j.input),key:j.workspaceKey)
-            guard workspace.valid(session:j.session,owner:c.credential.actor.userId),workspace.transferId==t.id else{throw CampCloudError.invalidResponse}
+            guard workspace.valid(session:j.session,owner:c.credential.actor.userId),workspace.transferId==t.id,
+                  workspace.baseCommit==j.capture.baseCommit,workspace.remoteBaseCommit==j.capture.commits?.baseCommit else{throw CampCloudError.invalidResponse}
             j.workspace=workspace;j.phase="preparing";try await save(j,c)
         } else if j.phase=="preparing" {
             guard let old=j.workspace else{throw CampCloudError.invalidResponse}
             let workspace=try await request(CloudWorkspace.self,"GET","/v1/camps/\(c.scope.campId)/workspaces/\(old.id)",c)
-            guard workspace.id==old.id,workspace.valid(session:j.session,owner:c.credential.actor.userId),workspace.transferId==j.transfer?.id else{throw CampCloudError.invalidResponse}
+            guard workspace.id==old.id,workspace.valid(session:j.session,owner:c.credential.actor.userId),workspace.transferId==j.transfer?.id,
+                  workspace.baseCommit==j.capture.baseCommit,workspace.remoteBaseCommit==j.capture.commits?.baseCommit else{throw CampCloudError.invalidResponse}
             j.workspace=workspace
             if workspace.state=="ready"{j.phase="ready"}
             if ["failed","cancelled"].contains(workspace.state){throw CampError.message("Workspace preparation failed. Cancel this transfer and review it again")}

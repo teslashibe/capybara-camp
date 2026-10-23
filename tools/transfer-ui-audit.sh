@@ -11,6 +11,11 @@ git -C "$WORK/repository" init -q
 printf 'A small synthetic project\n' > "$WORK/repository/README.md"
 git -C "$WORK/repository" add README.md
 git -C "$WORK/repository" -c user.name=Fixture -c user.email=fixture@example.com commit -qm Fixture
+git -C "$WORK/repository" remote add origin https://github.com/fixture/repo.git
+git -C "$WORK/repository" update-ref refs/remotes/origin/main HEAD
+printf 'Unpublished implementation from this Mac\n' > "$WORK/repository/implementation.txt"
+git -C "$WORK/repository" add implementation.txt
+git -C "$WORK/repository" -c user.name=Fixture -c user.email=fixture@example.com commit -qm 'Unpublished fixture implementation'
 printf 'A small synthetic project\nReviewed change for the cloud workspace\n' > "$WORK/repository/README.md"
 printf 'EXAMPLE_VALUE=not-a-real-credential\n' > "$WORK/repository/.env"
 APP="$ROOT/build/Capybara Camp Transfer Audit.app"

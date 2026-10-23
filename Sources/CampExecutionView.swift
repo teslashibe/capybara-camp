@@ -95,7 +95,7 @@ struct RunLocationView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     if busy { Text("Finish or stop the current turn before moving this session").font(.system(size: 12)).foregroundStyle(campMuted) }
                     if transferReview,let remote {
-                        TransferReviewView(transfer:transfers,local:session,session:remote,input:transferInput ?? transfers.job?.input,busy:busy,permissions:$permissions,catalog:catalog,accountLabel:accounts.accounts.first(where:{$0.id==(transfers.job?.input.providerAccountId ?? transferInput?.providerAccountId)})?.label ?? "",history:sharing.binding(for:session)?.publishedHistory){transferReview=false}
+                        TransferReviewView(transfer:transfers,local:session,session:remote,input:transferInput ?? transfers.job?.input,busy:busy,permissions:$permissions,catalog:catalog,accountLabel:accounts.accounts.first(where:{$0.id==(transfers.job?.input.providerAccountId ?? transferInput?.providerAccountId)})?.label ?? "",repositoryName:repositories.first(where:{$0.id==repositoryID})?.fullName ?? "",history:sharing.binding(for:session)?.publishedHistory){transferReview=false}
                     } else if location == "Local" { localForm }
                     else if !cloud.signedIn || cloud.scope == nil {
                         Text("Connect your Camp to run sessions in the cloud").font(.system(size: 12))

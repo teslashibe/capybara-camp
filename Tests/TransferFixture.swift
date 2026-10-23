@@ -51,12 +51,14 @@ actor TransferFixture: CampAccountTransport {
             let payload=chunks.keys.sorted().reduce(into:Data()){$0.append(chunks[$1]!)}
             let manifest=try JSONSerialization.jsonObject(with:payload) as! [String:Any]
             transfer?.state="ready";transfer?.baseCommit=manifest["base_commit"] as? String
+            transfer?.remoteBaseCommit=(manifest["commits"] as? [String:Any])?["base_commit"] as? String
             transfer?.fileCount=(manifest["files"] as? [Any])?.count ?? 0
             result=try CampWire.encoder().encode(transfer!)
         } else if path.hasSuffix("/workspaces") {
             let input=try CampWire.decoder().decode(CloudWorkspaceInput.self,from:body!)
             let id=UUID().uuidString.lowercased()
             workspace=CloudWorkspace(id:id,campId:session.campId,sessionId:session.id,projectId:session.projectId,ownerUserId:session.ownerUserId,providerAccountId:input.providerAccountId,providerInstallationId:UUID().uuidString,providerEpoch:1,gitConnectionId:input.gitConnectionId,gitEpoch:1,githubUserId:123,githubLogin:"fixture",githubInstallationId:7,repositoryId:5,repositoryName:"fixture/repo",requestedRef:input.ref,baseCommit:input.ref,branch:"camp/\(session.id)/\(id)",purpose:input.purpose,sourceRevision:session.revision,projectRevision:1,state:"queued",revision:1,createdAt:Date(),updatedAt:Date(),transferId:transfer!.id)
+            workspace?.remoteBaseCommit=transfer?.remoteBaseCommit
             result=try CampWire.encoder().encode(workspace!)
         } else if path.hasSuffix("/handoffs") {
             handoff=CloudHandoff(id:UUID().uuidString.lowercased(),transferId:transfer!.id,campId:session.campId,sessionId:session.id,ownerUserId:session.ownerUserId,sourceDeviceId:session.ownerDeviceId,sourceLocation:"local",sourceEpoch:session.executionEpoch ?? 1,workspaceId:workspace!.id,workspaceRevision:workspace!.revision,state:"pending",claimId:sourceWorker ? nil : UUID().uuidString,revision:1,expiresAt:Date().addingTimeInterval(300))

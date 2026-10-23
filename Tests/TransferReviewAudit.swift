@@ -72,7 +72,7 @@ import AppKit
                 HStack {Text("Move to cloud").font(.title2);Spacer();Button("Done"){NSApplication.shared.terminate(nil)}}
                 Text(state.local.title).font(.system(size:14,weight:.medium))
                 ScrollView {
-                    TransferReviewView(transfer:state.model,local:state.local,session:state.session,input:state.input,busy:false,permissions:$permissions,catalog:catalog,accountLabel:"Claude test account",history:state.history) {
+                    TransferReviewView(transfer:state.model,local:state.local,session:state.session,input:state.input,busy:false,permissions:$permissions,catalog:catalog,accountLabel:"Claude test account",repositoryName:"fixture/repo",history:state.history) {
                         Task {await state.model.resetReview();revision+=1}
                     }.id(revision).frame(maxWidth:.infinity,alignment:.leading)
                 }.frame(maxHeight:480)

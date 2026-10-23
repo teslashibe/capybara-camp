@@ -84,9 +84,7 @@ struct ReturnTransferView: View {
         case "review":
             if let review = transfer.review {
                 if let commits = review.commits {
-                    Label("\(commits.commits) unpublished \(commits.commits == 1 ? "commit" : "commits")",systemImage:"point.topleft.down.to.point.bottomright.curvepath").font(.caption)
-                    Text("Git history and authors will be preserved · \(commits.baseCommit.prefix(12)) → \(commits.headCommit.prefix(12))")
-                        .font(.caption).foregroundStyle(campMuted).textSelection(.enabled)
+                    TransferCommitSummaryView(commits:commits)
                 }
                 Text("\(review.files.count) reviewed project changes · \(max(0,(transfer.history?.streams.count ?? 1)-1)) sub-agents").font(.caption)
                 ForEach(review.files) { file in

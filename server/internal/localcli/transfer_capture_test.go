@@ -117,3 +117,37 @@ func TestDownloadedTransferReviewUsesCaptureValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestTransferAncestorInspectionBindsCaptureHead(t *testing.T) {
+	a, in := holdFixture(t)
+	root := in.Session.CWD
+	base := testgit.Command(t, root, "rev-parse", "HEAD")
+	testgit.Command(t, root, "remote", "add", "origin", "https://github.com/fixture/repo.git")
+	testgit.Command(t, root, "update-ref", "refs/remotes/origin/main", base)
+	testgit.Command(t, root, "add", "file.txt")
+	testgit.Command(t, root, "commit", "-m", "Local unpublished work")
+	head := testgit.Command(t, root, "rev-parse", "HEAD")
+	body, _ := json.Marshal(map[string]any{"session": in.Session, "repository": "fixture/repo", "ref": "main"})
+	listed, err := a.Run(t.Context(), "transfer-changes", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(listed)
+	var review struct {
+		BaseCommit       string `json:"baseCommit"`
+		RemoteBaseCommit string `json:"remoteBaseCommit"`
+	}
+	if json.Unmarshal(raw, &review) != nil || review.BaseCommit != head || review.RemoteBaseCommit != base {
+		t.Fatal("inspection lost ancestry")
+	}
+	body, _ = json.Marshal(map[string]any{"session": in.Session, "paths": []string{}, "remoteBaseCommit": review.RemoteBaseCommit, "expectedHead": review.BaseCommit})
+	if _, err = a.Run(t.Context(), "transfer-capture", bytes.NewReader(body)); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(root, "later.txt"), "later work\n")
+	testgit.Command(t, root, "add", "later.txt")
+	testgit.Command(t, root, "commit", "-m", "Changed after inspection")
+	if _, err = a.Run(t.Context(), "transfer-capture", bytes.NewReader(body)); err == nil {
+		t.Fatal("captured changed source without another inspection")
+	}
+}

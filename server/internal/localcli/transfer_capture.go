@@ -51,6 +51,9 @@ func (a *App) reviewTransfer(ctx context.Context, action string, input io.Reader
 		Paths            []string                 `json:"paths"`
 		History          *transfer.HistoryBinding `json:"history"`
 		RemoteBaseCommit string                   `json:"remoteBaseCommit,omitempty"`
+		Repository       string                   `json:"repository,omitempty"`
+		Ref              string                   `json:"ref,omitempty"`
+		ExpectedHead     string                   `json:"expectedHead,omitempty"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -66,7 +69,21 @@ func (a *App) reviewTransfer(ctx context.Context, action string, input io.Reader
 		return nil, err
 	}
 	if action == "transfer-changes" {
-		return transfer.Changes(ctx, root)
+		changes, err := transfer.Changes(ctx, root)
+		if err != nil {
+			return nil, err
+		}
+		if in.Repository == "" {
+			return changes, nil
+		}
+		ancestor, err := transfer.RemoteAncestor(ctx, root, in.Repository, in.Ref)
+		if err != nil {
+			return nil, err
+		}
+		return struct {
+			transfer.ChangeSet
+			RemoteBaseCommit string `json:"remoteBaseCommit,omitempty"`
+		}{changes, ancestor}, nil
 	}
 	if in.History != nil {
 		if err = a.verifyHistoryBinding(ctx, s, in.History); err != nil {
@@ -78,6 +95,9 @@ func (a *App) reviewTransfer(ctx context.Context, action string, input io.Reader
 		manifest, err = transfer.SnapshotWithCommits(ctx, root, in.Paths, in.RemoteBaseCommit)
 	} else {
 		manifest, err = transfer.Snapshot(ctx, root, in.Paths)
+	}
+	if err == nil && in.ExpectedHead != "" && manifest.BaseCommit != in.ExpectedHead {
+		return nil, transfer.ErrChanged
 	}
 	if err != nil {
 		return nil, err
