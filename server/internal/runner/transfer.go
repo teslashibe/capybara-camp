@@ -106,7 +106,7 @@ func (w *Worker) downloadTransfer(ctx context.Context, workspace camp.Workspace,
 	if err := w.client.call(ctx, "POST", base, input, &metadata); err != nil {
 		return metadata, nil, err
 	}
-	if metadata.ID != workspace.TransferID || metadata.CampID != workspace.CampID || metadata.SessionID != workspace.SessionID || metadata.OwnerUserID != workspace.OwnerUserID || metadata.TargetAccountID != workspace.ProviderAccountID || metadata.TargetAccountEpoch != workspace.ProviderEpoch || metadata.TargetLocation != "cloud" || metadata.State != "ready" || metadata.BaseCommit != workspace.BaseCommit || metadata.SourceRevision != workspace.SourceRevision || metadata.PayloadBytes < 2 || metadata.PayloadBytes > transfer.MaxWireBytes || metadata.UploadedBytes != metadata.PayloadBytes || metadata.ChunkBytes != camp.TransferChunkBytes {
+	if metadata.ID != workspace.TransferID || metadata.CampID != workspace.CampID || metadata.SessionID != workspace.SessionID || metadata.OwnerUserID != workspace.OwnerUserID || metadata.TargetAccountID != workspace.ProviderAccountID || metadata.TargetAccountEpoch != workspace.ProviderEpoch || metadata.TargetLocation != "cloud" || metadata.State != "ready" || metadata.BaseCommit != workspace.BaseCommit || metadata.RemoteBaseCommit != workspace.RemoteBaseCommit || metadata.SourceRevision != workspace.SourceRevision || metadata.PayloadBytes < 2 || metadata.PayloadBytes > transfer.MaxWireBytes || metadata.UploadedBytes != metadata.PayloadBytes || metadata.ChunkBytes != camp.TransferChunkBytes {
 		return metadata, nil, ErrState
 	}
 	if _, err := w.checkout.root.Lstat(filepath.Join(transferDirectory(workspace), "manifest.json")); err == nil {
@@ -158,12 +158,15 @@ func (w *Worker) prepareTransfer(ctx context.Context, workspace camp.Workspace, 
 	if err != nil || review != metadata.ReviewSHA256 || manifest.BaseCommit != workspace.BaseCommit || len(manifest.Files) != metadata.FileCount {
 		return nil, ErrState
 	}
+	if (manifest.Commits == nil) != (workspace.RemoteBaseCommit == "") || (manifest.Commits != nil && manifest.Commits.BaseCommit != workspace.RemoteBaseCommit) {
+		return nil, ErrState
+	}
 	held, err := w.checkout.transferHeld(workspace)
 	if err != nil {
 		return nil, err
 	}
 	if !held {
-		if err = w.checkout.prepare(ctx, workspace, token); err != nil {
+		if err = w.checkout.prepareCommits(ctx, workspace, token, manifest.Commits); err != nil {
 			return nil, err
 		}
 		if err = w.checkout.saveJSON(transferMarker(workspace), workspace); err != nil {

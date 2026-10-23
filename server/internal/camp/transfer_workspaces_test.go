@@ -2,12 +2,17 @@ package camp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
+	"github.com/teslashibe/capybara-camp/server/internal/testgit"
 	"github.com/teslashibe/capybara-camp/server/internal/transfer"
 )
 
@@ -23,6 +28,89 @@ type transferWorkspaceFixture struct {
 	grant    RunnerGrant
 	input    WorkspaceInput
 	raw      []byte
+}
+
+func TestTransferWorkspaceAuthorizesRemoteAncestorAndRetainsReviewedHead(t *testing.T) {
+	g, provider, actors, c, session, input := workspaceFixture(t)
+	owner := actors[0]
+	dir := t.TempDir()
+	testgit.Command(t, dir, "init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("Base\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	testgit.Command(t, dir, "add", ".")
+	testgit.Command(t, dir, "commit", "-qm", "Remote ancestor")
+	base := testgit.Command(t, dir, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("Unpublished\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	testgit.Command(t, dir, "add", ".")
+	testgit.Command(t, dir, "commit", "-qm", "Unpublished")
+	manifest, err := transfer.SnapshotWithCommits(t.Context(), dir, []string{}, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create, _ := transferPayload(t, session, []byte("unused"))
+	manifest.History = &transfer.HistoryBinding{Version: 1, ParentID: strings.Repeat("c", 64), MainRevision: strings.Repeat("d", 64), Children: []transfer.HistoryChild{}, TranscriptRevision: session.TranscriptRevision}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create.TargetLocation, create.TargetAccountID = "cloud", input.ProviderAccountID
+	create.PayloadBytes, create.PayloadSHA256 = len(raw), transferDigest(raw)
+	create.ReviewSHA256, err = manifest.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	upload, err := g.store.CreateTransfer(t.Context(), owner, c.ID, session.ID, uuid.NewString(), create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upload = uploadTransfer(t, g.store, owner, c, session, upload, raw)
+	upload, err = g.store.CompleteTransfer(t.Context(), owner, c.ID, session.ID, upload.ID)
+	if err != nil || upload.RemoteBaseCommit != base || upload.BaseCommit != manifest.BaseCommit {
+		t.Fatal("Transfer metadata lost ancestry", err)
+	}
+	input.Ref = manifest.BaseCommit
+	request := uuid.NewString()
+	// A valid-looking SHA from the remote is insufficient unless it is the
+	// reviewed ancestor. No workspace is created on this failed authorization.
+	if _, err := g.CreateTransferWorkspace(t.Context(), owner, c.ID, session.ID, upload.ID, request, input); !errors.Is(err, ErrRevision) {
+		t.Fatal("Unrelated remote commit accepted", err)
+	}
+	provider.mu.Lock()
+	provider.commit = base
+	provider.mu.Unlock()
+	target, err := g.CreateTransferWorkspace(t.Context(), owner, c.ID, session.ID, upload.ID, request, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.BaseCommit != manifest.BaseCommit || target.RemoteBaseCommit != base || target.RequestedRef != base {
+		t.Fatal("Workspace replaced reviewed head with remote ancestor")
+	}
+	provider.mu.Lock()
+	refs := append([]string{}, provider.resolvedRefs...)
+	provider.mu.Unlock()
+	if len(refs) != 2 || refs[0] != base || refs[1] != base {
+		t.Fatal("Remote resolution did not use pinned ancestor", refs)
+	}
+	again, err := g.CreateTransferWorkspace(t.Context(), owner, c.ID, session.ID, upload.ID, request, input)
+	if err != nil || again != target {
+		t.Fatal("Workspace replay changed ancestry", err)
+	}
+	if _, err := g.Workspace(t.Context(), actors[1], c.ID, target.ID); !errors.Is(err, ErrDenied) {
+		t.Fatal("Teammate read private workspace", err)
+	}
+	grant, err := g.store.CreateRunnerGrant(t.Context(), owner, input.ProviderAccountID, uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.store.pool.Exec(t.Context(), `UPDATE ticket_workspaces SET remote_base_commit=$2 WHERE id=$1`, target.ID, strings.Repeat("e", 40)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.ClaimRunnerWorkspace(t.Context(), grant.Token, target.ID, uuid.NewString()); !errors.Is(err, ErrRevision) {
+		t.Fatal("Changed ancestor remained claimable", err)
+	}
 }
 
 func newTransferWorkspaceFixture(t *testing.T, purpose ...string) transferWorkspaceFixture {

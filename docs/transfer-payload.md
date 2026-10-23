@@ -1149,8 +1149,32 @@ and returns commit counts, byte counts and a separate archive review digest.
 `transfer-review` derives the same summary from downloaded bytes. An ancestor
 supplied here is not evidence of remote access or permission.
 
-This is a payload/helper checkpoint. Native ancestor discovery and review,
-server-authorized ancestor preparation, both destination workers and full
-handoff recovery still need integration. Current destination preparation fetches
-only the requested commit at depth one; it cannot use this archive importer yet.
-The UI does not offer unpublished-commit transfer at this checkpoint.
+The cloud destination path now authorizes and fetches the reviewed ancestor,
+restores the object archive, checks out the reviewed head and applies selected
+working changes through the existing stager. It fetches complete ancestor history
+for these transfers because a merge parent may fork before the ancestor. Ordinary
+workspaces retain their depth-one fetch. The existing Git operation deadline,
+private workspace storage and preparation lease still apply.
+
+Schema 38 saves `remote_base_commit` separately on the transfer and destination
+workspace. It is derived from the validated archive, not a separate client claim.
+GitHub resolution must return that exact ancestor through the owner's repository
+access. The destination's `base_commit` remains the reviewed unpublished head.
+Claims, saved worker records and transfer validity bind both values. Replaying a
+completed preparation request returns its existing workspace.
+
+Before staging, interrupted read-only preparation may repeat in the unused
+destination. Once the staging marker exists, the worker resumes its existing
+file journal and refuses to recreate that checkout. Dropped chunk and ready-report
+responses do not repeat completed preparation. Preparing a workspace still does
+not move session execution or approve a provider turn.
+
+Stop older writers before migrating to schema 38 and use the matching server and
+runner binaries. An older worker must not prepare an archive-bearing transfer.
+Rollback refuses to discard retained ancestor fields; it succeeds only when none
+remain. Older ready payloads whose metadata lacks their archive ancestor require
+recapture, rather than guessing an authorization binding.
+
+Native ancestor discovery/review, cloud-source capture, local destination
+preparation, and full live handoff acceptance still need integration. The native
+UI does not offer unpublished-commit transfer at this checkpoint.

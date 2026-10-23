@@ -1272,3 +1272,34 @@ cannot use the new importer yet. No live provider or cloud deployment is implied
 Attachments, shared skills, Git publication and all remaining acceptance/release
 checks remain in scope. The bottom-left connection footer change remains a
 proposal; its current hard-coded local status has not been replaced.
+
+### Cloud destination ancestry checkpoint — October 22
+
+Schema 38 records the remotely authorized ancestor separately from the reviewed
+unpublished head. Workspace preparation resolves the ancestor through the owner's
+GitHub repository access, then retains both identities through claims, worker
+journals and transfer validation. The cloud worker fetches ancestor history,
+restores verified objects and applies the selected working changes at the reviewed
+head. Preparation does not transfer execution ownership or approve a model turn.
+
+Recovery distinguishes an unused destination from a checkout with staged work.
+The former may repeat preparation; the latter keeps its journal and cannot be
+recreated. The focused recovery test passes in `build/remote-ancestor-recovery.log`.
+The migration refuses rollback while retained transfers or workspaces depend on
+the ancestor field. Stop older writers before applying it.
+
+The full PostgreSQL-backed race run passed every package except a new database
+fixture that supplied incomplete pre-existing review metadata. After correcting
+the fixture, the database race suite passed, including retained transfer and
+workspace downgrade checks. Evidence: `build/remote-ancestor-server.log` and
+`build/remote-ancestor-database.log`. The API/Git integration covers unpublished
+files absent from the remote, selected working changes, unrelated ancestor
+rejection, owner isolation, altered claim bindings and lost chunk/report replies.
+Vet, Linux command builds and the staged secret scan pass. Provider identities
+and GitHub authorization are fixtures; no live cloud model turn is implied.
+
+Remaining transfer work: native ancestor discovery and review, cloud-source
+capture and local-destination preparation for unpublished commits, attachments,
+and live provider handoff acceptance. Shared skills, Git publication, complete
+UI/performance/review acceptance, joint Hetzner provisioning and the V1 release
+and native website demo remain open. Memory/Cortex remains excluded.

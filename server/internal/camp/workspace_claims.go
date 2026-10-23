@@ -70,7 +70,7 @@ func (g *GitStore) lockRunnerWorkspace(ctx context.Context, tx pgx.Tx, token, id
 		if err != nil {
 			return out, err
 		}
-		if t.BaseCommit != out.value.BaseCommit || t.SourceRevision != out.value.SourceRevision {
+		if t.BaseCommit != out.value.BaseCommit || t.RemoteBaseCommit != out.value.RemoteBaseCommit || t.SourceRevision != out.value.SourceRevision {
 			return out, ErrRevision
 		}
 		out.transfer = &t

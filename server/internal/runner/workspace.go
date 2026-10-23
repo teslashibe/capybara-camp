@@ -28,7 +28,7 @@ type workspaceRecord struct {
 }
 
 func sameWorkspace(a, b camp.Workspace) bool {
-	return a.ID == b.ID && a.SessionID == b.SessionID && a.CampID == b.CampID && a.OwnerUserID == b.OwnerUserID && a.ProjectID == b.ProjectID && a.ProviderAccountID == b.ProviderAccountID && a.ProviderInstallationID == b.ProviderInstallationID && a.ProviderEpoch == b.ProviderEpoch && a.GitConnectionID == b.GitConnectionID && a.GitEpoch == b.GitEpoch && a.GitHubUserID == b.GitHubUserID && a.GitHubInstallationID == b.GitHubInstallationID && a.RepositoryName == b.RepositoryName && a.RepositoryID == b.RepositoryID && a.BaseCommit == b.BaseCommit && a.Branch == b.Branch && a.Purpose == b.Purpose && a.SourceRevision == b.SourceRevision && a.ProjectRevision == b.ProjectRevision && a.TransferID == b.TransferID
+	return a.ID == b.ID && a.SessionID == b.SessionID && a.CampID == b.CampID && a.OwnerUserID == b.OwnerUserID && a.ProjectID == b.ProjectID && a.ProviderAccountID == b.ProviderAccountID && a.ProviderInstallationID == b.ProviderInstallationID && a.ProviderEpoch == b.ProviderEpoch && a.GitConnectionID == b.GitConnectionID && a.GitEpoch == b.GitEpoch && a.GitHubUserID == b.GitHubUserID && a.GitHubInstallationID == b.GitHubInstallationID && a.RepositoryName == b.RepositoryName && a.RepositoryID == b.RepositoryID && a.BaseCommit == b.BaseCommit && a.RemoteBaseCommit == b.RemoteBaseCommit && a.Branch == b.Branch && a.Purpose == b.Purpose && a.SourceRevision == b.SourceRevision && a.ProjectRevision == b.ProjectRevision && a.TransferID == b.TransferID
 }
 
 func validWorkspaceRecord(r *workspaceRecord) bool {

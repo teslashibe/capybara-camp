@@ -15,7 +15,7 @@ const validWorkspaceTransferSQL = `(w.transfer_id IS NULL OR EXISTS(
  SELECT 1 FROM session_transfers t WHERE t.id=w.transfer_id
  AND t.owner_user_id=w.owner_user_id AND t.camp_id=w.camp_id AND t.session_id=w.session_id
  AND t.target_location='cloud' AND t.target_account_id=w.provider_account_id AND t.target_account_epoch=w.provider_epoch
- AND t.base_commit=w.base_commit AND t.source_revision=w.source_revision
+ AND t.base_commit=w.base_commit AND t.remote_base_commit IS NOT DISTINCT FROM w.remote_base_commit AND t.source_revision=w.source_revision
  AND ((t.state='ready' AND t.expires_at>clock_timestamp() AND t.source_epoch=s.execution_epoch AND t.source_location=s.execution_location
  AND t.source_workspace_id IS NOT DISTINCT FROM s.execution_workspace_id
  AND t.source_transcript_revision=s.transcript_revision AND t.source_permission_revision=s.permission_revision)

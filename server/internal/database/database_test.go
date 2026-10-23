@@ -152,6 +152,34 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM session_transfers WHERE id=$1 AND state='ready' AND base_commit IS NULL AND source_branch IS NULL AND file_count IS NULL`, transfer).Scan(&transferCount); err != nil || transferCount != 1 {
 		t.Fatal("migration lost or invented transfer review metadata", err)
 	}
+	if _, err = pool.Exec(ctx, `UPDATE session_transfers SET base_commit=$2,remote_base_commit=$3,source_branch='fixture',file_count=0 WHERE id=$1`, transfer, strings.Repeat("a", 40), strings.Repeat("b", 40)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 37); err == nil {
+		t.Fatal("Downgrade discarded unpublished commit ancestry")
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal("Refused ancestry downgrade changed readiness", err)
+	}
+	var remoteBase string
+	if err = pool.QueryRow(ctx, `SELECT remote_base_commit FROM session_transfers WHERE id=$1`, transfer).Scan(&remoteBase); err != nil || remoteBase != strings.Repeat("b", 40) {
+		t.Fatal("Remote ancestry lost", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE session_transfers SET base_commit=NULL,remote_base_commit=NULL,source_branch=NULL,file_count=NULL WHERE id=$1`, transfer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE ticket_workspaces SET transfer_id=$2,remote_base_commit=$3 WHERE id=$1`, workspace, transfer, strings.Repeat("b", 40)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 37); err == nil {
+		t.Fatal("Downgrade discarded retained workspace ancestry")
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE ticket_workspaces SET transfer_id=NULL,remote_base_commit=NULL WHERE id=$1`, workspace); err != nil {
+		t.Fatal(err)
+	}
 	var chunk []byte
 	if err = pool.QueryRow(ctx, `SELECT encrypted_data FROM transfer_chunks WHERE transfer_id=$1`, transfer).Scan(&chunk); err != nil || !bytes.Equal(chunk, bytes.Repeat([]byte{18}, 30)) {
 		t.Fatal("migration changed stored chunks", err)
@@ -216,6 +244,10 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	}
 	if _, err = provider.DownTo(ctx, 36); err == nil {
 		t.Fatal("Downgrade discarded provider continuation identity")
+	}
+	// Empty newer migrations may have rolled back before the retained identity.
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
 	}
 	if err = Ready(ctx, pool); err != nil {
 		t.Fatal("Refused continuation downgrade changed readiness", err)

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/teslashibe/capybara-camp/server/internal/camp"
 	"github.com/teslashibe/capybara-camp/server/internal/gitcheckout"
+	"github.com/teslashibe/capybara-camp/server/internal/transfer"
 )
 
 var errCheckoutUnsafe = gitcheckout.ErrUnsafe
@@ -27,6 +28,9 @@ func validWorkspace(w camp.Workspace) bool {
 	var transferErr error
 	if w.TransferID != "" {
 		_, transferErr = uuid.Parse(w.TransferID)
+	}
+	if w.RemoteBaseCommit != "" && (w.TransferID == "" || !gitcheckout.ValidCommit(w.RemoteBaseCommit) || w.RemoteBaseCommit == w.BaseCommit) {
+		return false
 	}
 	return err == nil && sessionErr == nil && transferErr == nil && validRepository(w.RepositoryName) && gitcheckout.ValidCommit(w.BaseCommit) && w.Branch == "camp/"+w.SessionID+"/"+w.ID
 }
@@ -155,7 +159,17 @@ func (c *checkout) keepWorkspace(id string) error {
 func (c *checkout) cleanAll() error { return c.keepWorkspace("") }
 
 func (c *checkout) prepare(ctx context.Context, w camp.Workspace, token camp.RunnerWorkspaceToken) (result error) {
+	return c.prepareCommits(ctx, w, token, nil)
+}
+
+func (c *checkout) prepareCommits(ctx context.Context, w camp.Workspace, token camp.RunnerWorkspaceToken, archive *transfer.CommitArchive) (result error) {
 	if !validWorkspace(w) || token.WorkspaceID != w.ID || !validGitToken(token.Token) || !token.ExpiresAt.After(time.Now()) {
+		return ErrState
+	}
+	if (archive == nil) != (w.RemoteBaseCommit == "") {
+		return ErrState
+	}
+	if archive != nil && (archive.BaseCommit != w.RemoteBaseCommit || archive.HeadCommit != w.BaseCommit || archive.Validate() != nil) {
 		return ErrState
 	}
 	if err := c.remove(w); err != nil {
@@ -192,8 +206,33 @@ func (c *checkout) prepare(ctx context.Context, w camp.Workspace, token camp.Run
 	if _, err = c.git(ctx, w, "", "remote", "add", "origin", remote); err != nil {
 		return err
 	}
-	if _, err = c.git(ctx, w, credentialFile, "fetch", "--no-tags", "--depth=1", "origin", w.BaseCommit); err != nil {
+	fetch := []string{"fetch", "--no-tags", "--depth=1", "origin", w.BaseCommit}
+	if archive != nil {
+		// Merge parents may fork before the reviewed ancestor. Preserve its
+		// complete ancestry so object verification cannot rely on a shallow cut.
+		fetch = []string{"fetch", "--no-tags", "origin", w.RemoteBaseCommit}
+	}
+	if _, err = c.git(ctx, w, credentialFile, fetch...); err != nil {
 		return err
+	}
+	if archive != nil {
+		baseTree, err := c.git(ctx, w, "", "ls-tree", "-rlz", "--full-tree", w.RemoteBaseCommit)
+		if err != nil {
+			return err
+		}
+		if err = c.validateTree(ctx, w, baseTree); err != nil {
+			return err
+		}
+		if _, err = c.git(ctx, w, "", "checkout", "--no-recurse-submodules", "--detach", w.RemoteBaseCommit); err != nil {
+			return err
+		}
+		digest, err := archive.Digest()
+		if err != nil {
+			return err
+		}
+		if _, err = transfer.RestoreCommits(ctx, c.workdir(w), *archive, digest); err != nil {
+			return err
+		}
 	}
 	tree, err := c.git(ctx, w, "", "ls-tree", "-rlz", "--full-tree", w.BaseCommit)
 	if err != nil {

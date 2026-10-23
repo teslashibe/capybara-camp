@@ -20,6 +20,7 @@ type workspaceGit struct {
 	repository     gitprovider.Repository
 	commit         string
 	resolutions    int
+	resolvedRefs   []string
 	resolveStarted chan struct{}
 	resolveProceed chan struct{}
 	scopeCalls     int
@@ -66,9 +67,10 @@ func (f *workspaceGit) Repositories(_ context.Context, _ string, _ gitprovider.I
 	}
 	return gitprovider.Repositories{Values: []gitprovider.Repository{f.repository}}, nil
 }
-func (f *workspaceGit) ResolveCommit(ctx context.Context, _ string, _ gitprovider.Repository, _ string) (string, error) {
+func (f *workspaceGit) ResolveCommit(ctx context.Context, _ string, _ gitprovider.Repository, ref string) (string, error) {
 	f.mu.Lock()
 	f.resolutions++
+	f.resolvedRefs = append(f.resolvedRefs, ref)
 	commit, started, proceed := f.commit, f.resolveStarted, f.resolveProceed
 	f.mu.Unlock()
 	if started != nil {
