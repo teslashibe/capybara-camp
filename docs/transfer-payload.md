@@ -1110,3 +1110,47 @@ journey uses disposable PostgreSQL and synthetic provider/filesystem adapters:
 CAMP_NATIVE_FIXTURE_HISTORY=1 CAMP_NATIVE_FIXTURE_RETURN=1 \
   tools/test-native-api.sh NativeReturnHandoffAPITests
 ```
+
+## Unpublished commit payload
+
+The transfer package can capture a bounded Git object archive above an explicitly
+selected ancestor. The manifest's `base_commit` stays the source HEAD against
+which selected working changes were captured. Optional `commits.base_commit`
+identifies the ancestor a destination must independently authorize and fetch;
+`commits.head_commit` must equal the manifest's `base_commit`.
+
+Original object bytes preserve commit IDs, authorship, parent links, merge
+history, binary content and executable bits. No refs, hooks, Git configuration,
+credentials or unselected working files are copied. New object bytes are checked
+against the transfer's known secret patterns, including earlier versions deleted
+before HEAD. New or changed policy-excluded paths in any transferred commit
+refuse the archive. They cannot be stripped without changing commit identity.
+Source capture refuses shallow history and grafts; ordinary linked worktrees
+are supported. Capture never fetches, pushes or modifies source history.
+
+The archive allows at most 256 commits and 4,096 objects, with the existing 4 MiB
+per-object bound. Commit objects and selected working-file bodies share the
+32 MiB total payload budget. The review digest binds each object's SHA-256,
+identity, type and length, plus the source and ancestor commits. Object order
+does not change approval. Transfers without an archive retain their prior
+review digest.
+
+`RestoreCommits` requires a clean, private checkout at the authorized ancestor.
+It validates connectivity and every transferred commit tree in a temporary
+object database before installing objects. It rejects missing or extra objects,
+unsafe paths and symlinks, grafts, shallow destinations and external object
+stores. Failure removes the temporary database. Installation is retryable and
+does not change HEAD, branches, the index or working files. A caller must exclude
+other checkout writers and separately perform the reviewed checkout, file stage
+and execution handoff. A receipt proves object installation only.
+
+The bundled helper's `transfer-capture` accepts an optional `remoteBaseCommit`
+and returns commit counts, byte counts and a separate archive review digest.
+`transfer-review` derives the same summary from downloaded bytes. An ancestor
+supplied here is not evidence of remote access or permission.
+
+This is a payload/helper checkpoint. Native ancestor discovery and review,
+server-authorized ancestor preparation, both destination workers and full
+handoff recovery still need integration. Current destination preparation fetches
+only the requested commit at depth one; it cannot use this archive importer yet.
+The UI does not offer unpublished-commit transfer at this checkpoint.

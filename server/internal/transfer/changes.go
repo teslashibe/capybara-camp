@@ -125,3 +125,22 @@ func Snapshot(ctx context.Context, dir string, selected []string) (Manifest, err
 	}
 	return out, nil
 }
+
+// SnapshotWithCommits preserves an explicitly selected unpublished commit range
+// alongside working changes relative to its head. The remote base is supplied
+// by the caller; capture does not imply that a destination can authorize it.
+func SnapshotWithCommits(ctx context.Context, dir string, selected []string, remoteBase string) (Manifest, error) {
+	m, err := Snapshot(ctx, dir, selected)
+	if err != nil {
+		return Manifest{}, err
+	}
+	archive, err := CaptureCommits(ctx, dir, remoteBase, m.BaseCommit)
+	if err != nil {
+		return Manifest{}, err
+	}
+	m.Commits = &archive
+	if err := VerifySource(ctx, dir, m); err != nil {
+		return Manifest{}, err
+	}
+	return m, nil
+}

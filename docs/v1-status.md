@@ -1238,3 +1238,37 @@ Next: attachments and missing remote commits, shared skills, Git publication and
 the remaining live-provider, UI, performance and review acceptance. Joint Hetzner
 provisioning and the signed V1 release/website demo follow those checks. No cloud
 deployment or V1 release occurred; memory/Cortex remains excluded.
+
+### Unpublished Git history checkpoint — October 22
+
+The Go transfer package now captures unpublished commit objects above an explicit
+ancestor and binds them to the same review as selected working files. It preserves
+original authors, commit IDs, merge parents, binary data and executable bits.
+Object installation verifies connectivity and historical trees in a temporary
+database before writing the private destination object store. It leaves branches,
+HEAD, the index and working files unchanged. Source capture does not push or fetch.
+
+The helper can produce and review this combined payload, including commit and byte
+counts. Both kinds of content share one size limit. Existing transfers retain
+their prior review digests. Source grafts and shallow history are refused; normal
+linked source worktrees work. Known secret patterns and excluded paths are checked
+through the transferred history, including files deleted before HEAD.
+
+The transfer and local-helper race suites pass in `build/commit-payload-tests.log`.
+Tests use real disposable Git repositories and cover merge ancestry, replay,
+selected working changes after checkout, malformed or missing objects, unsafe
+historical trees, cancellation, temporary-store cleanup and combined byte limits.
+The complete Go race suite passes with disposable PostgreSQL in
+`build/commit-archive-server.log`. After the final transport-restriction fix, the
+transfer suite and local-helper transfer/hold/recovery cases pass again in
+`build/commit-archive-final-transfer.log` and
+`build/commit-archive-final-helper.log`. Vet and Linux command builds pass. The
+staged secret scan is empty. These checks do not satisfy live transfer acceptance.
+
+This does not complete missing-commit transfers. Native remote-ancestor discovery
+and review, server authorization/fetch, both destination workers and handoff
+recovery still need integration. Existing destination preparation is shallow and
+cannot use the new importer yet. No live provider or cloud deployment is implied.
+Attachments, shared skills, Git publication and all remaining acceptance/release
+checks remain in scope. The bottom-left connection footer change remains a
+proposal; its current hard-coded local status has not been replaced.

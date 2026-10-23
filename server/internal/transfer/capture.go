@@ -32,15 +32,22 @@ func (b *limitedOutput) Write(p []byte) (int, error) {
 	return b.buffer.Write(p)
 }
 
-// Git reads never inherit credentials, aliases, hooks or diff/text conversion
-// commands from the launching process. Only fixed read-only commands are used.
+// Git operations never inherit credentials or global configuration from the
+// launching process. Callers use fixed plumbing commands with hooks, external
+// monitors and network protocols disabled. Object installation uses gitInput;
+// this helper never authorizes execution or publishes a ref.
 func git(ctx context.Context, dir string, limit int, args ...string) ([]byte, error) {
+	return gitInput(ctx, dir, limit, nil, args...)
+}
+
+func gitInput(ctx context.Context, dir string, limit int, input []byte, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	options := []string{"--no-pager", "--literal-pathspecs", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.attributesFile=/dev/null", "-c", "color.ui=false", "-c", "credential.helper=", "-c", "protocol.allow=never"}
 	command := exec.CommandContext(ctx, "/usr/bin/git", append(options, args...)...)
 	command.Dir = dir
-	command.Env = []string{"PATH=/usr/bin:/bin", "HOME=/dev/null", "XDG_CONFIG_HOME=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_NO_REPLACE_OBJECTS=1", "LANG=C"}
+	command.Stdin = bytes.NewReader(input)
+	command.Env = []string{"PATH=/usr/bin:/bin", "HOME=/dev/null", "XDG_CONFIG_HOME=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_NO_REPLACE_OBJECTS=1", "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=", "LANG=C"}
 	command.WaitDelay = time.Second
 	out := &limitedOutput{limit: limit}
 	command.Stdout = out

@@ -3,8 +3,10 @@ package localcli
 import (
 	"bytes"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
+	"github.com/teslashibe/capybara-camp/server/internal/testgit"
 	"github.com/teslashibe/capybara-camp/server/internal/transfer"
 )
 
@@ -38,6 +40,37 @@ func TestTransferReviewUsesRepositoryRelativeSelectedBytes(t *testing.T) {
 	body, _ = json.Marshal(map[string]any{"session": in.Session, "paths": []string{}})
 	if _, err = a.Run(t.Context(), "transfer-capture", bytes.NewReader(body)); err != nil {
 		t.Fatal("History-only transfer failed", err)
+	}
+}
+
+func TestTransferCaptureReviewsUnpublishedCommits(t *testing.T) {
+	a, in := holdFixture(t)
+	root := in.Session.CWD
+	base := testgit.Command(t, root, "rev-parse", "HEAD")
+	testgit.Command(t, root, "add", "file.txt")
+	testgit.Command(t, root, "commit", "-qm", "Unpublished fixture")
+	head := testgit.Command(t, root, "rev-parse", "HEAD")
+	write(t, filepath.Join(root, "file.txt"), "Selected uncommitted edit\n")
+	body, _ := json.Marshal(map[string]any{"session": in.Session, "paths": []string{"file.txt"}, "remoteBaseCommit": base})
+	value, err := a.Run(t.Context(), "transfer-capture", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture := value.(TransferCapture)
+	if capture.Commits == nil || capture.Commits.BaseCommit != base || capture.Commits.HeadCommit != head || capture.Commits.Commits != 1 || capture.Commits.Objects < 3 || capture.Commits.Bytes == 0 || capture.Commits.ReviewSHA256 == "" {
+		t.Fatal("Missing commit review summary")
+	}
+	value, err = a.Run(t.Context(), "transfer-review", bytes.NewReader(capture.Payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	review := value.(TransferCapture)
+	if review.Commits == nil || *review.Commits != *capture.Commits || review.ReviewSHA256 != capture.ReviewSHA256 || review.Payload != nil {
+		t.Fatal("Downloaded review lost commit approval")
+	}
+	manifest, err := transfer.Decode(capture.Payload)
+	if err != nil || len(manifest.Files) != 1 || string(manifest.Files[0].Data) != "Selected uncommitted edit\n" {
+		t.Fatal("Working change missing from combined capture", err)
 	}
 }
 

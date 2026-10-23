@@ -29,6 +29,16 @@ type TransferCapture struct {
 	Files         []CaptureFile            `json:"files"`
 	Excluded      []transfer.Exclusion     `json:"excluded"`
 	History       *transfer.HistoryBinding `json:"history,omitempty"`
+	Commits       *TransferCommitSummary   `json:"commits,omitempty"`
+}
+
+type TransferCommitSummary struct {
+	BaseCommit   string `json:"baseCommit"`
+	HeadCommit   string `json:"headCommit"`
+	ReviewSHA256 string `json:"reviewSha256"`
+	Commits      int    `json:"commits"`
+	Objects      int    `json:"objects"`
+	Bytes        int    `json:"bytes"`
 }
 
 func (a *App) reviewTransfer(ctx context.Context, action string, input io.Reader) (any, error) {
@@ -37,9 +47,10 @@ func (a *App) reviewTransfer(ctx context.Context, action string, input io.Reader
 		return nil, transfer.ErrInput
 	}
 	var in struct {
-		Session Session                  `json:"session"`
-		Paths   []string                 `json:"paths"`
-		History *transfer.HistoryBinding `json:"history"`
+		Session          Session                  `json:"session"`
+		Paths            []string                 `json:"paths"`
+		History          *transfer.HistoryBinding `json:"history"`
+		RemoteBaseCommit string                   `json:"remoteBaseCommit,omitempty"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -62,7 +73,12 @@ func (a *App) reviewTransfer(ctx context.Context, action string, input io.Reader
 			return nil, err
 		}
 	}
-	manifest, err := transfer.Snapshot(ctx, root, in.Paths)
+	var manifest transfer.Manifest
+	if in.RemoteBaseCommit != "" {
+		manifest, err = transfer.SnapshotWithCommits(ctx, root, in.Paths, in.RemoteBaseCommit)
+	} else {
+		manifest, err = transfer.Snapshot(ctx, root, in.Paths)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -116,6 +132,21 @@ func summarizeTransfer(payload []byte, manifest transfer.Manifest) (TransferCapt
 	sum := sha256.Sum256(payload)
 	out := TransferCapture{PayloadSHA256: hex.EncodeToString(sum[:]), ReviewSHA256: digest, BaseCommit: manifest.BaseCommit, Branch: manifest.Branch, Files: []CaptureFile{}, Excluded: manifest.Excluded}
 	out.History = manifest.History
+	if manifest.Commits != nil {
+		archive := manifest.Commits
+		digest, err := archive.Digest()
+		if err != nil {
+			return TransferCapture{}, err
+		}
+		summary := &TransferCommitSummary{BaseCommit: archive.BaseCommit, HeadCommit: archive.HeadCommit, ReviewSHA256: digest, Objects: len(archive.Objects)}
+		for _, object := range archive.Objects {
+			summary.Bytes += len(object.Data)
+			if object.Kind == "commit" {
+				summary.Commits++
+			}
+		}
+		out.Commits = summary
+	}
 	for _, file := range manifest.Files {
 		out.Files = append(out.Files, CaptureFile{file.Path, len(file.Data), file.Deleted, file.BeforeSHA256, file.SHA256})
 	}

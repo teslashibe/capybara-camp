@@ -58,6 +58,7 @@ type Manifest struct {
 	Files      []File          `json:"files"`
 	Excluded   []Exclusion     `json:"excluded"`
 	History    *HistoryBinding `json:"history,omitempty"`
+	Commits    *CommitArchive  `json:"commits,omitempty"`
 }
 
 func hash(data []byte) string {
@@ -95,6 +96,18 @@ func excludedPath(value string) bool {
 }
 
 func (m Manifest) Validate() error {
+	commitBytes := 0
+	if m.Commits != nil {
+		if m.Commits.HeadCommit != m.BaseCommit {
+			return ErrInput
+		}
+		if err := m.Commits.Validate(); err != nil {
+			return err
+		}
+		for _, object := range m.Commits.Objects {
+			commitBytes += len(object.Data)
+		}
+	}
 	if m.History != nil {
 		if err := m.History.Validate(); err != nil {
 			return err
@@ -124,7 +137,7 @@ func (m Manifest) Validate() error {
 		seen = append(seen, name)
 		return true
 	}
-	total := 0
+	total := commitBytes
 	for _, f := range m.Files {
 		if !checkPath(f.Path) || excludedPath(f.Path) || f.BeforeSHA256 != "" && !digestPattern.MatchString(f.BeforeSHA256) || f.BeforeSHA256 == "" && f.BeforeExecutable {
 			return ErrInput
@@ -172,6 +185,15 @@ func (m Manifest) Digest() (string, error) {
 	copy := m
 	copy.Files = append([]File{}, m.Files...)
 	copy.Excluded = append([]Exclusion{}, m.Excluded...)
+	commitDigest := ""
+	if m.Commits != nil {
+		var err error
+		commitDigest, err = m.Commits.Digest()
+		if err != nil {
+			return "", err
+		}
+		copy.Commits = nil
+	}
 	if m.History != nil {
 		h := *m.History
 		h.Children = append([]HistoryChild{}, h.Children...)
@@ -183,7 +205,10 @@ func (m Manifest) Digest() (string, error) {
 	}
 	sort.Slice(copy.Files, func(i, j int) bool { return copy.Files[i].Path < copy.Files[j].Path })
 	sort.Slice(copy.Excluded, func(i, j int) bool { return copy.Excluded[i].Path < copy.Excluded[j].Path })
-	data, err := json.Marshal(copy)
+	data, err := json.Marshal(struct {
+		Manifest
+		CommitSHA256 string `json:"commits_sha256,omitempty"`
+	}{copy, commitDigest})
 	if err != nil {
 		return "", ErrInput
 	}
