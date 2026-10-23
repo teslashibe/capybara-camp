@@ -3,6 +3,8 @@ import Foundation
 actor TransferFixture: CampAccountTransport {
     var session: CloudSession
     var sourceWorker = false
+    var attachmentReview: TransferAttachmentReview?
+    func reviewAttachments(_ review: TransferAttachmentReview) { attachmentReview=review }
     var transfer: CloudTransfer?
     var workspace: CloudWorkspace?
     var handoff: CloudHandoff?
@@ -39,6 +41,7 @@ actor TransferFixture: CampAccountTransport {
             if rejectCreate {rejectCreate=false;throw CampCloudError.server(409,"changed")}
             creates+=1
             transfer=CloudTransfer(id:UUID().uuidString.lowercased(),campId:session.campId,sessionId:session.id,ownerUserId:session.ownerUserId,sourceLocation:"local",sourceEpoch:session.executionEpoch ?? 1,sourceRevision:session.revision,sourceTranscriptRevision:session.transcriptRevision,sourcePermissionRevision:session.permissionRevision,targetLocation:"cloud",targetAccountId:object["target_account_id"] as? String,payloadSha256:object["payload_sha256"] as! String,reviewSha256:object["review_sha256"] as! String,payloadBytes:object["payload_bytes"] as! Int,uploadedBytes:0,uploadedChunks:[],chunkBytes:256<<10,state:"uploading",revision:1,expiresAt:Date().addingTimeInterval(3600),fileCount:0)
+            transfer?.attachmentReview=attachmentReview
             result=try CampWire.encoder().encode(transfer!)
         } else if path.contains("/chunks/") {
             let bytes=Data(base64Encoded:object["data"] as! String)!
@@ -65,6 +68,7 @@ actor TransferFixture: CampAccountTransport {
             result=try CampWire.encoder().encode(handoff!)
         } else if path.hasSuffix("/commit") {
             guard handoff?.state=="acknowledged" else{throw CampCloudError.server(409,"invalid_transition")}
+            precondition(object["attachment_review_sha256"] as? String == attachmentReview?.sha256 ?? "")
             handoff?.commitNonce=UUID().uuidString.lowercased();finish = !sourceWorker
             result=try CampWire.encoder().encode(handoff!)
         } else if path.hasSuffix("/cancel") {

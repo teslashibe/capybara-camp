@@ -116,6 +116,7 @@ struct ReturnTransferView: View {
         case "installing", "installed": ProgressView("Restoring reviewed files and session history")
         case "uploading", "holding": ProgressView("Verifying the source and destination")
         case "confirm":
+            if let review = transfer.handoff?.transfer?.attachmentReview { TransferAttachmentReviewView(review: review) }
             Label("Source verified",systemImage:"checkmark").font(.caption)
             Text("Continues with imported context · The provider’s hidden runtime state is not transferred").font(.caption).foregroundStyle(campMuted)
             Toggle("Continue using the imported conversation history",isOn:$contextApproved)

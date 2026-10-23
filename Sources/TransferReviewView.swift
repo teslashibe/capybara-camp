@@ -129,6 +129,7 @@ struct TransferReviewView: View {
         case "holding":
             ProgressView("Waiting for the source Mac to verify its files");cancelButton
         case "confirm":
+            if let review = job.transfer?.attachmentReview { TransferAttachmentReviewView(review: review) }
             Label("Source verified",systemImage:"checkmark").font(.caption)
             if job.input.purpose=="implementation" {
                 PermissionFields(provider:local.provider,catalog:catalog,selection:permissions)

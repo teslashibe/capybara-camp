@@ -65,10 +65,19 @@ selection includes the message, attachment ID and source digest. Reads verify
 the selected revision, current authorization and body hash. The two large-body
 HTTP slots are shared with ordinary attachment upload and download requests.
 
-Transfer guards remain while the final handoff review, saved-history byte
-publication, cleanup of abandoned transfer files and live provider acceptance
-are unfinished. Component success does not authorize removing those guards.
-The transfer review must identify unavailable bytes before ownership moves.
+The local development handoff now presents the number and total size of stored
+files, plus unavailable references grouped by type and reason. Confirmation
+includes a SHA-256 review identity bound to every descriptor, its original
+conversation/message and the pinned transcript revision. Missing or changed
+confirmation identities refuse the move. Missing retained bodies also refuse
+handoff, while cancellation remains available. Source ownership and fresh stop
+proof checks still apply. This replaces the development blanket attachment block;
+it does not complete the release gate. Saved-history byte publication, cleanup of
+abandoned transfer files and live provider acceptance remain unfinished.
+The PostgreSQL attachment/handoff regression suite and native transfer, export
+and return-screen suites pass, including exact review confirmation, missing-body
+cancellation and preserved contents. Evidence: `build/attachment-review-regression.log`
+and `build/attachment-review-native.log`. These checks use synthetic providers.
 Live provider, full migration and complete native visual acceptance remain
 open. No remote-reference fetching or arbitrary local-path reading is authorized
 by an imported transcript alone.
@@ -135,8 +144,8 @@ restore a compatible deployment rather than discard that history.
 The native publisher and permission-checked byte reader use this storage API.
 Cloud message decoding retains descriptors, and the native destination
 history downloader refuses an archive that would omit their bodies. Server
-transfer checks also refuse sessions with retained attachment history. Those
-guards remain until destination byte installation is complete.
+transfer checks require the pinned embedded bodies to remain available and the
+owner to confirm the exact attachment review before ownership moves.
 
 ## Native byte reads
 

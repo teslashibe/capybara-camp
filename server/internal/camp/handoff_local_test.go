@@ -11,10 +11,19 @@ import (
 	"github.com/teslashibe/capybara-camp/server/internal/localcli"
 )
 
-func localDestinationFixture(t *testing.T, purpose string) (transferWorkspaceFixture, auth.Actor, HandoffInput) {
+func localDestinationFixture(t *testing.T, purpose string, withAttachments ...bool) (transferWorkspaceFixture, auth.Actor, HandoffInput) {
 	t.Helper()
 	g, w, grant, owner, input := executionFixture(t, "planning")
-	revision, err := g.store.WriteTranscript(t.Context(), owner, w.CampID, w.SessionID, uuid.NewString(), TranscriptInput{Messages: []MessageInput{{ID: "main", Ordinal: 0, Role: "user", Text: "Keep the original plan"}}})
+	var refs []AttachmentReference
+	if len(withAttachments) > 0 && withAttachments[0] {
+		body := []byte("preserved attachment")
+		ref := AttachmentReference{ID: "a:0", Kind: "document", Source: "inline", SourceDigest: strings.Repeat("a", 64), State: "embedded", MediaType: "text/plain", SHA256: transferDigest(body), Size: len(body)}
+		if _, err := g.store.PutAttachment(t.Context(), owner, w.CampID, w.SessionID, ref.SHA256, AttachmentUpload{Data: body}); err != nil {
+			t.Fatal(err)
+		}
+		refs = []AttachmentReference{ref, {ID: "a:1", Kind: "image", Source: "remote", SourceDigest: strings.Repeat("b", 64), State: "reference"}}
+	}
+	revision, err := g.store.WriteTranscript(t.Context(), owner, w.CampID, w.SessionID, uuid.NewString(), TranscriptInput{Messages: []MessageInput{{ID: "main", Ordinal: 0, Role: "user", Text: "Keep the original plan", Attachments: refs}}})
 	if err != nil {
 		t.Fatal(err)
 	}

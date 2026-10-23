@@ -69,6 +69,8 @@ actor CampReturnHandoff {
             purpose:j.destination.target.purpose,receiptSha256:result.receiptSHA256,transcriptRevision:j.destination.session.transcriptRevision)
     }
     private func validate(_ t:CloudTransfer,_ j:ReturnHandoffJournal)throws {
+        guard t.attachmentReview?.valid != false,
+              j.transfer == nil || t.attachmentReview == j.transfer?.attachmentReview else { throw CampCloudError.invalidResponse }
         let d=j.destination,s=d.session
         guard let r=d.installation?.receipt,UUID(uuidString:t.id) != nil,t.campId==scope.campId,t.sessionId==s.id,t.ownerUserId==scope.userId,
               t.sourceLocation=="cloud",t.sourceWorkspaceId==s.executionWorkspaceId,t.sourceEpoch==s.executionEpoch,
@@ -196,7 +198,7 @@ actor CampReturnHandoff {
             if j.phase != "complete",j.handoff?.commitNonce==nil {
                 try await verifyInstallation(j)
                 let confirmed=try await request(CloudHandoff.self,"POST",path+"/handoffs/"+h.id+"/commit",
-                    body:CampWire.body(["expected_handoff_revision":revision,"context_continuation_approved":true,"execution_approved":approved,"permissions":permissions]),key:j.commitKey)
+                    body:CampWire.body(["expected_handoff_revision":revision,"context_continuation_approved":true,"attachment_review_sha256":j.transfer?.attachmentReview?.sha256 ?? "","execution_approved":approved,"permissions":permissions]),key:j.commitKey)
                 try validate(confirmed,j);j.handoff=confirmed
             }
         } else {try await refreshHandoff(&j)}

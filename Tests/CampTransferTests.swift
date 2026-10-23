@@ -59,10 +59,14 @@ import Foundation
             return model
         }
         let fixture=TransferFixture(session),model=setup("complete",fixture)
+        let attachmentReview=TransferAttachmentReview(version:1,sha256:String(repeating:"e",count:64),files:1,bytes:32,unavailable:[.init(kind:"image",state:"reference",count:2)])
+        precondition(attachmentReview.valid)
+        await fixture.reviewAttachments(attachmentReview)
         await model.capture(local,session:session,input:input,paths:[],history:history)
         precondition(model.job?.phase=="review" && model.job?.capture.payload==nil,"Capture was not saved separately")
         await model.prepare();await until("Destination not ready"){model.job?.phase=="ready"}
         await model.hold();await until("Source did not acknowledge"){model.job?.phase=="confirm"}
+        precondition(model.job?.transfer?.attachmentReview == attachmentReview)
         await model.confirm(permissions:PermissionSettings(),approved:false)
         await until("Transfer did not commit"){model.job?.phase=="complete"}
         let completedCreates=await fixture.counts();precondition(completedCreates==1)

@@ -89,6 +89,7 @@ actor ReturnHandoffFixture: CampAccountTransport {
     let review: TransferCapture
     var transfer: CloudTransfer?
     var handoff: CloudHandoff?
+    let attachmentReview=TransferAttachmentReview(version:1,sha256:String(repeating:"d",count:64),files:0,bytes:0,unavailable:[.init(kind:"document",state:"reference",count:1)])
     var createKeys=Set<String>(),holdKeys=Set<String>(),commitKeys=Set<String>()
     var dropped=Set<String>()
     var dropAll=false
@@ -137,7 +138,7 @@ func corrupt(){malformed=true}
                         sourcePermissionRevision:original.permissionRevision,targetLocation:"local",targetAccountId:nil,payloadSha256:review.payloadSha256,
                         reviewSha256:review.reviewSha256,payloadBytes:payload.count,uploadedBytes:0,uploadedChunks:[],chunkBytes:256<<10,
                         state:"uploading",revision:1,expiresAt:Date().addingTimeInterval(600),baseCommit:nil,fileCount:0,
-                        sourceWorkspaceId:original.executionWorkspaceId,targetDeviceId:device)
+                        sourceWorkspaceId:original.executionWorkspaceId,targetDeviceId:device,attachmentReview:attachmentReview)
                 }
                 return try deliver(transfer!,"create")
             }
@@ -178,6 +179,7 @@ func corrupt(){malformed=true}
             if path.hasSuffix("/commit") {
                 precondition(method=="POST" && key != nil);commitKeys.insert(key!)
                 let input=try JSONSerialization.jsonObject(with:body!) as! [String:Any]
+                precondition(input["attachment_review_sha256"] as? String==attachmentReview.sha256)
                 precondition(input["context_continuation_approved"] as? Bool==true)
                 if handoff!.localDestination!.purpose=="implementation" {precondition(input["execution_approved"] as? Bool==true)}
                 if handoff!.commitNonce==nil{handoff!.commitNonce=UUID().uuidString.lowercased();handoff!.revision+=1}

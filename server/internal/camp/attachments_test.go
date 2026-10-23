@@ -152,7 +152,7 @@ func TestAttachmentPublicationEncryptionIsolationAndRecovery(t *testing.T) {
 	}
 }
 
-func TestChildAttachmentParentAuthorityAndTransferFence(t *testing.T) {
+func TestChildAttachmentParentAuthorityAndTransferReview(t *testing.T) {
 	s, actors, c, _, parent, body, ref := attachmentFixture(t)
 	ctx := t.Context()
 	owner, member := actors[0], actors[1]
@@ -193,9 +193,14 @@ func TestChildAttachmentParentAuthorityAndTransferFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := TransferInput{TargetLocation: "local", ExpectedEpoch: parent.ExecutionEpoch, ExpectedRevision: parent.Revision, ExpectedTranscriptRevision: parent.TranscriptRevision, ExpectedPermissionRevision: parent.PermissionRevision, PayloadSHA256: strings.Repeat("a", 64), ReviewSHA256: strings.Repeat("b", 64), PayloadBytes: 2}
-	if _, err = s.CreateTransfer(ctx, owner, c.ID, parent.ID, uuid.NewString(), in); !errors.Is(err, ErrTransition) {
-		t.Fatal("Transfer would omit attachment installation", err)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, err := transferAttachmentReview(ctx, tx, parent.ID, parent.TranscriptRevision, true)
+	tx.Rollback(ctx)
+	if err != nil || review == nil || review.Files != 1 || review.Bytes != int64(len(body)) {
+		t.Fatal("Child contents missing from transfer review", review, err)
 	}
 	child.ExpectedParentRevision = complete.Revision
 	child.ExpectedTranscriptRevision = complete.TranscriptRevision

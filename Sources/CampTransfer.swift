@@ -43,6 +43,7 @@ struct CloudTransfer: Codable, Sendable {
     var sourceWorkspaceId: String? = nil
     var targetDeviceId: String? = nil
     var remoteBaseCommit: String? = nil
+    var attachmentReview: TransferAttachmentReview? = nil
 }
 struct TransferReviewJob: Codable, Sendable {
     var id: String; var session: CloudSession; var input: CloudWorkspaceInput; var capture: TransferCapture
@@ -128,6 +129,7 @@ extension TransferCapture {
     }
     private func base(_ j:TransferReviewJob,_ c:Connection)->String {"/v1/camps/\(c.scope.campId)/sessions/\(j.session.id)"}
     private func valid(_ t:CloudTransfer,_ j:TransferReviewJob,_ c:Connection)->Bool {
+        t.attachmentReview?.valid != false && (j.transfer == nil || t.attachmentReview == j.transfer?.attachmentReview) &&
         UUID(uuidString:t.id) != nil && t.campId==c.scope.campId && t.sessionId==j.session.id && t.ownerUserId==c.credential.actor.userId &&
         t.sourceLocation=="local" && t.sourceEpoch==(j.session.executionEpoch ?? 1) && t.sourceRevision==j.session.revision &&
         t.sourceTranscriptRevision==j.session.transcriptRevision && t.sourcePermissionRevision==j.session.permissionRevision &&
@@ -204,7 +206,7 @@ extension TransferCapture {
     func hold() async {await mutate {j,c in guard j.phase=="ready" else{throw CampCloudError.invalidResponse};var j=j;j.phase="holding";try await self.save(j,c)}}
     func confirm(permissions:PermissionSettings,approved:Bool) async {
         await mutate {j,c in
-            guard j.phase=="confirm",let h=j.handoff else{throw CampCloudError.invalidResponse}
+            guard j.phase=="confirm",let h=j.handoff,j.transfer?.attachmentReview?.valid != false else{throw CampCloudError.invalidResponse}
             if j.input.purpose=="implementation" {guard approved,permissions.valid(for:j.session.provider) else{throw CampCloudError.invalidResponse}}
             var j=j;j.phase="committing";j.commitRevision=h.revision;j.approved=approved
             j.permissions=j.input.purpose=="implementation" ? ["profile":permissions.profile,"sandbox":permissions.sandbox,"approval":permissions.approval,"reviewer":permissions.reviewer,"claudeMode":permissions.claudeMode].filter{!$0.value.isEmpty} : [:]
@@ -324,7 +326,7 @@ extension TransferCapture {
         } else if j.phase=="committing" {
             guard let h=j.handoff,let revision=j.commitRevision else{throw CampCloudError.invalidResponse}
             if h.commitNonce==nil {
-                let confirmed=try await request(CloudHandoff.self,"POST",path+"/handoffs/\(h.id)/commit",c,body:CampWire.body(["expected_handoff_revision":revision,"execution_approved":j.approved ?? false,"permissions":j.permissions ?? [:]]),key:j.commitKey)
+                let confirmed=try await request(CloudHandoff.self,"POST",path+"/handoffs/\(h.id)/commit",c,body:CampWire.body(["expected_handoff_revision":revision,"execution_approved":j.approved ?? false,"permissions":j.permissions ?? [:],"attachment_review_sha256":j.transfer?.attachmentReview?.sha256 ?? ""]),key:j.commitKey)
                 guard valid(confirmed,j,c) else{throw CampCloudError.invalidResponse}
                 j.handoff=confirmed
                 try await save(j,c)

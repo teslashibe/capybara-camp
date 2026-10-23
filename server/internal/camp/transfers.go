@@ -33,34 +33,35 @@ type TransferInput struct {
 }
 
 type Transfer struct {
-	ID                       string    `json:"id"`
-	CampID                   string    `json:"camp_id"`
-	SessionID                string    `json:"session_id"`
-	OwnerUserID              string    `json:"owner_user_id"`
-	SourceLocation           string    `json:"source_location"`
-	SourceWorkspaceID        string    `json:"source_workspace_id,omitempty"`
-	SourceEpoch              int64     `json:"source_epoch"`
-	SourceRevision           int64     `json:"source_revision"`
-	SourceTranscriptRevision int64     `json:"source_transcript_revision"`
-	SourcePermissionRevision int64     `json:"source_permission_revision"`
-	HistorySHA256            string    `json:"history_sha256,omitempty"`
-	TargetLocation           string    `json:"target_location"`
-	TargetAccountID          string    `json:"target_account_id,omitempty"`
-	TargetAccountEpoch       int64     `json:"target_account_epoch,omitempty"`
-	TargetDeviceID           string    `json:"target_device_id,omitempty"`
-	PayloadSHA256            string    `json:"payload_sha256"`
-	ReviewSHA256             string    `json:"review_sha256"`
-	BaseCommit               string    `json:"base_commit,omitempty"`
-	RemoteBaseCommit         string    `json:"remote_base_commit,omitempty"`
-	SourceBranch             string    `json:"source_branch,omitempty"`
-	FileCount                int       `json:"file_count"`
-	PayloadBytes             int       `json:"payload_bytes"`
-	UploadedBytes            int       `json:"uploaded_bytes"`
-	Uploaded                 []int     `json:"uploaded_chunks"`
-	ChunkBytes               int       `json:"chunk_bytes"`
-	State                    string    `json:"state"`
-	Revision                 int64     `json:"revision"`
-	ExpiresAt                time.Time `json:"expires_at"`
+	AttachmentReview         *TransferAttachmentReview `json:"attachment_review,omitempty"`
+	ID                       string                    `json:"id"`
+	CampID                   string                    `json:"camp_id"`
+	SessionID                string                    `json:"session_id"`
+	OwnerUserID              string                    `json:"owner_user_id"`
+	SourceLocation           string                    `json:"source_location"`
+	SourceWorkspaceID        string                    `json:"source_workspace_id,omitempty"`
+	SourceEpoch              int64                     `json:"source_epoch"`
+	SourceRevision           int64                     `json:"source_revision"`
+	SourceTranscriptRevision int64                     `json:"source_transcript_revision"`
+	SourcePermissionRevision int64                     `json:"source_permission_revision"`
+	HistorySHA256            string                    `json:"history_sha256,omitempty"`
+	TargetLocation           string                    `json:"target_location"`
+	TargetAccountID          string                    `json:"target_account_id,omitempty"`
+	TargetAccountEpoch       int64                     `json:"target_account_epoch,omitempty"`
+	TargetDeviceID           string                    `json:"target_device_id,omitempty"`
+	PayloadSHA256            string                    `json:"payload_sha256"`
+	ReviewSHA256             string                    `json:"review_sha256"`
+	BaseCommit               string                    `json:"base_commit,omitempty"`
+	RemoteBaseCommit         string                    `json:"remote_base_commit,omitempty"`
+	SourceBranch             string                    `json:"source_branch,omitempty"`
+	FileCount                int                       `json:"file_count"`
+	PayloadBytes             int                       `json:"payload_bytes"`
+	UploadedBytes            int                       `json:"uploaded_bytes"`
+	Uploaded                 []int                     `json:"uploaded_chunks"`
+	ChunkBytes               int                       `json:"chunk_bytes"`
+	State                    string                    `json:"state"`
+	Revision                 int64                     `json:"revision"`
+	ExpiresAt                time.Time                 `json:"expires_at"`
 }
 type TransferChunk struct {
 	Data   []byte `json:"data"`
@@ -102,7 +103,7 @@ func transferSource(ctx context.Context, tx pgx.Tx, session Session, t Transfer)
 	if session.ExecutionEpoch != t.SourceEpoch || session.ExecutionLocation != t.SourceLocation || session.ExecutionWorkspaceID != t.SourceWorkspaceID || session.Revision != t.SourceRevision || session.TranscriptRevision != t.SourceTranscriptRevision || session.PermissionRevision != t.SourcePermissionRevision {
 		return ErrRevision
 	}
-	if err := transferAttachmentsPending(ctx, tx, session.ID); err != nil {
+	if _, err := transferAttachmentReview(ctx, tx, session.ID, session.TranscriptRevision, true); err != nil {
 		return err
 	}
 	if session.ExternalOwner || !(oneOf(session.State, "idle", "done") || session.ExecutionLocation == "cloud" && session.State == "waiting") {
@@ -153,7 +154,12 @@ func readTransfer(ctx context.Context, tx pgx.Tx, a auth.Actor, campID, sessionI
 		}
 		t.Uploaded = append(t.Uploaded, i)
 	}
-	return t, rows.Err()
+	if err = rows.Err(); err != nil {
+		return t, err
+	}
+	rows.Close()
+	t.AttachmentReview, err = transferAttachmentReview(ctx, tx, t.SessionID, t.SourceTranscriptRevision, false)
+	return t, err
 }
 
 func (s *Store) transferTarget(ctx context.Context, tx pgx.Tx, a auth.Actor, session Session, t Transfer) (int64, error) {

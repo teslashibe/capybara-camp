@@ -16,6 +16,7 @@ type HandoffCommitInput struct {
 	ExecutionApproved           bool                        `json:"execution_approved"`
 	Permissions                 localcli.PermissionSettings `json:"permissions"`
 	ContextContinuationApproved bool                        `json:"context_continuation_approved,omitempty"`
+	AttachmentReviewSHA256      string                      `json:"attachment_review_sha256,omitempty"`
 }
 type HandoffFinishInput struct {
 	HandoffAck
@@ -67,6 +68,13 @@ func (s *Store) RequestHandoffCommit(ctx context.Context, a auth.Actor, campID, 
 	}
 	if _, err = s.validateHandoff(ctx, tx, a, h); err != nil {
 		return h, err
+	}
+	review, err := transferAttachmentReview(ctx, tx, session.ID, session.TranscriptRevision, true)
+	if err != nil {
+		return h, err
+	}
+	if review == nil && in.AttachmentReviewSHA256 != "" || review != nil && in.AttachmentReviewSHA256 != review.SHA256 {
+		return h, ErrRevision
 	}
 	purpose, err := s.handoffPurpose(ctx, tx, a, h)
 	if err != nil {

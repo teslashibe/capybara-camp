@@ -216,20 +216,6 @@ func (s *Store) ReadAttachment(ctx context.Context, a auth.Actor, campID, parent
 	})
 }
 
-// Refuse ownership movement until destination installation carries attachment
-// bodies too. This includes historical revisions retained for the full history.
-func transferAttachmentsPending(ctx context.Context, tx pgx.Tx, parentID string) error {
-	var found bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM message_revisions v WHERE v.attachments<>'[]'::jsonb AND (v.session_id=$1 OR v.session_id IN (SELECT session_id FROM session_children WHERE parent_session_id=$1)))`, parentID).Scan(&found)
-	if err != nil {
-		return err
-	}
-	if found {
-		return ErrTransition
-	}
-	return nil
-}
-
 // Caller has authorized the current parent and selected a committed reference
 // at its pinned revision. The content hash alone never grants a read.
 func (s *Store) readAttachmentBlob(ctx context.Context, tx pgx.Tx, campID, parentID, id string, ref AttachmentReference) ([]byte, error) {
