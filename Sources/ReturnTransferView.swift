@@ -21,7 +21,12 @@ struct ReturnTransferView: View {
             if session.ownerUserId != transfer.ownerUserID {
                 Text("The session owner chooses where this runs").font(.caption)
             } else if !belongs {
-                Text("Finish or cancel the other return to this Mac first").font(.caption)
+                if transfer.phase == "complete" {
+                    // A finished move only keeps its summary; it must not block others.
+                    Button { Task { await transfer.reset() } } label: { Label("Clear the finished move",systemImage:"checkmark") }.disabled(transfer.working)
+                } else {
+                    Text("Finish or cancel the other return to this Mac first").font(.caption)
+                }
             } else {
                 Text("Keep this ticket, its main chat and its sub-agents").font(.system(size:12))
                 content
@@ -134,6 +139,7 @@ struct ReturnTransferView: View {
         case "complete":
             Label("Runs on This Mac",systemImage:"checkmark.circle").foregroundStyle(campGreen)
             Text("Continue from this ticket · The original history stays attached").font(.caption).foregroundStyle(campMuted)
+            Button("Done") { Task { await transfer.reset(); selected = []; contextApproved = false; executionApproved = false } }.disabled(transfer.working)
         default: EmptyView()
         }
     }

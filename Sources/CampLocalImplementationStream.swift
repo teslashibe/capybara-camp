@@ -10,15 +10,40 @@ import Foundation
     private let transport: any CampPublishingTransport
     private var text = ""
     private var stopped = false
+    // Newest text snapshot not yet sent. While one send is in flight later
+    // snapshots replace it, so the provider is not held for a round trip per
+    // token and the stream carries one delta per send instead of one per token.
+    private var pendingText: String?
+    private var drain: Task<Void, Never>?
+    private var drainError: Error?
     init(request: CloudRequest, scope: CloudScope, epoch: Int64, cache: CampCache, transport: any CampPublishingTransport) {
         self.request = request; self.scope = scope; self.epoch = epoch; self.cache = cache; self.transport = transport
     }
-    func stop() { stopped = true; text = "" }
+    func stop() { stopped = true; text = ""; pendingText = nil }
     func emit(_ data: Data) async throws {
         guard !stopped, let value = try JSONSerialization.jsonObject(with: data) as? [String: Any], let kind = value["type"] as? String else { throw CancellationError() }
+        if let drainError { throw drainError }
+        if kind == "text" {
+            guard let next = value["text"] as? String, next.utf8.count <= 2 << 20 else { throw CampCloudError.responseTooLarge }
+            pendingText = next
+            if drain == nil { drain = Task { await self.sendPendingText() } }
+            return
+        }
+        // Every other event keeps its order behind the text before it.
+        try await finishText()
         if kind == "boundary" { text = "" }
-        if kind != "text" { try await send(value); return }
-        guard let next = value["text"] as? String, next.utf8.count <= 2 << 20 else { throw CampCloudError.responseTooLarge }
+        try await send(value)
+    }
+    private func sendPendingText() async {
+        defer { drain = nil }
+        do { while let next = pendingText { pendingText = nil; try await sendText(next) } }
+        catch { drainError = error; pendingText = nil }
+    }
+    private func finishText() async throws {
+        while let task = drain { await task.value }
+        if let drainError { throw drainError }
+    }
+    private func sendText(_ next: String) async throws {
         var delta = next
         if next.hasPrefix(text) { delta = String(next.dropFirst(text.count)) }
         else { try await send(["type": "reset"]) }

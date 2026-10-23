@@ -112,10 +112,16 @@ actor CampWorkspaceExport {
             value = try await request(CloudWorkspaceExport.self, j.cancelling ? "POST" : "GET", base(j)+"/"+e.id+(j.cancelling ? "/cancel" : ""), body:j.cancelling ? Data("{}".utf8) : nil)
         } else {
             let s = j.session
-            value = try await request(CloudWorkspaceExport.self, "POST", base(j), body:CampWire.body([
-                "kind":j.kind,"paths":j.paths,"expected_epoch":s.executionEpoch!,"expected_revision":s.revision,
-                "expected_transcript_revision":s.transcriptRevision,"expected_permission_revision":s.permissionRevision
-            ]), key:j.key)
+            do {
+                value = try await request(CloudWorkspaceExport.self, "POST", base(j), body:CampWire.body([
+                    "kind":j.kind,"paths":j.paths,"expected_epoch":s.executionEpoch!,"expected_revision":s.revision,
+                    "expected_transcript_revision":s.transcriptRevision,"expected_permission_revision":s.permissionRevision
+                ]), key:j.key)
+            } catch CampCloudError.server(let code, _) where j.cancelling && (400..<500).contains(code) && code != 401 && code != 408 {
+                // The create replay was refused outright, so no export exists to
+                // cancel. Discard the journal instead of retrying forever.
+                try await save(nil,discardingKey:j.key); return nil
+            }
         }
         try validate(value,journal:j)
         // Cancellation can be requested while a network request is in flight.

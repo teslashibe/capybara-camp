@@ -64,6 +64,13 @@ import Foundation
         let queued = QueuedPrompt(id: "q", sessionID: target.id, text: "Use context", model: "fixture", effort: "low", speed: "standard", sources: [reference])
         let decoded = try JSONDecoder().decode(QueuedPrompt.self, from: JSONEncoder().encode(queued))
         precondition(decoded.sources == [reference])
+        // Receipts keep the most recent references only and never fill the draft file.
+        for index in 0..<250 {
+            var receipt = reference; receipt.id = "receipt-\(index)"
+            try store.mentions.record([receipt])
+        }
+        precondition(store.mentions.receipts.count == 200 && store.mentions.receipts.last?.id == "receipt-249", "Context receipts grew without bound")
+        try store.mentions.add(reference, to: "another-draft")
         print("PASS: pinned source selection, private persistence, provenance, tamper checks, scope and queue round trips")
     }
 }

@@ -550,8 +550,14 @@ import SwiftUI
     }
     func queueStage(session: CloudSession, stage: Stage) async throws {
         guard let scope, let cache else { throw CampCloudError.cacheUnavailable }
+        let path = "/v1/camps/\(scope.campId)/sessions/\(session.id)/board"
+        // An unsent earlier move carries the same base revision and would make
+        // this one conflict; the latest move replaces it.
+        for item in try await cache.outbox(scope, pendingOnly: true, limit: 1000) where item.path == path && item.method == "PATCH" {
+            try await cache.discardUnsent(item.id)
+        }
         let body = try CampWire.body(["stage": stage.rawValue, "expected_revision": session.revision])
-        _ = try await cache.enqueue(scope: scope, method: "PATCH", path: "/v1/camps/\(scope.campId)/sessions/\(session.id)/board", body: body, expectedEpoch: cacheEpoch)
+        _ = try await cache.enqueue(scope: scope, method: "PATCH", path: path, body: body, expectedEpoch: cacheEpoch)
         pending = try await cache.outbox(scope, limit:1000); flush()
     }
     func queueAction(request: CloudRequest, action: String) async {
@@ -777,7 +783,11 @@ import SwiftUI
             do { _ = try await client.data("POST", path: "/v1/auth/logout", token: credential.token) }
             catch CampCloudError.server(401, _) {} // Already revoked on the server.
             try vault.remove(origin: credential.origin)
-            if let scope { try await cache?.clear(scope) }
+            // Sign-out removes this person's cached history, quotes and queued
+            // commands for every Camp, not only the selected one.
+            var scopes = camps.map { CloudScope(origin: credential.origin, userId: credential.actor.userId, campId: $0.id) }
+            if let scope, !scopes.contains(scope) { scopes.append(scope) }
+            for value in scopes { try await cache?.clear(value) }
             generation = UUID(); streamTask?.cancel(); flushTask?.cancel(); publishTask?.cancel(); notificationTask?.cancel(); notificationTask = nil
             self.credential = nil; self.scope = nil; signedIn = false; camps = []; status = "Local on this Mac"; error = ""; clearVisible()
             providerAccounts.attach(transport: nil, credential: nil)

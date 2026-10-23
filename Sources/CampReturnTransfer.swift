@@ -143,6 +143,8 @@ import SwiftUI
     func reset() async {
         await perform { o,_ in
             guard phase == "cancelled" || phase == "complete" else { throw CampCloudError.invalidResponse }
+            // Adoption already cleared the journals; only the finished summary remains.
+            if completed != nil, handoff == nil, destination == nil, export == nil { completed = nil; return }
             if try await o.handoff.current() != nil { try await o.handoff.discardCancelled() }
             else if try await o.destination.current() != nil { try await o.destination.discardCancelled() }
             else { try await o.files.discard(); try await o.history.discard() }

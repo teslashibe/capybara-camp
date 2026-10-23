@@ -140,13 +140,20 @@ import SwiftUI
                 c.epoch = try await cache.epoch(c.scope); try check(c); context?.epoch = c.epoch
             }
             if active != nil, let attempt = activeAttempt {
-                if Date() >= heartbeatAt {
-                    let current = try await action("heartbeat", attempt: attempt, context: c)
-                    heartbeatAt = Date().addingTimeInterval(heartbeatInterval)
-                    watchLease(current.leaseUntil, attempt: attempt, context: c)
-                    if current.state == "cancel_requested" || current.contentRestricted == true { active?.stop() }
+                // The lease outlives a dropped request by up to a minute and
+                // watchLease stops the run when it really expires, so a brief
+                // network or server error must not kill a healthy turn.
+                do {
+                    if Date() >= heartbeatAt {
+                        let current = try await action("heartbeat", attempt: attempt, context: c)
+                        heartbeatAt = Date().addingTimeInterval(heartbeatInterval)
+                        watchLease(current.leaseUntil, attempt: attempt, context: c)
+                        if current.state == "cancel_requested" || current.contentRestricted == true { active?.stop() }
+                    }
+                    if attempt.request.isStreamedLocal, active?.ready == true { try await deliverControls(attempt, c) }
+                } catch let error where Self.transient(error) {
+                    status = "Shared execution reconnecting · " + error.localizedDescription
                 }
-                if attempt.request.isStreamedLocal, active?.ready == true { try await deliverControls(attempt, c) }
                 return
             }
             let saved = try await cache.attempts(c.scope); try check(c)
@@ -211,6 +218,12 @@ import SwiftUI
                 active?.stop()
             }
         }
+    }
+
+    nonisolated static func transient(_ error: Error) -> Bool {
+        if error is URLError { return true }
+        if case CampCloudError.server(let code, _) = error { return code >= 500 || code == 408 || code == 429 }
+        return false
     }
 
     private func begin(_ saved: CloudAttempt, _ c: Context) async throws {

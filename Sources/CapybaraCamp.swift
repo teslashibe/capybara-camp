@@ -1274,14 +1274,18 @@ final class TranscriptWatch {
                 mode: execution == nil && grant == nil ? .chat : .implementation, executionApproved: execution != nil || grant != nil,
                 newSession: execution.map { !$0.providerSessionCreated } ?? false,
                 executionContext: fingerprint, permissions: permissions, makeProcess: conversationProcess)
-            conversations[s.id] = run; drafts[s.id] = nil; filterRevision += 1
+            // Only a composer send consumed this session's draft; queued, worker
+            // and plan turns must not erase what the user is typing.
+            let composerSend = queuedID == nil && completion == nil
+            conversations[s.id] = run; if composerSend { drafts[s.id] = nil }; filterRevision += 1
             sharing.localChanged()
             if selectedID == s.id { readGeneration = UUID(); loading = false; historyRequestID = nil; historyDirty = false; messages = run.messages; banner = "" }
             return true
         } catch {
             if let execution { _ = planning.finishImplementation(s.id, executionID: execution.id, attempt: attempt, messages: [], result: ConversationResult(state: "failed", message: error.localizedDescription, accepted: false)) }
             pauseQueue(s.id, true)
-            if selectedID == s.id { draft = prompt; banner = error.localizedDescription } else { drafts[s.id] = prompt }
+            let composerSend = queuedID == nil && completion == nil
+            if selectedID == s.id { if composerSend { draft = prompt }; banner = error.localizedDescription } else if composerSend { drafts[s.id] = prompt }
             return false
         }
     }
@@ -1776,7 +1780,7 @@ struct ChatView: View {
                             VStack(alignment: .leading, spacing: 22) {
                                 if s.isCloud ? store.remoteHasMore : store.historyTotal > store.messages.count { Button("Load earlier messages") { store.loadHistory(more: true) }.font(.caption) }
                                 if store.loading { ProgressView().controlSize(.small) }
-                                ForEach(store.messages) { m in MessageView(message: m, provider: s.provider, attachmentAccess: store.attachmentAccess(session: s, message: m)).id(m.id) }
+                                ForEach(store.messages) { m in MessageView(message: m, provider: s.provider, attachmentAccess: store.attachmentAccess(session: s, message: m)).equatable().id(m.id) }
                                 if let run = store.conversation(s) { MessageView(message: run.streamedMessage, provider: s.provider) }
                                 if s.isCloud { CloudStreamMessages(live: store.cloud.live, provider: s.provider) }
                                 Color.clear.frame(height: 1).id("bottom")
@@ -2060,12 +2064,17 @@ struct ModelSettingsMenu: View {
         }.frame(minHeight: 24)
     }
 }
-struct MessageView: View {
+// Equatable so a streaming flush redraws only rows whose content changed;
+// each row's attachment closure is new on every pass, so compare its identity.
+struct MessageView: View, Equatable {
     let message: Message
     var metadata: String? = nil
     var provider: String? = nil
     var fontSize: CGFloat = 13
     var attachmentAccess: AttachmentAccess? = nil
+    nonisolated static func == (a: MessageView, b: MessageView) -> Bool {
+        a.message == b.message && a.metadata == b.metadata && a.provider == b.provider && a.fontSize == b.fontSize && a.attachmentAccess?.id == b.attachmentAccess?.id
+    }
     private var responseMetadata: String? {
         guard message.role == "assistant" else { return nil }
         if let metadata { return metadata }

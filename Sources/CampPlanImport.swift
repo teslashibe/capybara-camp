@@ -122,6 +122,13 @@ struct PlanImportJournal: Codable, Sendable {
                 try await self.cache?.savePlanImport(nil, scope: c.scope, expectedEpoch: c.epoch)
                 try self.check(c)
                 self.imported = result; self.completedFingerprint = value.prepared.localFingerprint; self.journal = nil; self.working = false; self.task = nil
+            } catch CampCloudError.server(let code, let message) where [400, 403, 404, 409, 413, 422].contains(code) {
+                // The server refused this import outright and recorded nothing.
+                // Return it to review so it can be discarded or started over.
+                guard self.operation == work else { return }
+                var refused = value; refused.approved = false
+                if (try? await self.cache?.savePlanImport(refused, scope: c.scope, expectedEpoch: c.epoch)) != nil, self.context?.generation == c.generation { self.journal = refused }
+                self.finish(CampCloudError.server(code, message), context: c)
             } catch { if self.operation == work { self.finish(error, context: c) } }
         }
     }

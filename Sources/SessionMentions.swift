@@ -66,9 +66,14 @@ struct SessionContext: Codable, Sendable {
     func clear(_ references: [SessionReference], for id: String) throws {
         if self.references(for: id) == references { try set([], for: id) }
     }
+    // Receipts let older messages reopen their quoted context. Keep the most
+    // recent ones only, so they never fill the file that holds unsent drafts.
     func record(_ references: [SessionReference]) throws {
         let fresh = references.filter { !receipts.contains($0) }
-        if !fresh.isEmpty { try persist(drafts, receipts: receipts + fresh) }
+        guard !fresh.isEmpty else { return }
+        var kept = Array((receipts + fresh).suffix(200))
+        while kept.count > fresh.count, let size = try? JSONEncoder().encode(kept).count, size > 2 << 20 { kept.removeFirst() }
+        try persist(drafts, receipts: kept)
     }
     func source(id: String, revision: String, message: String) -> SessionReference? {
         let values = receipts + drafts.values.flatMap { $0 }

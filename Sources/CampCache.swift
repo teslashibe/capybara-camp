@@ -665,6 +665,8 @@ actor CampCache {
         try execute("UPDATE outbox SET state=?,error=? WHERE id=?", [.text(state), .text(error), .text(id)])
     }
     func acknowledge(_ id: String) throws { try execute("DELETE FROM outbox WHERE id=?", [.text(id)]) }
+    // Removes an item only if no flush has started sending it.
+    func discardUnsent(_ id: String) throws { try execute("DELETE FROM outbox WHERE id=? AND state='pending'", [.text(id)]) }
     func saveAttempt(_ attempt: CloudAttempt) throws {
         try execute("INSERT INTO attempts(id,scope,state,body) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,body=excluded.body", [.text(attempt.id), .text(attempt.scope), .text(attempt.state), .blob(try CampWire.encoder().encode(attempt))])
     }

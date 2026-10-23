@@ -156,11 +156,18 @@ actor CampReturnHandoff {
         if j.transfer==nil {
             guard let r=j.destination.installation?.receipt else{throw CampCloudError.invalidResponse}
             let s=j.destination.session
-            let t=try await request(CloudTransfer.self,"POST",path+"/transfers",body:CampWire.body([
-                "target_location":"local","expected_epoch":s.executionEpoch ?? 0,"expected_revision":s.revision,
-                "expected_transcript_revision":s.transcriptRevision,"expected_permission_revision":s.permissionRevision,
-                "payload_sha256":r.payloadSHA256,"review_sha256":j.destination.reviewedSha256,"payload_bytes":j.payloadBytes]),key:j.createKey)
-            try validate(t,j);j.transfer=t
+            do {
+                let t=try await request(CloudTransfer.self,"POST",path+"/transfers",body:CampWire.body([
+                    "target_location":"local","expected_epoch":s.executionEpoch ?? 0,"expected_revision":s.revision,
+                    "expected_transcript_revision":s.transcriptRevision,"expected_permission_revision":s.permissionRevision,
+                    "payload_sha256":r.payloadSHA256,"review_sha256":j.destination.reviewedSha256,"payload_bytes":j.payloadBytes]),key:j.createKey)
+                try validate(t,j);j.transfer=t
+            } catch CampCloudError.server(let code,_) where j.cancelling && (400..<500).contains(code) && code != 401 && code != 408 {
+                // The create replay was refused outright, so no transfer exists.
+                // Cancel the local destination instead of retrying forever.
+                try await destination.requestCancellation();_ = try await destination.advance()
+                j.phase="cancelled"
+            }
         } else if j.cancelling {
             let t=try await request(CloudTransfer.self,"GET",path+"/transfers/"+j.transfer!.id);try validate(t,j);j.transfer=t
             if t.state=="completed" { try await refreshHandoff(&j) }
