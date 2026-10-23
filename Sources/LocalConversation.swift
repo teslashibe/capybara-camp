@@ -200,6 +200,9 @@ struct ConversationResult: Sendable {
         case "done": terminal = "completed"
         case "cancelled": terminal = "cancelled"; notice = value
         case "error": terminal = "failed"; notice = value
+        // The provider accepted the prompt but the helper lost the turn: leave
+        // no terminal so the result stays uncertain for review.
+        case "uncertain": notice = value
         case "notice": notice = value
         case "activity": activity = String(value.prefix(8192))
         case "permissions": effectivePermissions = String(value.prefix(1024))

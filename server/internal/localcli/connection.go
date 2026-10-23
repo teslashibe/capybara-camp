@@ -34,6 +34,7 @@ type nativeConnection struct {
 	stderr        io.ReadCloser
 	events        chan nativeEvent
 	backlog       []map[string]any
+	backlogBytes  int
 	allowRequests bool
 	serial        int64
 	writeMu       sync.Mutex
@@ -270,16 +271,28 @@ func (c *nativeConnection) RPC(method string, params map[string]any, timeout tim
 				}
 				continue
 			}
-			backlogLimit := 32
+			// A chat turn keeps streaming while a steer waits for its answer, so
+			// bound the held events by size rather than a small count.
+			backlogLimit, byteLimit := 4096, 8<<20
 			if c.eventLimit == maxInferenceWire {
-				backlogLimit = 4
+				backlogLimit, byteLimit = 4, 1<<20
 			}
-			if len(c.backlog) >= backlogLimit {
+			size := eventSize(event)
+			if len(c.backlog) >= backlogLimit || c.backlogBytes+size > byteLimit {
 				return nil, errors.New("The native CLI sent too many events before acknowledging the request")
 			}
 			c.backlog = append(c.backlog, event)
+			c.backlogBytes += size
 		}
 	}
+}
+
+func eventSize(event map[string]any) int {
+	raw, err := json.Marshal(event)
+	if err != nil {
+		return 1 << 20
+	}
+	return len(raw)
 }
 
 // Next yields briefly so the owning turn can process steering and approvals.
@@ -291,6 +304,7 @@ func (c *nativeConnection) Next() (map[string]any, error) {
 		event := c.backlog[0]
 		c.backlog[0] = nil
 		c.backlog = c.backlog[1:]
+		c.backlogBytes -= eventSize(event)
 		return event, nil
 	}
 	timer := time.NewTimer(100 * time.Millisecond)

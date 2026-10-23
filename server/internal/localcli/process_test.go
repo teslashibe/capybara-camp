@@ -135,8 +135,12 @@ func runRPCFixture() {
 				time.Sleep(time.Second)
 			}
 		}
-		if mode == "overflow" {
-			for i := 0; i < 40; i++ {
+		if mode == "overflow" || mode == "busy" {
+			count := 4200
+			if mode == "busy" {
+				count = 200 // a fast stream while a steer waits for its answer
+			}
+			for i := 0; i < count; i++ {
 				_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"method": "test/notification", "params": map[string]any{"n": i}})
 			}
 		}

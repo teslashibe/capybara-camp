@@ -173,6 +173,25 @@ func TestNativeConnectionBoundsBacklogAndEvents(t *testing.T) {
 	}
 }
 
+func TestNativeRPCKeepsStreamingEventsWhileWaiting(t *testing.T) {
+	a := providerFixture(t, "rpc")
+	a.Config.Environment = append(a.Config.Environment, "CAMP_LOCAL_TEST_RPC=busy")
+	c, err := a.connect(context.Background(), Session{Provider: "Codex", Root: a.Config.Home, CWD: a.Config.Home}, []string{"codex"}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err = c.RPC("initialize", map[string]any{}, 5*time.Second); err != nil {
+		t.Fatal("streamed events before the reply aborted the request", err)
+	}
+	for i := range 200 {
+		event, err := c.Next()
+		if err != nil || event["method"] != "test/notification" {
+			t.Fatal("held event lost", i, event, err)
+		}
+	}
+}
+
 func TestNativeCloseUnblocksBackpressureAndUnacknowledgedRPC(t *testing.T) {
 	for _, mode := range []string{"flood", "rpc"} {
 		a := providerFixture(t, mode)

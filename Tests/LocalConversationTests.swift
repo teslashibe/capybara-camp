@@ -106,6 +106,15 @@ import Foundation
         try await until { result != nil }
         precondition(result?.state == "completed", "An acknowledged completion wins a late Stop action")
 
+        // A turn lost after the provider accepted the prompt is uncertain, not
+        // failed: the provider may have finished work Camp never saw.
+        result = nil
+        let lost = LocalConversation(session: a, history: [], prompt: "Lost turn")
+        lost.completed = { result = $0 }
+        try lost.start(prompt: "Lost turn", model: "", tuning: ModelTuning(), makeProcess: { fixtureProcess("lost-after-start") })
+        try await until { result != nil }
+        precondition(result?.state == "uncertain" && result?.message.contains("closed before completing") == true, "A post-start failure was recorded as definite")
+
         // A provider that stops reading stdin cannot block the UI's Stop action.
         result = nil
         let stalled = LocalConversation(session: a, history: [], prompt: String(repeating: "x", count: 65000))

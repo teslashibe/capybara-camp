@@ -127,7 +127,14 @@ func (a *App) Conversation(ctx context.Context, input io.ReadCloser, output io.W
 		}
 		return nil
 	}
-	err := a.runConversation(ctx, request, controls, emit)
+	started := false
+	tracked := func(value map[string]any) error {
+		if value["type"] == "started" {
+			started = true
+		}
+		return emit(value)
+	}
+	err := a.runConversation(ctx, request, controls, tracked)
 	select {
 	case failure := <-inputError:
 		return failure
@@ -136,6 +143,14 @@ func (a *App) Conversation(ctx context.Context, input io.ReadCloser, output io.W
 	if errors.Is(err, context.Canceled) {
 		_ = emit(map[string]any{"type": "cancelled", "text": "Stopped. Queued prompts are paused."})
 		return nil
+	}
+	// Once the provider accepted the prompt, a local failure says nothing about
+	// what the provider did. Report the outcome as unknown, not failed, so the
+	// owner reviews the transcript before anything is retried.
+	if err != nil && started {
+		if emit(map[string]any{"type": "uncertain", "message": err.Error()}) == nil {
+			return nil
+		}
 	}
 	return err
 }

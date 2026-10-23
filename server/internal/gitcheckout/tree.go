@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"golang.org/x/text/unicode/norm"
 	"path"
 	"regexp"
 	"strconv"
@@ -40,10 +41,10 @@ func ValidateTree(ctx context.Context, data []byte, blob func(context.Context, s
 		}
 		meta, name, ok := strings.Cut(string(record), "\t")
 		fields := strings.Fields(meta)
-		if !ok || len(fields) != 4 || !safeTreePath(name) || seen[strings.ToLower(name)] {
+		if !ok || len(fields) != 4 || !safeTreePath(name) || seen[foldPath(name)] {
 			return ErrUnsafe
 		}
-		seen[strings.ToLower(name)] = true
+		seen[foldPath(name)] = true
 		size, err := strconv.ParseInt(fields[3], 10, 64)
 		if err != nil || size < 0 {
 			return ErrUnsafe
@@ -72,7 +73,7 @@ func ValidateTree(ctx context.Context, data []byte, blob func(context.Context, s
 			if value == "" || path.IsAbs(value) || strings.Contains(value, "\\") || strings.ContainsFunc(value, unicode.IsControl) {
 				return ErrUnsafe
 			}
-			links[name] = value
+			links[foldPath(name)] = value
 		default:
 			return ErrUnsafe
 		}
@@ -84,6 +85,11 @@ func ValidateTree(ctx context.Context, data []byte, blob func(context.Context, s
 	}
 	return nil
 }
+
+// The default macOS filesystem ignores case and Unicode normalization, so a
+// path spelled A/B/C/L follows the link stored as a/b/c/l. Links are keyed
+// and looked up in this folded form.
+func foldPath(value string) string { return strings.ToLower(norm.NFC.String(value)) }
 
 // Resolve the complete link graph before checkout. Cleaning each target
 // lexically is insufficient: d/link -> ../x changes the meaning of later ..
@@ -109,7 +115,7 @@ func safeSymlink(name string, links map[string]string) bool {
 			continue
 		}
 		candidate := strings.Join(append(append([]string{}, resolved...), part), "/")
-		if target, ok := links[candidate]; ok {
+		if target, ok := links[foldPath(candidate)]; ok {
 			follows++
 			if follows > 40 {
 				return false

@@ -349,6 +349,10 @@ func run(scenario string, args []string) error {
 		}
 	case "started-only":
 		return emit(message{"type": "started"})
+	case "lost-after-start":
+		_ = emit(message{"type": "started"})
+		_ = emit(message{"type": "text", "text": "Partial answer"})
+		return emit(message{"type": "uncertain", "message": "Codex closed before completing the turn"})
 	case "rejected":
 		return emit(message{"type": "error", "message": "Session ownership could not be verified"})
 	case "complete":
