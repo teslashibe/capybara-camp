@@ -365,8 +365,19 @@ func (t contextTool) handle(request map[string]any) map[string]any {
 		if children {
 			tools = append(tools, map[string]any{"name": "list_subagents", "description": "List child histories attached to the current conversation. Read only the histories you need using read_session.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"offset": map[string]any{"type": "integer", "minimum": 0}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50}}, "additionalProperties": false}, "annotations": annotations})
 		}
+		if len(t.history) > 0 {
+			tools = append(tools, map[string]any{"name": "read_attachment", "description": "Read an embedded attachment from a pinned parent or child message returned by read_session. Returns its image, audio or document bytes. External file and URL references cannot be opened.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"session_id": sessionProperty, "message_id": map[string]any{"type": "string"}, "attachment_id": map[string]any{"type": "string"}, "source_digest": map[string]any{"type": "string"}}, "required": []string{"session_id", "message_id", "attachment_id", "source_digest"}, "additionalProperties": false}, "annotations": annotations})
+		}
 		response["result"] = map[string]any{"tools": tools}
 	case "tools/call":
+		if str(params["name"]) == "read_attachment" {
+			content, err := t.readAttachment(params["arguments"])
+			if err != nil {
+				content = []any{map[string]any{"type": "text", "text": err.Error()}}
+			}
+			response["result"] = map[string]any{"content": content, "isError": err != nil}
+			return response
+		}
 		var value map[string]any
 		var err error
 		switch str(params["name"]) {

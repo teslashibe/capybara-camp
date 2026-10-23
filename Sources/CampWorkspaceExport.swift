@@ -221,7 +221,8 @@ actor CampWorkspaceExport {
         try await authority()
         guard let before=try await current(), before.key==j.key, !before.cancelling else { throw CancellationError() }
         let result=try await CampTransferInstallation.install(scope:scope,transferID:transferID,destination:destination,
-            target:target,export:e,payload:raw,review:review,history:archive,callLocal:callLocal)
+            target:target,export:e,payload:raw,review:review,history:archive,
+            readAttachment: { try await history.attachmentBytes($0) }, callLocal:callLocal)
         // Installation can outlive an authorization change. Do not hand its
         // receipt to the handoff caller after cancellation or scope erasure.
         _ = try await fetchChunk(j,index:0)

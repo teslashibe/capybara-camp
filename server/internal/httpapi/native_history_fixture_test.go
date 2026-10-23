@@ -1,6 +1,9 @@
 package httpapi
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -37,10 +40,23 @@ func seedNativeTransferHistory(t *testing.T, s *camp.Store, g *camp.GitStore, ow
 		if err != nil {
 			t.Fatal(err)
 		}
+		var attachment *camp.AttachmentReference
+		var attachmentBytes []byte
+		if os.Getenv("CAMP_NATIVE_FIXTURE_HISTORY_ATTACHMENTS") == "1" {
+			attachmentBytes = bytes.Repeat([]byte{255}, 16<<20)
+			hash := sha256.Sum256(attachmentBytes)
+			attachment = &camp.AttachmentReference{ID: "a:0", Kind: "document", Source: "inline", SourceDigest: strings.Repeat("c", 64), State: "embedded", MediaType: "application/octet-stream", SHA256: hex.EncodeToString(hash[:]), Size: len(attachmentBytes)}
+			if _, err = s.PutAttachment(ctx, owner, campID, session.ID, attachment.SHA256, camp.AttachmentUpload{Data: attachmentBytes}); err != nil {
+				t.Fatal(err)
+			}
+		}
 		for batch := 0; batch < 2; batch++ {
 			messages := []camp.MessageInput{}
 			for i := batch * 130; i < (batch+1)*130; i++ {
 				messages = append(messages, camp.MessageInput{ID: fmt.Sprintf("parent-%d", i), Ordinal: int64(i), Role: "assistant", Text: fmt.Sprintf("Original parent message %d", i), Model: "recorded-model", Effort: "high", Speed: "fast"})
+				if attachment != nil && i == 259 {
+					messages[len(messages)-1].Attachments = []camp.AttachmentReference{*attachment}
+				}
 			}
 			revision, err := s.WriteTranscript(ctx, owner, campID, session.ID, uuid.NewString(), camp.TranscriptInput{ExpectedRevision: session.TranscriptRevision, Messages: messages})
 			if err != nil {
@@ -54,6 +70,14 @@ func seedNativeTransferHistory(t *testing.T, s *camp.Store, g *camp.GitStore, ow
 			messages := []camp.MessageInput{}
 			for i := batch * 125; i < (batch+1)*125; i++ {
 				messages = append(messages, camp.MessageInput{ID: fmt.Sprintf("child-%d", i), Ordinal: int64(i), Role: "assistant", Text: fmt.Sprintf("Original child message %d", i), Model: "recorded-child", Effort: "high", Speed: "fast"})
+				if attachment != nil && i == 249 {
+					messages[len(messages)-1].Attachments = []camp.AttachmentReference{*attachment}
+				}
+			}
+			if attachment != nil && batch == 1 {
+				if _, err = s.PutAttachment(ctx, owner, campID, session.ID, attachment.SHA256, camp.AttachmentUpload{ChildID: childID, Data: attachmentBytes}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			child, err := s.WriteChildHistory(ctx, owner, campID, session.ID, childID, uuid.NewString(), camp.ChildHistoryInput{SourceKey: strings.Repeat("a", 64), SourceRevision: strings.Repeat("b", 64), Name: "Review helper", Phase: "review", Workflow: "History", State: "done", Model: "recorded-child", Complete: batch == 1, ExpectedParentRevision: session.TranscriptRevision, ExpectedTranscriptRevision: childRevision, Messages: messages})
 			if err != nil {

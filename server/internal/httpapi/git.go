@@ -100,6 +100,13 @@ func (a *API) gitRoutes(mux *http.ServeMux) {
 		if !decode(w, r, &in) {
 			return
 		}
+		if in.Attachment != nil {
+			if !a.acquireAttachment() {
+				problem(w, 429, "attachment_busy")
+				return
+			}
+			defer a.releaseAttachment()
+		}
 		out, err := a.Git.RunnerHistory(r.Context(), token(r), r.PathValue("workspace"), r.PathValue("request"), in)
 		if !fail(w, err) {
 			write(w, 200, out)

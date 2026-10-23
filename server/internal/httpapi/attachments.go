@@ -10,16 +10,13 @@ import (
 func (a *API) attachmentRoutes(mux *http.ServeMux) {
 	// Admit before decoding a base64 body. Two large bodies can be resident at
 	// once; saturated requests retry without allocating another attachment.
-	slots := make(chan struct{}, 2)
 	bounded := func(next authorizedHandler) http.HandlerFunc {
 		return a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
-			select {
-			case slots <- struct{}{}:
-				defer func() { <-slots }()
-			default:
+			if !a.acquireAttachment() {
 				problem(w, 429, "attachment_busy")
 				return
 			}
+			defer a.releaseAttachment()
 			next(w, r, u)
 		})
 	}
@@ -43,4 +40,19 @@ func (a *API) attachmentRoutes(mux *http.ServeMux) {
 			write(w, 200, value)
 		}
 	}))
+}
+
+func (a *API) acquireAttachment() bool {
+	a.streamMu.Lock()
+	defer a.streamMu.Unlock()
+	if a.attachmentCount >= 2 {
+		return false
+	}
+	a.attachmentCount++
+	return true
+}
+func (a *API) releaseAttachment() {
+	a.streamMu.Lock()
+	defer a.streamMu.Unlock()
+	a.attachmentCount--
 }

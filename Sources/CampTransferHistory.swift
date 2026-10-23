@@ -16,7 +16,15 @@ struct TransferHistoryJournal: Codable, Sendable {
     var session: CloudSession
     var streams: [TransferHistoryStream]
     var storedBytes = 0
-    var complete: Bool { streams.allSatisfy(\.complete) }
+    var attachments: [TransferHistoryAttachment]? = nil
+    var downloadedAttachments: Int? = nil
+    var complete: Bool { streams.allSatisfy(\.complete) && (downloadedAttachments ?? 0) == (attachments ?? []).count }
+}
+struct TransferHistoryAttachment: Codable, Equatable, Sendable {
+    var streamId: String
+    var messageId: String
+    var attachment: TranscriptAttachment
+    var key: String { streamId + ":" + (attachment.sha256 ?? "") }
 }
 struct TransferHistoryArchive: Codable, Sendable {
     struct Conversation: Codable, Sendable {
@@ -28,6 +36,8 @@ struct TransferHistoryArchive: Codable, Sendable {
     var origin: String
     var session: CloudSession
     var conversations: [Conversation]
+    // Bodies are stored separately and supplied to the installer one at a time.
+    var attachments: [TransferHistoryAttachment]? = nil
 }
 
 // A revision-pinned download, separate from the bounded UI/offline history cache.
@@ -41,6 +51,7 @@ actor CampTransferHistory {
     private let epoch: Int64
     private var busy = false
     static let maxBytes = 32 << 20
+    static let maxAttachmentBytes = 128 << 20
 
     init(cache: CampCache, scope: CloudScope, credential: CloudCredential, transport: any CampAccountTransport, epoch: Int64) throws {
         guard scope.origin == credential.origin, scope.userId == credential.actor.userId,
@@ -90,6 +101,14 @@ actor CampTransferHistory {
                       c.revision<=j.session.transcriptRevision else { throw CampCloudError.invalidResponse }
             }
         }
+        let attachments = j.attachments ?? [], downloaded = j.downloadedAttachments ?? 0
+        guard attachments.count <= 1024, (0...attachments.count).contains(downloaded),
+              Set(attachments.map(\.key)).count == attachments.count,
+              attachments.allSatisfy({ item in
+                  j.streams.contains(where: { $0.id == item.streamId }) &&
+                  item.attachment.validForTransfer && item.attachment.state == "embedded" &&
+                  !item.messageId.isEmpty && item.messageId.utf8.count <= 256
+              }), attachments.reduce(0, { $0 + ($1.attachment.size ?? 0) }) <= Self.maxAttachmentBytes else { throw CampCloudError.invalidResponse }
         try await authority()
         return j
     }
@@ -107,9 +126,10 @@ actor CampTransferHistory {
         try await cache.saveTransferHistory(TransferHistoryJournal(id:UUID().uuidString.lowercased(),session:session,streams:streams),scope:scope,expectedEpoch:epoch,previousRevision:nil)
     }
     private func validatePage(_ p: CloudTranscript, stream s: TransferHistoryStream, session: CloudSession) throws {
-        guard p.messages.allSatisfy({ ($0.attachments ?? []).isEmpty }) else {
-            throw CampError.message("This history contains attachments; destination byte installation is not available in this build")
-        }
+        guard p.messages.allSatisfy({ m in
+            let refs = m.attachments ?? []
+            return refs.count <= 64 && Set(refs.map(\.id)).count == refs.count && refs.allSatisfy(\.validForTransfer)
+        }) else { throw CampCloudError.invalidResponse }
         let revision=s.child?.transcriptRevision ?? session.transcriptRevision
         guard p.revision==revision, p.messages.count<=120, p.before==(p.messages.first?.ordinal ?? 0),
               !p.hasMore || !p.messages.isEmpty && p.before>0,
@@ -127,6 +147,19 @@ actor CampTransferHistory {
         busy=true; defer {busy=false}
         guard var j=try await current() else { return nil }
         try await checkSource(j.session)
+        let downloaded = j.downloadedAttachments ?? 0
+        if let items = j.attachments, downloaded < items.count {
+            let item = items[downloaded]
+            let selection = CampAttachmentSelection(session: j.session,
+                childId: item.streamId == j.session.id ? nil : item.streamId,
+                revision: j.session.transcriptRevision, messageId: item.messageId, attachment: item.attachment)
+            let bytes = try await CampAttachmentReader.read(selection, scope: scope, credential: credential, transport: transport)
+            try await checkSource(j.session)
+            let previous = j.revision
+            j.downloadedAttachments = downloaded + 1; j.revision += 1
+            try await cache.saveTransferHistoryAttachment(j, scope: scope, expectedEpoch: epoch, previousRevision: previous, bytes: bytes)
+            return j
+        }
         guard let index=j.streams.firstIndex(where:{!$0.complete}) else { return j }
         let stream=j.streams[index], revision=j.session.transcriptRevision
         let page: CloudTranscript
@@ -139,6 +172,7 @@ actor CampTransferHistory {
             page=try await get(CloudTranscript.self,base(j.session)+"/transcript?revision=\(revision)&before=\(stream.before)&limit=120")
         }
         try validatePage(page,stream:stream,session:j.session)
+        j.attachments = try Self.collectAttachments(page.messages, streamID: stream.id, existing: j.attachments ?? [])
         let raw=try CampWire.encoder().encode(page), oldRevision=j.revision
         guard raw.count<=2<<20 else { throw CampCloudError.invalidResponse }
         j.storedBytes += raw.count
@@ -163,6 +197,7 @@ actor CampTransferHistory {
               catalog.permissionRevision==j.session.permissionRevision,
               catalog.children==j.streams.dropFirst().compactMap(\.child) else { throw CampCloudError.invalidResponse }
         var result=TransferHistoryArchive(origin:scope.origin,session:j.session,conversations:[]), total=0
+        var expectedAttachments: [TransferHistoryAttachment] = []
         for stream in j.streams {
             var messages:[CloudMessage]=[], cursor: Int64=0, textBytes=0
             for index in 0..<stream.pages {
@@ -172,6 +207,7 @@ actor CampTransferHistory {
                 let page=try CampWire.decoder().decode(CloudTranscript.self,from:raw)
                 var expected=stream; expected.before=cursor
                 try validatePage(page,stream:expected,session:j.session)
+                expectedAttachments = try Self.collectAttachments(page.messages, streamID: stream.id, existing: expectedAttachments)
                 guard page.hasMore == (index+1<stream.pages) else { throw CampCloudError.invalidResponse }
                 messages=page.messages+messages; cursor=page.before
                 textBytes += page.messages.reduce(0){$0+$1.text.utf8.count}
@@ -180,10 +216,54 @@ actor CampTransferHistory {
                   Set(messages.map(\.id)).count==messages.count else { throw CampCloudError.invalidResponse }
             result.conversations.append(.init(id:stream.id,child:stream.child,messages:messages))
         }
-        guard total==j.storedBytes else { throw CampCloudError.invalidResponse }
+        guard total==j.storedBytes, expectedAttachments == (j.attachments ?? []) else { throw CampCloudError.invalidResponse }
+        for item in expectedAttachments { _ = try await storedAttachment(item, journal: j) }
+        if result.conversations.contains(where: { $0.messages.contains(where: { !($0.attachments ?? []).isEmpty }) }) {
+            result.version = 2; result.attachments = expectedAttachments
+        }
+        guard try CampWire.encoder().encode(result).count <= Self.maxBytes else {
+            throw CampError.message("This history exceeds the transfer limit. No messages were truncated")
+        }
         try await checkSource(j.session)
         guard let current=try await current(), current.id==j.id, current.revision==j.revision else { throw CancellationError() }
         return result
+    }
+    private static func collectAttachments(_ messages: [CloudMessage], streamID: String, existing: [TransferHistoryAttachment]) throws -> [TransferHistoryAttachment] {
+        var result = existing
+        var sizes = Dictionary(uniqueKeysWithValues: result.map { ($0.key, $0.attachment.size ?? 0) })
+        var total = sizes.values.reduce(0, +)
+        for message in messages {
+            for ref in message.attachments ?? [] where ref.state == "embedded" {
+                let item = TransferHistoryAttachment(streamId: streamID, messageId: message.id, attachment: ref)
+                if let size = sizes[item.key] {
+                    guard size == ref.size else { throw CampCloudError.invalidResponse }
+                    continue
+                }
+                total += ref.size ?? 0
+                guard result.count < 1024, total <= maxAttachmentBytes else {
+                    throw CampError.message("This history exceeds the attachment transfer limit. No attachments were omitted")
+                }
+                result.append(item); sizes[item.key] = ref.size
+            }
+        }
+        return result
+    }
+    private func storedAttachment(_ item: TransferHistoryAttachment, journal: TransferHistoryJournal) async throws -> Data {
+        try await authority()
+        guard let bytes = try await cache.transferHistoryAttachment(scope: scope, id: journal.id, item: item),
+              bytes.count == item.attachment.size, bytes.count <= 16 << 20,
+              PublishMessage.hash(bytes) == item.attachment.sha256 else { throw CampCloudError.invalidResponse }
+        try await authority()
+        return bytes
+    }
+    func attachmentBytes(_ item: TransferHistoryAttachment) async throws -> Data {
+        guard let journal = try await current(), journal.complete,
+              (journal.attachments ?? []).contains(item) else { throw CampCloudError.invalidResponse }
+        try await checkSource(journal.session)
+        let bytes = try await storedAttachment(item, journal: journal)
+        try await checkSource(journal.session)
+        guard let latest = try await current(), latest.id == journal.id, latest.revision == journal.revision else { throw CancellationError() }
+        return bytes
     }
     func verifySource(_ session: CloudSession) async throws {
         guard let j=try await current(), j.complete, j.session==session else { throw CampCloudError.invalidResponse }

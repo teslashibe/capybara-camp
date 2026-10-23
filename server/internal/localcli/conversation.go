@@ -348,7 +348,7 @@ func (a *App) conversationCommand(ctx context.Context, session Session, request 
 				break
 			}
 		}
-		command = append(command, "--restricted", "--setting-sources", "", "--disable-slash-commands", "--settings", jsonValue(settings), "--mcp-config", jsonValue(map[string]any{"mcpServers": map[string]any{"camp_context": request.grant.server}}), "--allowedTools", "mcp__camp_context__read_session", "--append-system-prompt-file", request.grant.instructionsPath, "--system-prompt-snapshot", "off")
+		command = append(command, "--restricted", "--setting-sources", "", "--disable-slash-commands", "--settings", jsonValue(settings), "--mcp-config", jsonValue(map[string]any{"mcpServers": map[string]any{"camp_context": request.grant.server}}), "--allowedTools", "mcp__camp_context__read_session", "mcp__camp_context__list_subagents", "mcp__camp_context__read_attachment", "--append-system-prompt-file", request.grant.instructionsPath, "--system-prompt-snapshot", "off")
 	}
 	return command, nil
 }

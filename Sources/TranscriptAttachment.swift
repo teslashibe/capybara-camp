@@ -11,6 +11,32 @@ struct TranscriptAttachment: Codable, Equatable, Identifiable, Sendable {
     var sha256: String? = nil
     var size: Int? = nil
 
+    // Matches the descriptor contract enforced by internal/attachments.
+    var validForTransfer: Bool {
+        guard id.utf8.count <= 100, id.range(of: "^a:[0-9]+(?:/[0-9]+){0,8}$", options: .regularExpression) != nil,
+              sourceDigest.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
+              ["image", "audio", "document"].contains(kind),
+              ["inline", "local", "remote", "provider", "unknown"].contains(source) else { return false }
+        let media = mediaType ?? ""
+        let allowed: Bool
+        switch kind {
+        case "image": allowed = ["image/png", "image/jpeg", "image/gif", "image/webp"].contains(media)
+        case "audio": allowed = ["audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3", "audio/mp4", "audio/ogg", "audio/webm"].contains(media)
+        default: allowed = ["application/pdf", "text/plain", "application/octet-stream"].contains(media)
+        }
+        if state == "embedded" {
+            return source == "inline" && allowed && (1...(16 << 20)).contains(size ?? 0) &&
+                (sha256 ?? "").range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil
+        }
+        guard (sha256 ?? "").isEmpty, (size ?? 0) == 0 else { return false }
+        switch state {
+        case "reference": return media.isEmpty && ["local", "remote", "provider"].contains(source)
+        case "unsupported": return media.isEmpty && ["unknown", "inline"].contains(source)
+        case "invalid", "too_large": return source == "inline" && (media.isEmpty ? state == "invalid" : allowed)
+        default: return false
+        }
+    }
+
     var symbol: String {
         switch kind { case "image": return "photo"; case "audio": return "waveform"; default: return "doc" }
     }

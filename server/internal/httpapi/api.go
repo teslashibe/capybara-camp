@@ -30,6 +30,7 @@ type API struct {
 	streamMu         sync.Mutex
 	streams          map[string]int
 	streamCount      int
+	attachmentCount  int
 }
 type authorizedHandler func(http.ResponseWriter, *http.Request, auth.Actor)
 

@@ -2,11 +2,13 @@ package camp
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/teslashibe/capybara-camp/server/internal/attachments"
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
 	"github.com/teslashibe/capybara-camp/server/internal/localcli"
 )
@@ -88,6 +90,28 @@ func (g *GitStore) RunnerHistory(ctx context.Context, token, workspaceID, reques
 		}
 		storageID, storageRevision, title = child.ID, child.TranscriptRevision, child.Name
 	}
+	if in.Attachment != nil {
+		a := in.Attachment
+		if a.MessageID == "" || len(a.MessageID) > 256 || len(a.ID) > 100 || !transferHash.MatchString(a.SourceDigest) || in.Offset != 0 || in.TextOffset != 0 || in.Limit != 1 {
+			return out, ErrInput
+		}
+		messages, e := readContextMessagesBudget(ctx, tx, SourceRef{SessionID: storageID, TranscriptRevision: storageRevision, MessageIDs: []string{a.MessageID}}, 1<<20)
+		if e != nil {
+			return out, e
+		}
+		for _, ref := range messages[0].Attachments {
+			if ref.ID != a.ID || ref.SourceDigest != a.SourceDigest {
+				continue
+			}
+			data, e := g.store.readAttachmentBlob(ctx, tx, r.CampID, r.SessionID, storageID, ref)
+			if e != nil {
+				return out, e
+			}
+			out = localcli.HistoryPage{SessionID: in.SessionID, Title: title, Revision: strconv.FormatInt(r.ContextRevision, 10), Messages: []localcli.HistoryMessage{}, Attachment: &localcli.HistoryAttachmentBody{MessageID: a.MessageID, Reference: attachments.Reference{ID: ref.ID, Kind: ref.Kind, Source: ref.Source, SourceDigest: ref.SourceDigest, State: ref.State, MediaType: ref.MediaType, SHA256: ref.SHA256, Size: ref.Size}, Data: data}}
+			return out, tx.Commit(ctx)
+		}
+		return out, ErrDenied
+	}
 	out, err = readHistoryPage(ctx, tx, storageID, storageRevision, in, title, strconv.FormatInt(r.ContextRevision, 10))
 	if err != nil {
 		return out, err
@@ -101,9 +125,9 @@ func readHistoryPage(ctx context.Context, tx pgx.Tx, storageID string, storageRe
 	// independent of database locale; returned chunks end on UTF-8 boundaries.
 	rows, err := tx.Query(ctx, `SELECT m.local_id,m.ordinal,v.role,
  substring(convert_to(v.text,'UTF8') FROM (CASE WHEN m.ordinal=$3 THEN $4 ELSE 0 END)+1 FOR 16388),
- octet_length(convert_to(v.text,'UTF8'))
+ octet_length(convert_to(v.text,'UTF8')),v.attachments
  FROM messages m CROSS JOIN LATERAL (
- SELECT role,text,removed FROM message_revisions WHERE session_id=m.session_id AND local_id=m.local_id AND revision<=$2 ORDER BY revision DESC LIMIT 1
+ SELECT role,text,removed,attachments FROM message_revisions WHERE session_id=m.session_id AND local_id=m.local_id AND revision<=$2 ORDER BY revision DESC LIMIT 1
  ) v WHERE m.session_id=$1 AND m.ordinal >= $3 AND NOT v.removed ORDER BY m.ordinal LIMIT $5`, storageID, storageRevision, in.Offset, in.TextOffset, min(in.Limit, 20)+1)
 	if err != nil {
 		return out, err
@@ -111,11 +135,23 @@ func readHistoryPage(ctx context.Context, tx pgx.Tx, storageID string, storageRe
 	total := 0
 	for rows.Next() {
 		var m localcli.HistoryMessage
-		var raw []byte
+		var raw, refsRaw []byte
 		var length int
-		if err = rows.Scan(&m.ID, &m.Ordinal, &m.Role, &raw, &length); err != nil {
+		if err = rows.Scan(&m.ID, &m.Ordinal, &m.Role, &raw, &length, &refsRaw); err != nil {
 			rows.Close()
 			return out, err
+		}
+		var refs []AttachmentReference
+		if json.Unmarshal(refsRaw, &refs) != nil {
+			rows.Close()
+			return out, ErrInput
+		}
+		for _, ref := range refs {
+			if !ref.valid() {
+				rows.Close()
+				return out, ErrInput
+			}
+			m.Attachments = append(m.Attachments, attachments.Reference{ID: ref.ID, Kind: ref.Kind, Source: ref.Source, SourceDigest: ref.SourceDigest, State: ref.State, MediaType: ref.MediaType, SHA256: ref.SHA256, Size: ref.Size})
 		}
 		if m.Ordinal == in.Offset {
 			m.TextOffset = in.TextOffset

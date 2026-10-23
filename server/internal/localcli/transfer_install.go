@@ -34,10 +34,11 @@ type TransferInstallTarget struct {
 }
 type TransferInstallInput struct {
 	TransferStageInput
-	Export        TransferInstallExport `json:"export"`
-	Target        TransferInstallTarget `json:"target"`
-	History       []byte                `json:"history"`
-	HistorySHA256 string                `json:"historySHA256"`
+	Export              TransferInstallExport `json:"export"`
+	Target              TransferInstallTarget `json:"target"`
+	History             []byte                `json:"history"`
+	HistorySHA256       string                `json:"historySHA256"`
+	AttachmentDirectory string                `json:"attachmentDirectory,omitempty"`
 }
 
 // The native caller obtains this through an authenticated, revision-pinned
@@ -83,9 +84,10 @@ type TransferInstallResult struct {
 // Preserve exact export bytes, including all display metadata. The projection
 // below validates the identity and graph without rewriting the source archive.
 type installedHistory struct {
-	Version int    `json:"version"`
-	Origin  string `json:"origin"`
-	Session struct {
+	Version     int                   `json:"version"`
+	Origin      string                `json:"origin"`
+	Attachments []installedAttachment `json:"attachments,omitempty"`
+	Session     struct {
 		ID                 string `json:"id"`
 		CampID             string `json:"camp_id"`
 		OwnerID            string `json:"owner_user_id"`
@@ -116,15 +118,16 @@ type installedHistory struct {
 			Removed            bool   `json:"removed"`
 		} `json:"child"`
 		Messages []struct {
-			ID       string `json:"id"`
-			Ordinal  int64  `json:"ordinal"`
-			Role     string `json:"role"`
-			Text     string `json:"text"`
-			Model    string `json:"model"`
-			Effort   string `json:"effort"`
-			Speed    string `json:"speed"`
-			Removed  bool   `json:"removed"`
-			Revision int64  `json:"revision"`
+			ID          string                         `json:"id"`
+			Ordinal     int64                          `json:"ordinal"`
+			Role        string                         `json:"role"`
+			Text        string                         `json:"text"`
+			Model       string                         `json:"model"`
+			Effort      string                         `json:"effort"`
+			Speed       string                         `json:"speed"`
+			Removed     bool                           `json:"removed"`
+			Revision    int64                          `json:"revision"`
+			Attachments []installedAttachmentReference `json:"attachments"`
 		} `json:"messages"`
 	} `json:"conversations"`
 }
@@ -152,7 +155,7 @@ func validateInstalledHistory(in TransferInstallInput) (installedHistory, error)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" || (u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"))) {
 		return h, transfer.ErrInput
 	}
-	if h.Version != 1 || s.Location != "cloud" || s.HistoryOnly || s.Epoch <= 0 || s.Revision <= 0 || s.TranscriptRevision < 0 || s.PermissionRevision <= 0 || (s.Provider != "Codex" && s.Provider != "Claude") || s.Provider != in.Target.Provider {
+	if (h.Version != 1 && h.Version != 2) || s.Location != "cloud" || s.HistoryOnly || s.Epoch <= 0 || s.Revision <= 0 || s.TranscriptRevision < 0 || s.PermissionRevision <= 0 || (s.Provider != "Codex" && s.Provider != "Claude") || s.Provider != in.Target.Provider {
 		return h, transfer.ErrInput
 	}
 	for _, id := range []string{s.ID, s.CampID, s.OwnerID, s.DeviceID, s.ProfileID, s.WorkspaceID} {
@@ -200,7 +203,7 @@ func validateInstalledHistory(in TransferInstallInput) (installedHistory, error)
 			return h, transfer.ErrLimit
 		}
 	}
-	return h, nil
+	return h, validateInstalledAttachments(h)
 }
 
 func (a *App) validateInstallTarget(t TransferInstallTarget, destination string) error {
@@ -338,6 +341,9 @@ func (a *App) installTransfer(ctx context.Context, input io.Reader) (any, error)
 	if err = bindInstallFile(root, "history.json", in.History, maxInstalledHistory); err != nil {
 		return nil, err
 	}
+	if err = installAttachmentFiles(ctx, root, h, in.AttachmentDirectory); err != nil {
+		return nil, err
+	}
 	staged, err := stager.Apply(ctx, manifest, in.ReviewSHA256, in.Branch)
 	if err != nil {
 		return nil, err
@@ -431,7 +437,7 @@ func cleanInstallTemps(root *os.Root) error {
 		}
 		for _, entry := range entries {
 			count++
-			if count > 1024 {
+			if count > 4096 {
 				return transfer.ErrLimit
 			}
 			id, ok := strings.CutPrefix(entry.Name(), ".install-")

@@ -55,6 +55,13 @@ private actor LostHistoryRead: CampAccountTransport {
                 try await resumed.advance()
             }
             let archive=try await resumed.archive()!
+            if ProcessInfo.processInfo.environment["CAMP_NATIVE_FIXTURE_HISTORY_ATTACHMENTS"] == "1" {
+                precondition(archive.version == 2 && archive.attachments?.count == 2)
+                for item in archive.attachments! {
+                    let bytes = try await resumed.attachmentBytes(item)
+                    precondition(bytes.count == 16 << 20 && PublishMessage.hash(bytes) == item.attachment.sha256)
+                }
+            }
             precondition(archive.origin==fixture.url && archive.session.id==session.id && archive.conversations.count==2)
             precondition(archive.conversations[0].messages.count==260 && archive.conversations[1].messages.count==250)
             precondition(archive.conversations[0].messages.first?.id=="parent-0" && archive.conversations[0].messages.last?.id=="parent-259")
@@ -65,6 +72,9 @@ private actor LostHistoryRead: CampAccountTransport {
             // A permission revision changes even when the pinned text is unchanged.
             _ = try await api.data("PUT",path:base,body:CampWire.body(["id":session.id,"project_id":session.projectId,"profile_id":session.profileId,"local_session_id":session.localSessionId,"title":session.title,"model":session.model,"state":session.state,"stage":session.stage,"shared":true,"allow_requests":false,"external_owner":false,"expected_revision":session.revision]),key:UUID().uuidString,token:driver.token)
             await rejects("Cached archive survived changed permissions") { _ = try await resumed.archive() }
+            if let item = archive.attachments?.first {
+                await rejects("Cached attachment survived changed permissions") { _ = try await resumed.attachmentBytes(item) }
+            }
             try await cache.clear(scope)
             print("Real API history download passed for \(session.provider): 260 parent and 250 child messages, restart and changed permissions")
         }

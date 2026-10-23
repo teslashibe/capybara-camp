@@ -290,6 +290,7 @@ actor CampCache {
             }
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("workspace-export-chunk:\(scope.key):\(destination.exportId):%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-history-page:\(scope.key):\(history.id):%")])
+            try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-history-attachment:\(scope.key):\(history.id):%")])
             return candidate
         }
     }
@@ -357,6 +358,7 @@ actor CampCache {
                 let history=try CampWire.decoder().decode(TransferHistoryJournal.self,from:historyRaw)
                 guard history.session==old.session else { throw CancellationError() }
                 try execute("DELETE FROM metadata WHERE key LIKE ?",[.text("transfer-history-page:"+scope.key+":"+history.id+":%")])
+                try execute("DELETE FROM metadata WHERE key LIKE ?",[.text("transfer-history-attachment:"+scope.key+":"+history.id+":%")])
                 try execute("DELETE FROM metadata WHERE key=?",[.text("transfer-history:"+scope.key)])
             }
             try execute("DELETE FROM metadata WHERE key LIKE ?",[.text("workspace-export-chunk:"+scope.key+":"+old.exportId+":%")])
@@ -391,6 +393,34 @@ actor CampCache {
         guard UUID(uuidString:id) != nil, UUID(uuidString:stream) != nil, (0..<2000).contains(index) else { throw CampCloudError.invalidResponse }
         return try metadata("transfer-history-page:"+scope.key+":"+id+":"+stream+":"+String(index))
     }
+    func saveTransferHistoryAttachment(_ value: TransferHistoryJournal, scope: CloudScope, expectedEpoch: Int64, previousRevision: Int64, bytes: Data) throws {
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            let key = "transfer-history:" + scope.key
+            guard let raw = try metadata(key) else { throw CancellationError() }
+            let old = try CampWire.decoder().decode(TransferHistoryJournal.self, from: raw)
+            let index = old.downloadedAttachments ?? 0, items = old.attachments ?? []
+            guard old.id == value.id, old.revision == previousRevision, index >= 0, index < items.count else { throw CancellationError() }
+            var expected = old
+            expected.revision += 1; expected.downloadedAttachments = index + 1
+            let encoded = try CampWire.encoder().encode(value)
+            let expectedData = try CampWire.encoder().encode(expected)
+            let item = items[index]
+            guard encoded == expectedData, encoded.count <= 2 << 20,
+                  item.attachment.validForTransfer, item.attachment.state == "embedded",
+                  bytes.count == item.attachment.size, bytes.count <= 16 << 20,
+                  PublishMessage.hash(bytes) == item.attachment.sha256 else { throw CampCloudError.invalidResponse }
+            let blobKey = "transfer-history-attachment:" + scope.key + ":" + value.id + ":" + item.key
+            guard try metadata(blobKey) == nil else { throw CampCloudError.invalidResponse }
+            try setMetadata(blobKey, bytes)
+            try setMetadata(key, encoded)
+        }
+    }
+    func transferHistoryAttachment(scope: CloudScope, id: String, item: TransferHistoryAttachment) throws -> Data? {
+        guard UUID(uuidString: id) != nil, UUID(uuidString: item.streamId) != nil,
+              item.attachment.validForTransfer, item.attachment.state == "embedded" else { throw CampCloudError.invalidResponse }
+        return try metadata("transfer-history-attachment:" + scope.key + ":" + id + ":" + item.key)
+    }
     func discardTransferHistory(scope: CloudScope, id: String, expectedEpoch: Int64) throws {
         try transaction {
             try checkEpoch(scope,expectedEpoch)
@@ -400,6 +430,7 @@ actor CampCache {
             guard old.id==id else { throw CancellationError() }
             try execute("DELETE FROM metadata WHERE key=?",[.text(key)])
             try execute("DELETE FROM metadata WHERE key LIKE ?",[.text("transfer-history-page:"+scope.key+":"+id+":%")])
+            try execute("DELETE FROM metadata WHERE key LIKE ?",[.text("transfer-history-attachment:"+scope.key+":"+id+":%")])
         }
     }
     func saveWorkspaceExport(_ value: WorkspaceExportJournal?, scope: CloudScope, expectedEpoch: Int64, initial: Bool = false, discardingKey: String? = nil) throws {
@@ -846,6 +877,7 @@ actor CampCache {
             try execute("DELETE FROM metadata WHERE key=?", [.text("return-handoff:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("local-continuation:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-history-page:" + scope.key + ":%")])
+            try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-history-attachment:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("workspace-export-chunk:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-payload:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("child-epoch:" + scope.key + ":%")])

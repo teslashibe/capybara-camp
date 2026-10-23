@@ -2,6 +2,9 @@ package runner
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -84,6 +87,33 @@ func readFixtureHistory(server map[string]any, record string, child ...bool) err
 	}
 	if id == "" {
 		return fmt.Errorf("history source missing")
+	}
+	if len(child) > 1 && child[1] {
+		result, err := call("tools/call", map[string]any{"name": "read_session", "arguments": map[string]any{"session_id": id, "limit": 1}})
+		if err != nil {
+			return err
+		}
+		text := result["content"].([]any)[0].(map[string]any)["text"].(string)
+		var page localcli.HistoryPage
+		if err = json.Unmarshal([]byte(text), &page); err != nil || len(page.Messages) != 1 || len(page.Messages[0].Attachments) != 1 {
+			return fmt.Errorf("attachment descriptor missing")
+		}
+		message := page.Messages[0]
+		ref := message.Attachments[0]
+		fixtureRecord(record, "attachment:descriptor")
+		result, err = call("tools/call", map[string]any{"name": "read_attachment", "arguments": map[string]any{"session_id": id, "message_id": message.ID, "attachment_id": ref.ID, "source_digest": ref.SourceDigest}})
+		if err != nil {
+			return err
+		}
+		content := result["content"].([]any)[0].(map[string]any)
+		fixtureRecord(record, "attachment:response")
+		encoded, _ := content["data"].(string)
+		body, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || content["type"] != "image" || len(body) != 16<<20 || fixtureAttachmentHash(body) != ref.SHA256 {
+			return fmt.Errorf("attachment body changed")
+		}
+		fixtureRecord(record, "attachment:16MiB:verified")
+		return nil
 	}
 	offset, textOffset := int64(0), 0
 	contents := map[string]string{}
@@ -237,6 +267,61 @@ func TestProviderReadsCompleteHistoryThroughCampTool(t *testing.T) {
 			calls, err := os.ReadFile(record)
 			if err != nil || strings.Count(string(calls), "turn\n") != 1 || !strings.Contains(string(calls), "history:150:complete") {
 				t.Fatal("Provider did not read complete history", string(calls), err)
+			}
+		})
+	}
+}
+
+func fixtureAttachmentHash(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func TestProviderReadsAttachmentThroughCampTool(t *testing.T) {
+	for _, provider := range []string{"Codex", "Claude"} {
+		t.Run(provider, func(t *testing.T) {
+			f, _, workspace, record := turnFixture(t, provider, "attachment-history")
+			request, err := f.store.CreateRequest(t.Context(), f.owner, workspace.CampID, workspace.SessionID, uuid.NewString(), camp.RequestInput{Prompt: "Inspect the attached image"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if t.Failed() {
+					raw, _ := os.ReadFile(record)
+					t.Logf("synthetic provider: %s", raw)
+					if state, e := f.worker.checkout.loadTurn(); e == nil && state != nil {
+						t.Logf("runner phase: %s", state.Phase)
+					}
+					r, e := f.store.Request(context.Background(), f.owner, workspace.CampID, request.ID)
+					if e == nil {
+						t.Logf("request state: %s", r.State)
+					}
+				}
+			}()
+			workerContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			done := make(chan error, 1)
+			go func() { done <- f.worker.Run(workerContext); close(done) }()
+			defer stopWorker(t, cancel, done)
+			completed := false
+			// The maximum-sized body traverses two authenticated readers and a
+			// subprocess under the race detector; allow their bounded timeouts.
+			for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
+				r, e := f.store.Request(t.Context(), f.owner, workspace.CampID, request.ID)
+				if e == nil && r.State == "completed" {
+					completed = true
+					break
+				}
+				if e == nil && (r.State == "failed" || r.State == "cancelled") {
+					break
+				}
+				time.Sleep(25 * time.Millisecond)
+			}
+			if !completed {
+				t.Fatal("Attachment turn did not complete")
+			}
+			calls, err := os.ReadFile(record)
+			if err != nil || strings.Count(string(calls), "turn\n") != 1 || !strings.Contains(string(calls), "attachment:16MiB:verified") {
+				t.Fatal("Provider did not receive complete attachment", string(calls), err)
 			}
 		})
 	}

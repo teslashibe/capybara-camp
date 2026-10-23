@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/teslashibe/capybara-camp/server/internal/camp"
+	"github.com/teslashibe/capybara-camp/server/internal/localcli"
 )
 
 var (
@@ -76,8 +77,12 @@ func (c *client) callRequest(ctx context.Context, method, path, key string, inpu
 	if output == nil || res.StatusCode == 204 {
 		return nil
 	}
-	data, err := io.ReadAll(io.LimitReader(res.Body, (2<<20)+1))
-	if err != nil || len(data) > 2<<20 || json.Unmarshal(data, output) != nil {
+	maximum := 2 << 20
+	if in, ok := input.(localcli.HistoryRead); ok && in.Attachment != nil {
+		maximum = 23 << 20
+	}
+	data, err := io.ReadAll(io.LimitReader(res.Body, int64(maximum)+1))
+	if err != nil || len(data) > maximum || json.Unmarshal(data, output) != nil {
 		return ErrUnavailable
 	}
 	return nil

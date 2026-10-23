@@ -50,15 +50,40 @@ message publication. Completed parent/child histories retain their source
 revision bindings. A failed upload leaves synchronization incomplete. A full storage quota shows
 `Attachment storage full` and stops automatic retry until another sync is requested.
 
-The native byte reader and chat preview/save controls are implemented. Destination
-installation remains unfinished.
+The native byte reader, chat preview/save controls, transfer downloader and local
+byte installer are implemented. Transfer history version 2 carries a separate
+manifest binding each embedded body to its conversation and message. The
+downloader retains at most 128 MiB across 1,024 conversation-scoped bodies and
+checks the pinned source before and after each read. The local installer copies
+one verified private file at a time and commits its receipt only after all
+files and history are present. Interrupted installation resumes from verified
+files; a changed or missing body cannot produce a completed receipt.
 Native saved-history publication still refuses attachment-bearing messages.
-Transfer guards remain until both destinations can preserve the bytes, including
-main/subagent provenance, permissions, retries, offline recovery and revocation.
+Restored and cloud history readers expose attachment descriptors through
+`read_session` and exact embedded bytes through `read_attachment`. Each tool
+selection includes the message, attachment ID and source digest. Reads verify
+the selected revision, current authorization and body hash. The two large-body
+HTTP slots are shared with ordinary attachment upload and download requests.
+
+Transfer guards remain while the final handoff review, saved-history byte
+publication, cleanup of abandoned transfer files and live provider acceptance
+are unfinished. Component success does not authorize removing those guards.
 The transfer review must identify unavailable bytes before ownership moves.
 Live provider, full migration and complete native visual acceptance remain
 open. No remote-reference fetching or arbitrary local-path reading is authorized
 by an imported transcript alone.
+
+Focused validation covers 16 MiB bodies in native parent/subagent downloads,
+private staging files, interrupted installation, hash corruption, link refusal,
+source revocation and cache erasure. Real local API/PostgreSQL downloads retain
+260 parent and 250 child messages for each provider. A synthetic provider
+process also reads a 16 MiB image through the actual context-tool executable,
+runner proxy and authenticated API, then completes exactly one turn for Codex
+and Claude. These are fixture tests, not live-provider acceptance. Evidence:
+`build/transfer-attachment-native-current.log`,
+`build/transfer-attachment-context-tests.log`,
+`build/transfer-attachment-cloud-postgres.log` and
+`build/transfer-attachment-provider-verified.log`.
 
 Provider formats were checked against the official
 [Codex input types](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/user_input.rs)

@@ -338,3 +338,26 @@ func TestLocalTransferInstallRecoversOrphanedTemporary(t *testing.T) {
 		t.Fatal("Changed symlink target", err)
 	}
 }
+
+func TestVersionOneInstallRefusesAttachmentLoss(t *testing.T) {
+	for _, provider := range []string{"Codex", "Claude"} {
+		t.Run(provider, func(t *testing.T) {
+			a, in := installFixture(t, provider)
+			var h map[string]any
+			if err := json.Unmarshal(in.History, &h); err != nil {
+				t.Fatal(err)
+			}
+			conversations := h["conversations"].([]any)
+			message := conversations[0].(map[string]any)["messages"].([]any)[0].(map[string]any)
+			message["attachments"] = []any{map[string]any{"id": "a:0", "kind": "image", "source": "remote", "state": "reference", "source_digest": strings.Repeat("a", 64)}}
+			in.History, _ = json.Marshal(h)
+			in.HistorySHA256 = installHash(in.History)
+			if _, err := installCall(t.Context(), a, in); err == nil {
+				t.Fatal("Installed version-one archive while dropping attachment metadata")
+			}
+			if _, err := os.Stat(installDirectory(a, in)); !os.IsNotExist(err) {
+				t.Fatal("Rejected archive created installation state", err)
+			}
+		})
+	}
+}

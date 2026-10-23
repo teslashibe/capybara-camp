@@ -207,21 +207,9 @@ func (s *Store) ReadAttachment(ctx context.Context, a auth.Actor, campID, parent
 		if ref.State != "embedded" || !ref.valid() {
 			return out, ErrDenied
 		}
-		var encrypted []byte
-		var size int
-		err = tx.QueryRow(ctx, `SELECT encrypted_body,byte_count FROM transcript_attachment_blobs WHERE camp_id=$1 AND parent_session_id=$2 AND session_id=$3 AND sha256=$4`, campID, parentID, id, ref.SHA256).Scan(&encrypted, &size)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return out, ErrDenied
-		}
+		data, err := s.readAttachmentBlob(ctx, tx, campID, parentID, id, ref)
 		if err != nil {
 			return out, err
-		}
-		data, err := s.openProvider(encrypted, attachmentBinding(campID, id, ref.SHA256))
-		if err != nil {
-			return out, err
-		}
-		if len(data) != size || size != ref.Size || transferDigest(data) != ref.SHA256 {
-			return out, ErrConflict
 		}
 		out = AttachmentBody{SessionID: id, MessageID: in.MessageID, Revision: in.Revision, PermissionRevision: parent.PermissionRevision, Attachment: ref, Data: data}
 		return out, tx.Commit(ctx)
@@ -240,4 +228,29 @@ func transferAttachmentsPending(ctx context.Context, tx pgx.Tx, parentID string)
 		return ErrTransition
 	}
 	return nil
+}
+
+// Caller has authorized the current parent and selected a committed reference
+// at its pinned revision. The content hash alone never grants a read.
+func (s *Store) readAttachmentBlob(ctx context.Context, tx pgx.Tx, campID, parentID, id string, ref AttachmentReference) ([]byte, error) {
+	if !ref.valid() || ref.State != "embedded" {
+		return nil, ErrDenied
+	}
+	var encrypted []byte
+	var size int
+	err := tx.QueryRow(ctx, `SELECT encrypted_body,byte_count FROM transcript_attachment_blobs WHERE camp_id=$1 AND parent_session_id=$2 AND session_id=$3 AND sha256=$4`, campID, parentID, id, ref.SHA256).Scan(&encrypted, &size)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrDenied
+	}
+	if err != nil {
+		return nil, err
+	}
+	data, err := s.openProvider(encrypted, attachmentBinding(campID, id, ref.SHA256))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) != size || size != ref.Size || transferDigest(data) != ref.SHA256 {
+		return nil, ErrConflict
+	}
+	return data, nil
 }

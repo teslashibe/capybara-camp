@@ -77,9 +77,9 @@ func runTurnFixture(provider, mode, record string) {
 			case "configRequirements/read":
 				result["requirements"] = map[string]any{}
 			case "thread/start", "thread/resume":
-				if mode == "history" || mode == "child-history" {
+				if mode == "history" || mode == "child-history" || mode == "attachment-history" {
 					server := object(object(object(params["config"])["mcp_servers"])["camp_context"])
-					if err := readFixtureHistory(server, record, mode == "child-history"); err != nil {
+					if err := readFixtureHistory(server, record, mode == "child-history", mode == "attachment-history"); err != nil {
 						fixtureRecord(record, "history-error:"+err.Error())
 						os.Exit(6)
 					}
@@ -143,8 +143,8 @@ func runTurnFixture(provider, mode, record string) {
 		init["mcp_servers"] = []any{map[string]any{"name": "camp_context", "status": "connected"}}
 	}
 	out(init)
-	if mode == "history" || mode == "child-history" {
-		if err := readFixtureHistory(campContext, record, mode == "child-history"); err != nil {
+	if mode == "history" || mode == "child-history" || mode == "attachment-history" {
+		if err := readFixtureHistory(campContext, record, mode == "child-history", mode == "attachment-history"); err != nil {
 			fixtureRecord(record, "history-error:"+err.Error())
 			os.Exit(6)
 		}
@@ -241,6 +241,18 @@ func turnFixture(t *testing.T, provider, mode string, wraps ...func(http.Handler
 		t.Fatal(err)
 	}
 	assignment := camp.ExecutionInput{Location: "cloud", WorkspaceID: workspace.ID, ExpectedEpoch: 1, ExpectedSessionRevision: workspace.SourceRevision, ExpectedWorkspaceRevision: workspace.Revision}
+	if mode == "attachment-history" {
+		body := bytes.Repeat([]byte{255}, 16<<20)
+		ref := camp.AttachmentReference{ID: "a:0", Kind: "image", Source: "inline", SourceDigest: strings.Repeat("c", 64), State: "embedded", MediaType: "image/png", SHA256: fixtureAttachmentHash(body), Size: len(body)}
+		if _, err = f.store.PutAttachment(t.Context(), f.owner, workspace.CampID, workspace.SessionID, ref.SHA256, camp.AttachmentUpload{Data: body}); err != nil {
+			t.Fatal(err)
+		}
+		assignment.ExpectedTranscriptRevision, err = f.store.WriteTranscript(t.Context(), f.owner, workspace.CampID, workspace.SessionID, uuid.NewString(), camp.TranscriptInput{Messages: []camp.MessageInput{{ID: "image", Ordinal: 0, Role: "user", Attachments: []camp.AttachmentReference{ref}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	if purpose == "implementation" {
 		assignment.ExecutionApproved = true
 		assignment.Permissions = localcli.PermissionSettings{"sandbox": "workspace-write", "approval": "on-request", "reviewer": "user"}

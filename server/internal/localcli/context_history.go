@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/teslashibe/capybara-camp/server/internal/attachments"
 	"io"
 	"net"
 	"net/http"
@@ -96,12 +97,28 @@ func historyInput(args map[string]any) (HistoryRead, error) {
 }
 
 func validateHistoryPage(source HistorySource, in HistoryRead, page HistoryPage) error {
+	if in.Attachment != nil {
+		return validateHistoryAttachment(source, in, page)
+	}
+	if page.Attachment != nil {
+		return errors.New("Unexpected attachment body")
+	}
 	if page.SessionID != source.ID || page.Revision != source.Revision || len(page.Messages) > min(in.Limit, 20) || page.NextTextOffset < 0 || page.NextTextOffset > 8<<20 {
 		return errors.New("Invalid history response")
 	}
 	total := 0
 	var previous int64 = -1
 	for i, m := range page.Messages {
+		if len(m.Attachments) > attachments.MaxPerMessage {
+			return errors.New("Too many history attachments")
+		}
+		ids := map[string]bool{}
+		for _, ref := range m.Attachments {
+			if !ref.Valid() || ids[ref.ID] {
+				return errors.New("Invalid history attachment")
+			}
+			ids[ref.ID] = true
+		}
 		if len(m.ID) < 1 || len(m.ID) > 1024 || m.Ordinal < in.Offset || m.Ordinal <= previous || (m.Role != "user" && m.Role != "assistant" && m.Role != "system" && m.Role != "tool") || !utf8.ValidString(m.Text) {
 			return errors.New("Invalid history message")
 		}
@@ -229,8 +246,12 @@ func (p contextProxy) reader(ctx context.Context, in HistoryRead) (HistoryPage, 
 	if response.StatusCode != 200 {
 		return out, errors.New("History is no longer available to this turn")
 	}
-	raw, err = io.ReadAll(io.LimitReader(response.Body, 512<<10+1))
-	if err != nil || len(raw) > 512<<10 || !utf8.Valid(raw) {
+	maximum := 1 << 20
+	if in.Attachment != nil {
+		maximum = 23 << 20
+	}
+	raw, err = io.ReadAll(io.LimitReader(response.Body, int64(maximum)+1))
+	if err != nil || len(raw) > maximum || !utf8.Valid(raw) {
 		return out, errors.New("Invalid history response")
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))

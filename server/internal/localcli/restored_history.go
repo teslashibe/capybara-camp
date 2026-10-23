@@ -88,6 +88,12 @@ func (a *App) restoredHistory(ctx context.Context, session Session, ref Restored
 	if err != nil || h.Session.ID != receipt.SourceID || h.Session.TranscriptRevision != receipt.TranscriptRevision {
 		return nil, nil, transfer.ErrChanged
 	}
+	for _, item := range h.Attachments {
+		data, e := readInstallFile(root, item.filename(), 16<<20)
+		if e != nil || len(data) != item.Attachment.Size || installHash(data) != item.Attachment.SHA256 {
+			return nil, nil, transfer.ErrChanged
+		}
+	}
 	originalInfo, err := root.Lstat("history.json")
 	if err != nil {
 		return nil, nil, err
@@ -129,7 +135,7 @@ func (a *App) restoredHistory(ctx context.Context, session Session, ref Restored
 			return page, err
 		}
 		info, err := current.Lstat("history.json")
-		current.Close()
+		defer current.Close()
 		if err != nil || !os.SameFile(originalInfo, info) || info.Size() != originalInfo.Size() || !info.ModTime().Equal(originalInfo.ModTime()) || info.Mode() != originalInfo.Mode() {
 			return page, transfer.ErrChanged
 		}
@@ -139,6 +145,29 @@ func (a *App) restoredHistory(ctx context.Context, session Session, ref Restored
 		}
 		source, messages := sources[index], h.Conversations[index].Messages
 		page = HistoryPage{SessionID: source.ID, Title: source.Title, Revision: source.Revision, Messages: []HistoryMessage{}}
+		if in.Attachment != nil {
+			if !validHistoryAttachmentSelection(in) {
+				return page, transfer.ErrInput
+			}
+			for _, message := range messages {
+				if message.ID != in.Attachment.MessageID {
+					continue
+				}
+				for _, ref := range message.Attachments {
+					if ref.ID != in.Attachment.ID || ref.SourceDigest != in.Attachment.SourceDigest || ref.State != "embedded" {
+						continue
+					}
+					item := installedAttachment{StreamID: h.Conversations[index].ID, Attachment: ref}
+					data, e := readInstallFile(current, item.filename(), 16<<20)
+					if e != nil {
+						return page, e
+					}
+					page.Attachment = &HistoryAttachmentBody{MessageID: message.ID, Reference: ref.local(), Data: data}
+					return page, validateHistoryAttachment(source, in, page)
+				}
+			}
+			return page, transfer.ErrInput
+		}
 		start := sort.Search(len(messages), func(i int) bool { return messages[i].Ordinal >= in.Offset })
 		if in.TextOffset != 0 && (start == len(messages) || messages[start].Ordinal != in.Offset) {
 			return page, transfer.ErrInput
@@ -162,7 +191,11 @@ func (a *App) restoredHistory(ctx context.Context, session Session, ref Restored
 				break
 			}
 			complete := end == len(m.Text)
-			page.Messages = append(page.Messages, HistoryMessage{ID: m.ID, Ordinal: m.Ordinal, Role: m.Role, Text: m.Text[offset:end], TextOffset: offset, Complete: complete})
+			message := HistoryMessage{ID: m.ID, Ordinal: m.Ordinal, Role: m.Role, Text: m.Text[offset:end], TextOffset: offset, Complete: complete}
+			for _, ref := range m.Attachments {
+				message.Attachments = append(message.Attachments, ref.local())
+			}
+			page.Messages = append(page.Messages, message)
 			total += end - offset
 			if !complete {
 				next := m.Ordinal
