@@ -100,3 +100,14 @@ func TestChildHistoryHTTPAuthorizationReplayAndRevocation(t *testing.T) {
 	}
 	call("GET", path, tokens[1], "", nil, 404)
 }
+
+func TestChildHistoryLimitHasItsOwnProblemCode(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	if !fail(recorder, camp.ErrChildCapacity) {
+		t.Fatal("Child limit was not handled")
+	}
+	var body map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || recorder.Code != 409 || body["error"] != "child_history_limit" {
+		t.Fatal("Child limit looks like a retryable conflict", recorder.Code, recorder.Body.String(), err)
+	}
+}

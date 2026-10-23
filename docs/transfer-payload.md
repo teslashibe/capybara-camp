@@ -343,7 +343,10 @@ The request includes `source_key`, `source_revision`, `name`, `phase`, `workflow
 `state`, `model`, `complete`, `removed`, `expected_parent_revision`,
 `expected_transcript_revision` and `messages`. Messages use the same format and
 200-message/1 MiB batch limits as the main transcript. An empty batch can publish
-metadata or remove a child. The child count is bounded to 512 per parent.
+metadata or remove a child. A parent can hold at most 512 child rows, and removed
+children count toward that limit because publication returns their tombstones.
+A new child past the limit gets `409 child_history_limit`; the native client
+shows "Subagent history limit reached" and does not retry automatically.
 
 The expected parent revision is its global transcript revision. The expected
 child transcript revision is that child's own message revision. A successful

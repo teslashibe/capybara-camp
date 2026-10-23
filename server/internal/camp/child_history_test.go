@@ -235,3 +235,23 @@ func TestChildHistoryMultipartUploadAndPagedRead(t *testing.T) {
 		}
 	}
 }
+
+func TestChildHistoryLimitCountsTombstonesWithDistinctError(t *testing.T) {
+	s, _, actors, c, p, profile := sessionFixture(t)
+	ctx, owner := t.Context(), actors[0]
+	parent, err := s.PublishSession(ctx, owner, c.ID, uuid.NewString(), sessionInput(p, profile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Fill the parent directly; the limit is about rows, not publication flow.
+	if _, err = s.pool.Exec(ctx, `WITH made AS (
+ INSERT INTO sessions(id,camp_id,project_id,profile_id,owner_user_id,owner_device_id,local_session_id,title,model,state,stage,shared,allow_requests)
+ SELECT gen_random_uuid(),camp_id,project_id,profile_id,owner_user_id,owner_device_id,'child:'||id||':'||n,'Filler','fixture-model','idle','Done',false,false
+ FROM sessions, generate_series(1,$2::int) n WHERE id=$1 RETURNING id,camp_id,local_session_id)
+ INSERT INTO session_children(session_id,camp_id,parent_session_id,source_key) SELECT id,camp_id,$1,lpad(split_part(local_session_id,':',3),64,'0') FROM made`, parent.ID, MaxChildHistories); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.WriteChildHistory(ctx, owner, c.ID, parent.ID, uuid.NewString(), uuid.NewString(), childInput(parent.TranscriptRevision)); !errors.Is(err, ErrChildCapacity) || errors.Is(err, ErrConflict) {
+		t.Fatal("Full child history did not return its own limit error", err)
+	}
+}

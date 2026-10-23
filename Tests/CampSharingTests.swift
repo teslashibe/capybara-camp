@@ -16,6 +16,10 @@ actor PublishingFixture: CampPublishingTransport {
     var childHistories: [String:CloudChildHistory] = [:]
     var childMessages: [String:PublishMessage] = [:]
     var childWrites = 0
+    var childAttempts = 0
+    var childCapacity = false
+    func fillChildHistory() { childCapacity = true }
+    func childAttemptCount() -> Int { childAttempts }
     var attachmentBodies: [String:Data] = [:]
     var attachmentAttempts = 0
     var lostAttachmentResponse = false
@@ -99,6 +103,8 @@ actor PublishingFixture: CampPublishingTransport {
             remote?.transcriptRevision += 1; transcriptWrites += 1
             result = try CampWire.body(["revision": remote!.transcriptRevision])
         case "child-transcript":
+            childAttempts += 1
+            if childCapacity {throw CampCloudError.server(409,"child_history_limit")}
             let id=operation.publishedSessionID!,old=childHistories[id]
             guard (object["expected_parent_revision"] as! NSNumber).int64Value==remote?.transcriptRevision,
                   (object["expected_transcript_revision"] as! NSNumber).int64Value==(old?.transcriptRevision ?? 0) else{throw CampCloudError.server(409,"revision_conflict")}
@@ -259,6 +265,22 @@ actor ChangingHistoryFixture {
         let uploaded=await childServer.childSnapshot()
         precondition(uploaded.0.count==1 && uploaded.0[0].complete && uploaded.1.count==230 && uploaded.2==3,"Child pages were lost or repeated")
         precondition(uploaded.0[0].model==String(repeating:"m",count:100),"Child model identity was truncated")
+        // The server's child limit includes tombstones; the share must stop
+        // with a specific state instead of reconciling forever.
+        let fullServer=PublishingFixture(scope:scope,actor:actor)
+        await fullServer.fillChildHistory()
+        let fullSharing=CampSharing(cache:try CampCache(directory:root.appendingPathComponent("children-full")),export:export)
+        fullSharing.localSession={_ in native}
+        fullSharing.childCatalog={_ in await childSource.catalog()}
+        fullSharing.childPage={_,_,after in await childSource.page(after)}
+        fullSharing.attach(scope:scope,actor:actor,transport:fullServer)
+        try await fullSharing.configure(local:native,projectId:project,shared:true,allowRequests:false)
+        await eventually("child limit did not reach a terminal state"){fullSharing.shares.first?.state=="Subagent history limit reached"}
+        let attempts=await fullServer.childAttemptCount()
+        try await Task.sleep(for:.milliseconds(1200))
+        let later=await fullServer.childAttemptCount()
+        precondition(attempts==1 && later==attempts,"Child history limit was retried")
+        fullSharing.attach(scope:nil,actor:nil,transport:nil)
         precondition(childSharing.shares.first?.publishedHistory?.children==[.init(sourceId:String(repeating:"c",count:64),revision:String(repeating:"d",count:64))],"Published history omitted the child revision")
         let parentUpload=await childServer.snapshot()
         precondition(parentUpload.3["first"]?.text=="First message" && uploaded.1["first"]?.text=="Child message 0","Child transcript replaced its parent")

@@ -11,6 +11,12 @@ import (
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
 )
 
+// MaxChildHistories bounds every child row a parent has ever published,
+// including removed tombstones, because ChildPublication returns all of them.
+const MaxChildHistories = 512
+
+var ErrChildCapacity = errors.New("child history limit reached")
+
 type ChildHistoryInput struct {
 	SourceKey                  string         `json:"source_key"`
 	SourceRevision             string         `json:"source_revision"`
@@ -125,8 +131,8 @@ func (s *Store) WriteChildHistory(ctx context.Context, a auth.Actor, campID, par
 		if err = tx.QueryRow(ctx, `SELECT count(*) FROM session_children WHERE parent_session_id=$1`, parentID).Scan(&count); err != nil {
 			return result, err
 		}
-		if count >= 512 {
-			return result, ErrConflict
+		if count >= MaxChildHistories {
+			return result, ErrChildCapacity
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO sessions(id,camp_id,project_id,profile_id,owner_user_id,owner_device_id,local_session_id,title,model,state,stage,shared,allow_requests)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'idle','Done',false,false)`, id, campID, parent.ProjectID, parent.ProfileID, a.UserID, a.DeviceID, "child:"+parentID+":"+in.SourceKey, in.Name, in.Model)

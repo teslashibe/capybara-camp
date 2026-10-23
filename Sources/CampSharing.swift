@@ -157,6 +157,9 @@ struct LocalShareStatus {
                 await state(id, code == 401 ? "Sign in to Camp again" : "Needs review", generation: token)
             } catch CampCloudError.server(409, "attachment_storage_limit") {
                 await state(id, "Attachment storage full", generation: token)
+            } catch CampCloudError.server(409, "child_history_limit") {
+                // Removed subagents still count, so retrying cannot succeed.
+                await state(id, "Subagent history limit reached", generation: token)
             } catch CampCloudError.server(409, _) {
                 // A rejected revision has no committed effect. Read current state
                 // and create a fresh command, preserving the user's latest intent.

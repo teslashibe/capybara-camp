@@ -187,6 +187,8 @@ func fail(w http.ResponseWriter, err error) bool {
 		problem(w, 409, "token_ceiling_unavailable")
 	case errors.Is(err, camp.ErrAttachmentCapacity):
 		problem(w, 409, "attachment_storage_limit")
+	case errors.Is(err, camp.ErrChildCapacity):
+		problem(w, 409, "child_history_limit")
 	case errors.Is(err, camp.ErrInput):
 		problem(w, 400, "invalid_input")
 	default:
