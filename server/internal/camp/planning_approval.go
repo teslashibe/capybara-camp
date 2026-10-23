@@ -123,6 +123,11 @@ func readPlanningApproval(ctx context.Context, tx pgx.Tx, campID, planID, id str
 	return v, err
 }
 func (s *Store) checkPlanningApproval(ctx context.Context, tx pgx.Tx, v PlanningApproval) error {
+	// Review, approval and dispatch pin the exact ticket, session and
+	// transcript the owner saw. After dispatch, board moves, chat in the anchor
+	// and ticket edits must not strand the work; the plan hash, membership,
+	// ownership, permission revision and execution target still bind it.
+	dispatched := v.State == "dispatched"
 	for _, user := range []string{v.CreatorUserID, v.OwnerUserID} {
 		actor := auth.Actor{UserID: user}
 		var role string
@@ -136,7 +141,7 @@ func (s *Store) checkPlanningApproval(ctx context.Context, tx pgx.Tx, v Planning
 		if err != nil {
 			return err
 		}
-		if p.CreatorUserID != v.CreatorUserID || p.Revision != v.PlanRevision || p.ActiveVersion != v.PlanVersion || p.Version.State != "ready" || p.Version.Imported != nil {
+		if p.CreatorUserID != v.CreatorUserID || !dispatched && p.Revision != v.PlanRevision || p.ActiveVersion != v.PlanVersion || p.Version.State != "ready" || p.Version.Imported != nil {
 			return ErrRevision
 		}
 		hash, err := planApprovalHash(p)
@@ -153,7 +158,7 @@ func (s *Store) checkPlanningApproval(ctx context.Context, tx pgx.Tx, v Planning
 		if err != nil {
 			return err
 		}
-		if target.HistoryOnly || target.ExternalOwner || target.ProjectID != p.ProjectID || target.OwnerUserID != v.OwnerUserID || target.OwnerDeviceID != v.OwnerDeviceID || target.ProfileID != v.ProfileID || target.PermissionRevision != v.PermissionRevision || target.Revision != v.SessionRevision || target.TranscriptRevision != v.TranscriptRevision || planningExecution(target) != v.Execution {
+		if target.HistoryOnly || target.ExternalOwner || target.ProjectID != p.ProjectID || target.OwnerUserID != v.OwnerUserID || target.OwnerDeviceID != v.OwnerDeviceID || target.ProfileID != v.ProfileID || target.PermissionRevision != v.PermissionRevision || !dispatched && (target.Revision != v.SessionRevision || target.TranscriptRevision != v.TranscriptRevision) || planningExecution(target) != v.Execution {
 			return ErrRevision
 		}
 		if user != target.OwnerUserID && !target.AllowRequests {

@@ -105,7 +105,14 @@ func (g *GitStore) ClaimRunnerWork(ctx context.Context, token, workspaceID, clai
 		return nil, err
 	}
 	if _, err = s.requestAccess(ctx, tx, r); err != nil {
-		return nil, err
+		reason, terminal := claimRefusal(err)
+		if !terminal {
+			return nil, err
+		}
+		if err = s.cancelUnclaimable(ctx, tx, auth.Actor{UserID: r.OwnerUserID}, &r, reason); err != nil {
+			return nil, err
+		}
+		return nil, tx.Commit(ctx)
 	}
 	err = tx.QueryRow(ctx, `UPDATE prompt_requests SET state='claimed',revision=revision+1,lease_token=$2,runner_grant_id=$3,lease_until=clock_timestamp()+interval '60 seconds' WHERE id=$1 RETURNING revision,lease_until`, id, claim, l.runner.grantID).Scan(&r.Revision, &r.LeaseUntil)
 	if err != nil {

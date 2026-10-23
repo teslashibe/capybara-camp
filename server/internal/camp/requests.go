@@ -543,16 +543,11 @@ func (s *Store) claimRequest(ctx context.Context, a auth.Actor, campID, key stri
 			return nil, err
 		}
 		if _, err = s.requestAccess(ctx, tx, r); err != nil {
-			if !errors.Is(err, ErrDenied) {
+			reason, terminal := claimRefusal(err)
+			if !terminal {
 				return nil, err
 			}
-			r.State = "cancelled"
-			r.Reason = "permission_changed"
-			if _, err = tx.Exec(ctx, `UPDATE prompt_requests SET revision=revision+1,state='cancelled',reason=$2,finished_at=now() WHERE id=$1`, r.ID, r.Reason); err != nil {
-				return nil, err
-			}
-			r.Revision++
-			if err = emitRequest(ctx, tx, a, r, "request.cancelled", true); err != nil {
+			if err = s.cancelUnclaimable(ctx, tx, a, &r, reason); err != nil {
 				return nil, err
 			}
 		} else {
@@ -801,6 +796,34 @@ func lockWorker(ctx context.Context, tx pgx.Tx, a auth.Actor) error {
 		return auth.ErrUnauthorized
 	}
 	return err
+}
+
+// A queued request that can never pass its access check must leave the queue.
+// Claims take the oldest eligible row, so leaving it queued blocks every later
+// request for the same device or workspace. A held transfer is temporary.
+func claimRefusal(err error) (string, bool) {
+	switch {
+	case errors.Is(err, ErrDenied):
+		return "permission_changed", true
+	case errors.Is(err, ErrRevision), errors.Is(err, ErrInput):
+		return "precondition_changed", true
+	}
+	return "", false
+}
+
+func (s *Store) cancelUnclaimable(ctx context.Context, tx pgx.Tx, a auth.Actor, r *Request, reason string) error {
+	r.State, r.Reason = "cancelled", reason
+	if _, err := tx.Exec(ctx, `UPDATE prompt_requests SET revision=revision+1,state='cancelled',reason=$2,finished_at=now() WHERE id=$1`, r.ID, r.Reason); err != nil {
+		return err
+	}
+	r.Revision++
+	if err := emitRequest(ctx, tx, a, *r, "request.cancelled", true); err != nil {
+		return err
+	}
+	if r.Kind == "planning" {
+		return s.failPlanning(ctx, tx, a, *r)
+	}
+	return nil
 }
 
 func (s *Store) invalidateSessionRequests(ctx context.Context, tx pgx.Tx, a auth.Actor, campID, sessionID string) error {

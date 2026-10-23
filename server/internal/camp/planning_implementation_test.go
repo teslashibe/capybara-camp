@@ -416,3 +416,43 @@ func TestImplementationLocalControlsRequireOwnerDeviceAndLiveLease(t *testing.T)
 		t.Fatal("terminal local work retained control payload", err)
 	}
 }
+
+func TestDispatchedImplementationSurvivesDisplayEdits(t *testing.T) {
+	s, actors, c, p, target, approval := approvedImplementationFixture(t, true)
+	r := dispatchImplementationFixture(t, s, actors[0], c, p, approval)
+	// The creator drags the anchor card after dispatch. Review is over, so the
+	// display revision no longer binds the queued work.
+	if _, err := s.MoveSession(t.Context(), actors[0], c.ID, target.ID, uuid.NewString(), "Needs you", target.Revision); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := s.ClaimImplementationWork(t.Context(), actors[1], c.ID, uuid.NewString(), []string{target.ID})
+	if err != nil || claimed == nil || claimed.ID != r.ID {
+		t.Fatal("board move stranded dispatched implementation", claimed, err)
+	}
+	if _, err = s.ActOnRequest(t.Context(), actors[1], c.ID, r.ID, uuid.NewString(), RequestAction{Action: "start", LeaseToken: claimed.LeaseToken, ExecutionContext: approval.ExecutionContext}); err != nil {
+		t.Fatal("board move blocked start", err)
+	}
+}
+
+func TestUnclaimableImplementationLeavesQueue(t *testing.T) {
+	s, actors, c, p, target, approval := approvedImplementationFixture(t, true)
+	stale := dispatchImplementationFixture(t, s, actors[0], c, p, approval)
+	// A changed approved plan can never run again.
+	if _, err := s.pool.Exec(t.Context(), `UPDATE planning_execution_approvals SET plan_sha256=$2 WHERE id=$1`, approval.ID, strings.Repeat("f", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := s.ClaimImplementationWork(t.Context(), actors[1], c.ID, uuid.NewString(), []string{target.ID}); err != nil || r != nil {
+		t.Fatal("stale implementation was claimed or wedged the queue", r, err)
+	}
+	cancelled, err := s.Request(t.Context(), actors[1], c.ID, stale.ID)
+	if err != nil || cancelled.State != "cancelled" || cancelled.Reason != "precondition_changed" {
+		t.Fatal("stale implementation stayed queued", cancelled.State, cancelled.Reason, err)
+	}
+	chat, err := s.CreateRequest(t.Context(), actors[1], c.ID, target.ID, uuid.NewString(), RequestInput{Prompt: "Later chat on the same Mac"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, err := s.ClaimImplementationWork(t.Context(), actors[1], c.ID, uuid.NewString(), []string{target.ID}); err != nil || r == nil || r.ID != chat.ID {
+		t.Fatal("later work stayed blocked", r, err)
+	}
+}
