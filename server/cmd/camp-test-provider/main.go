@@ -354,6 +354,15 @@ func run(scenario string, args []string) error {
 	case "complete":
 		_ = emit(message{"type": "started"})
 		_ = emit(message{"type": "text", "text": "Complete"})
+	case "record-launch":
+		if len(args) != 1 {
+			return errors.New("Missing launch trace")
+		}
+		if err := appendRecord(args[0], r); err != nil {
+			return err
+		}
+		_ = emit(message{"type": "started"})
+		_ = emit(message{"type": "text", "text": "Recorded"})
 	case "planning":
 		if len(args) != 1 {
 			return errors.New("Missing planning trace")

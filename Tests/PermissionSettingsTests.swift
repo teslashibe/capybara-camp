@@ -48,6 +48,20 @@ import Foundation
         precondition(restored.sessionPermissions.grants[source.id] == nil)
         let request = try JSONSerialization.jsonObject(with: Data(contentsOf: trace)) as! [String: Any]
         precondition(request["executionApproved"] as? Bool == true && request["newSession"] as? Bool == false)
+        // A teammate's shared chat request must not inherit this Mac's local grant.
+        let sharedRoot = root.appendingPathComponent("shared-request")
+        try FileManager.default.createDirectory(at: sharedRoot, withIntermediateDirectories: true)
+        await LocalSessionIndex.shared.save(ImportResult(sessions: [source], sources: [], errors: []), directory: sharedRoot)
+        let launches = sharedRoot.appendingPathComponent("launches.json")
+        let shared = CampStore(stateDirectory: sharedRoot, conversationProcess: { fixtureProcess("record-launch", [launches.path]) })
+        shared.executionContextReader = store.executionContextReader
+        try await shared.applyPermissions(next, session: source, preview: false)
+        precondition(shared.sessionPermissions.grants[source.id] != nil)
+        precondition(shared.start(source, prompt: "Teammate request", model: "", tuning: ModelTuning(), notifyCompletion: false, localTools: false))
+        try await until { shared.conversations.isEmpty }
+        let launch = try JSONSerialization.jsonObject(with: Data(contentsOf: launches)) as! [String: Any]
+        precondition(launch["mode"] as? String == "chat" && launch["executionApproved"] as? Bool != true && (launch["permissions"] == nil || launch["permissions"] is NSNull),
+                     "A teammate's request ran with the owner's local tool grant")
         precondition(Bridge.activeProcesses.isEmpty)
         print("PASS: persistent permission choices, active-turn boundaries, Needs you, offered decisions and stale queues")
     }

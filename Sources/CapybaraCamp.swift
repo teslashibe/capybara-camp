@@ -541,7 +541,7 @@ final class TranscriptWatch {
                 } catch { return nil }
             }
             let references = request.sources.map { SessionReference(id: "camp:" + $0.sessionId, scope: self.cloud.scope?.key, cloud: $0) }
-            guard self.start(local, prompt: prompt, model: request.model, tuning: ModelTuning(effort: request.effort, speed: request.speed), history: history, contexts: contexts, references: references, notifyCompletion: false, completion: completed) else { return nil }
+            guard self.start(local, prompt: prompt, model: request.model, tuning: ModelTuning(effort: request.effort, speed: request.speed), history: history, contexts: contexts, references: references, notifyCompletion: false, localTools: request.requesterUserId == request.ownerUserId, completion: completed) else { return nil }
             return self.conversations[local.id]
         }
         cloud.worker.requestUpdated = { [weak cloud] value in Task { await cloud?.acceptWorkerRequest(value) } }
@@ -1188,10 +1188,12 @@ final class TranscriptWatch {
     }
     @discardableResult
     func start(_ s: CampSession, prompt: String, model: String, tuning: ModelTuning, queuedID: String? = nil,
-               history: [Message]? = nil, contexts: [SessionContext] = [], references: [SessionReference] = [], notifyCompletion: Bool = true, completion: ((ConversationResult) -> Void)? = nil) -> Bool {
+               history: [Message]? = nil, contexts: [SessionContext] = [], references: [SessionReference] = [], notifyCompletion: Bool = true, localTools: Bool = true, completion: ((ConversationResult) -> Void)? = nil) -> Bool {
         let s = planning.ticket(s.id)?.session ?? s
-        let execution = planning.ticket(s.id)?.implementation
-        let grant = sessionPermissions.grants[s.id]
+        // Local tool grants belong to this Mac's owner. A teammate's shared
+        // request keeps the read-only chat runtime it was approved under.
+        let execution = localTools ? planning.ticket(s.id)?.implementation : nil
+        let grant = localTools ? sessionPermissions.grants[s.id] : nil
         let permissions = grant?.settings ?? execution?.executor.permissions
         let fingerprint = grant?.context.fingerprint ?? execution?.context.fingerprint ?? ""
         guard sessionPermissions.error.isEmpty else { banner = sessionPermissions.error; return false }
