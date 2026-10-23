@@ -106,6 +106,10 @@ actor CampLocalDestination {
         } else {
             guard let export=try await files.current(),export.session==j.session,export.export?.id==j.exportId,!export.cancelling else { throw CampCloudError.invalidResponse }
             try await history.verifySource(j.session)
+            // An installed checkout is verified by its saved receipt. Installing
+            // again would need the export, which expires ten minutes after
+            // creation, and confirm and commit can come later than that.
+            if j.phase=="installed" { return j }
             if j.phase=="checkout" {
                 j.checkout=try await files.prepareLocalCheckout(transferID:j.id,reviewedSHA256:j.reviewedSha256,callLocal:callLocal)
                 j.phase="installing"

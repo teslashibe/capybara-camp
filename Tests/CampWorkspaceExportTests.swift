@@ -263,7 +263,9 @@ import Foundation
                 precondition(verified.installation==installed.installation)
                 let counts=await bridge.counts()
                 precondition(counts.0==(loss=="checkout" ? 2 : 1),"Restart reset an installed checkout")
-                precondition(counts.1==(loss=="install" ? 3 : 2))
+                // Verifying an installed checkout reads its saved receipt and never
+                // installs again from the short-lived export.
+                precondition(counts.1==(loss=="install" ? 2 : 1))
                 let raw=try await cache.metadata("local-destination:"+scope.key)!
                 precondition(!String(decoding:raw,as:UTF8.self).contains("ghu_"),"Destination journal contains a Git token")
                 var changed=installed;changed.target.root="/another/profile";changed.revision+=1

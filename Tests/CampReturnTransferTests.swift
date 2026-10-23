@@ -72,6 +72,10 @@ import Foundation
                     await screen.confirm(contextApproved:true,executionApproved:true,permissions:permissions)
                     for _ in 0..<10 { await screen.advance();if screen.phase == "complete" { break } }
                     precondition(screen.phase == "complete" && screen.completed?.session.id == fixture.session.id,screen.error)
+                    // Confirm and commit verify the saved receipt; they do not
+                    // reinstall from an export that may already have expired.
+                    let installs = await fixture.bridge.counts().1
+                    precondition(installs == 1,"Return move reinstalled after install: \(installs)")
                     if scenario == "complete" {
                         precondition(!screen.error.isEmpty && delivered == 1)
                         await screen.advance()
