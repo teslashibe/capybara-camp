@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -131,7 +132,7 @@ func (a *API) Handler() http.Handler {
 			if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/camps/") && strings.HasSuffix(r.URL.Path, "/exports") {
 				maximum = 2 << 20 // 256 selected paths, including JSON escapes
 			}
-			if r.URL.Path == "/v1/runner/credentials" || strings.HasSuffix(r.URL.Path, "/events") || strings.HasSuffix(r.URL.Path, "/implementation-events") || strings.HasSuffix(r.URL.Path, "/controls") {
+			if r.URL.Path == "/v1/runner/credentials" || streamAppend(r.URL.Path) || strings.HasSuffix(r.URL.Path, "/controls") {
 				maximum = 384 << 10
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, maximum)
@@ -196,8 +197,69 @@ func fail(w http.ResponseWriter, err error) bool {
 	}
 	return true
 }
+
+// Large import and transcript bodies are checked for element counts before
+// decoding: a body of empty objects would otherwise allocate gigabytes of
+// structs inside the size limit. No accepted body needs more than this.
+const maxDecodedArray, maxDecodedDepth = 1000, 32
+
+func boundedJSON(body io.Reader) (io.Reader, error) {
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return nil, err
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	var counts []int // -1 for an object, else elements seen in the array
+	for {
+		t, err := d.Token()
+		if errors.Is(err, io.EOF) {
+			return bytes.NewReader(raw), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if n := len(counts); n > 0 && counts[n-1] >= 0 {
+			if delim, ok := t.(json.Delim); !ok || delim != ']' {
+				if counts[n-1]++; counts[n-1] > maxDecodedArray {
+					return nil, errDecodeLimit
+				}
+			}
+		}
+		switch t {
+		case json.Delim('['):
+			counts = append(counts, 0)
+		case json.Delim('{'):
+			counts = append(counts, -1)
+		case json.Delim(']'), json.Delim('}'):
+			counts = counts[:len(counts)-1]
+		}
+		if len(counts) > maxDecodedDepth {
+			return nil, errDecodeLimit
+		}
+	}
+}
+
+var errDecodeLimit = errors.New("decoded body exceeds element limits")
+
 func decode(w http.ResponseWriter, r *http.Request, target any) bool {
-	d := json.NewDecoder(r.Body)
+	var body io.Reader = r.Body
+	if strings.HasSuffix(r.URL.Path, "/planning/import") || strings.HasSuffix(r.URL.Path, "/transcript") {
+		bounded, err := boundedJSON(r.Body)
+		var tooLarge *http.MaxBytesError
+		switch {
+		case errors.As(err, &tooLarge):
+			problem(w, 413, "body_too_large")
+			return false
+		case errors.Is(err, errDecodeLimit):
+			problem(w, 413, "body_too_large")
+			return false
+		case err != nil:
+			problem(w, 400, "invalid_json")
+			return false
+		}
+		body = bounded
+	}
+	d := json.NewDecoder(body)
 	d.DisallowUnknownFields()
 	if err := d.Decode(target); err != nil {
 		var tooLarge *http.MaxBytesError
@@ -213,6 +275,14 @@ func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 		return false
 	}
 	return true
+}
+func streamAppend(path string) bool {
+	for _, suffix := range []string{"/events", "/implementation-events", "/continuation-events", "/planning-events"} {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
 }
 func token(r *http.Request) string {
 	scheme, value, ok := strings.Cut(r.Header.Get("Authorization"), " ")
@@ -241,6 +311,18 @@ func (a *API) authorize(next authorizedHandler) http.HandlerFunc {
 			if strings.Contains(r.URL.Path, "/requests/") {
 				maximum = 1200
 				scope = "requests:" + u.DeviceID
+			}
+			// Streams are bounded per request at 32768 events; one POST per
+			// provider delta must not exhaust the ordinary request quota.
+			if strings.Contains(r.URL.Path, "/requests/") && streamAppend(r.URL.Path) {
+				maximum = 40000
+				scope = "stream:" + u.DeviceID
+			}
+			// A move to the Mac reads up to 184 chunks plus claims while the
+			// owner reviews; keep it out of the per-user mutation budget.
+			if strings.HasPrefix(r.URL.Path, "/v1/handoffs/") {
+				maximum = 2400
+				scope = "handoff:" + u.DeviceID
 			}
 			if fail(w, a.Auth.Limit(r.Context(), scope, maximum)) {
 				return

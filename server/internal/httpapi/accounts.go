@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
 	"github.com/teslashibe/capybara-camp/server/internal/camp"
@@ -164,7 +165,11 @@ func (a *API) runnerAuthorize(next func(http.ResponseWriter, *http.Request, camp
 		if fail(w, err) {
 			return
 		}
-		if fail(w, a.Auth.Limit(r.Context(), "runner:"+state.InstallationID, 6000)) {
+		scope, maximum := "runner:"+state.InstallationID, 6000
+		if r.Method == "POST" && strings.Contains(r.URL.Path, "/requests/") && streamAppend(r.URL.Path) {
+			scope, maximum = "runner-stream:"+state.InstallationID, 40000
+		}
+		if fail(w, a.Auth.Limit(r.Context(), scope, maximum)) {
 			return
 		}
 		next(w, r, state)

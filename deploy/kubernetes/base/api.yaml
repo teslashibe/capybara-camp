@@ -42,6 +42,9 @@ spec:
             - configMapRef:
                 name: camp-config
           env:
+            # Collect before the 256Mi container limit rather than being OOM-killed.
+            - name: GOMEMLIMIT
+              value: 200MiB
             - name: CAMP_DATABASE_URL
               valueFrom:
                 secretKeyRef: {name: camp-secrets, key: CAMP_DATABASE_URL}
