@@ -119,10 +119,14 @@ func verifyAttachmentBlobs(ctx context.Context, tx pgx.Tx, id string, messages [
 	if err = rows.Err(); err != nil {
 		return err
 	}
+	rows.Close()
 	if len(needed) != 0 {
 		return ErrRevision
 	}
-	return nil
+	// The caller holds the Camp lock that cleanup shares and inserts the
+	// referencing revision in this transaction.
+	_, err = tx.Exec(ctx, `UPDATE transcript_attachment_blobs SET published=true WHERE session_id=$1 AND sha256=ANY($2::text[]) AND NOT published`, id, hashes)
+	return err
 }
 
 func readTranscriptAt(ctx context.Context, tx pgx.Tx, id string, revision, before int64, limit int) (Transcript, error) {

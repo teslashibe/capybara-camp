@@ -9,7 +9,9 @@ import (
 
 // Published references in any revision retain the original body, including
 // superseded messages and removed children. Only uploads without a retained reference expire.
-const expiredAttachmentUpload = `b.last_uploaded_at < clock_timestamp()-interval '7 days'
+// Publication marks the blob, so the partial expiry index holds only candidates;
+// the reference check stays as a recheck on those few rows.
+const expiredAttachmentUpload = `NOT b.published AND b.last_uploaded_at < clock_timestamp()-interval '7 days'
  AND NOT EXISTS(SELECT 1 FROM message_revisions v WHERE v.session_id=b.session_id
  AND v.attachments @> jsonb_build_array(jsonb_build_object('state','embedded','sha256',b.sha256)))`
 

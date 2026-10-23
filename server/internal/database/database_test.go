@@ -155,11 +155,31 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO transcript_attachment_blobs(camp_id,parent_session_id,session_id,sha256,byte_count,encrypted_body,created_at) VALUES($1,$2,$2,$3,1,$4,now()-interval '30 days')`, camp, session, strings.Repeat("e", 64), bytes.Repeat([]byte{1}, 29)); err != nil {
 		t.Fatal(err)
 	}
+	// Schema 41 backfills publication from retained message references.
+	published := strings.Repeat("f", 64)
+	if _, err = pool.Exec(ctx, `INSERT INTO transcript_attachment_blobs(camp_id,parent_session_id,session_id,sha256,byte_count,encrypted_body) VALUES($1,$2,$2,$3,1,$4)`, camp, session, published, bytes.Repeat([]byte{1}, 29)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO messages(session_id,local_id,ordinal) VALUES($1,'published-probe',9998)`, session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO message_revisions(session_id,local_id,revision,role,text,attachments) VALUES($1,'published-probe',1,'user','',jsonb_build_array(jsonb_build_object('id','a:0','state','embedded','sha256',$2::text)))`, session, published); err != nil {
+		t.Fatal(err)
+	}
 	if err = Migrate(ctx, u.String()); err != nil {
 		t.Fatal(err)
 	}
+	var unreferencedPublished, referencedPublished bool
+	if err = pool.QueryRow(ctx, `SELECT bool_or(published) FILTER(WHERE sha256=$1),bool_or(published) FILTER(WHERE sha256=$2) FROM transcript_attachment_blobs`, strings.Repeat("e", 64), published).Scan(&unreferencedPublished, &referencedPublished); err != nil || unreferencedPublished || !referencedPublished {
+		t.Fatal("Publication backfill was wrong", unreferencedPublished, referencedPublished, err)
+	}
+	for _, sql := range []string{`DELETE FROM message_revisions WHERE local_id='published-probe'`, `DELETE FROM messages WHERE local_id='published-probe'`} {
+		if _, err = pool.Exec(ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var freshUploadWindow bool
-	if err = pool.QueryRow(ctx, `SELECT last_uploaded_at > now()-interval '1 minute' FROM transcript_attachment_blobs`).Scan(&freshUploadWindow); err != nil || !freshUploadWindow {
+	if err = pool.QueryRow(ctx, `SELECT bool_and(last_uploaded_at > now()-interval '1 minute') FROM transcript_attachment_blobs`).Scan(&freshUploadWindow); err != nil || !freshUploadWindow {
 		t.Fatal("Existing upload did not receive a new retention window", err)
 	}
 	if _, err = provider.DownTo(ctx, 38); err == nil {

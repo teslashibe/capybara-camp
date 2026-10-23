@@ -145,11 +145,20 @@ retain their referenced bodies. A queued publication whose upload has expired
 must upload the original bytes again before its descriptors can be committed.
 
 Stop schema-39 writers, back up the database and encryption key, run the existing
-migration command, and start the schema-40 server. Readiness requires schema 40.
+migration command, and start the schema-41 server. Readiness requires schema 41.
 Existing uploads receive a fresh seven-day window on upgrade. Downgrading to 39
 stops expiry cleanup and retains the bodies; stop schema-40 processes before the
 downgrade. Downgrade below 39 refuses while any attachment blob or message
 descriptor is retained; restore a compatible deployment rather than discard it.
+
+Schema 41 marks a blob as published in the same transaction that commits its
+first referencing revision, and the expiry index holds unpublished uploads
+only. Cleanup cost therefore follows the number of unreferenced uploads, not
+transcript history. At 10,000 aged published blobs over 400,000 revisions the
+schema-40 sweep took 12.7 s against a 5 s budget; schema 41 takes under 1 ms.
+The upgrade backfills the flag from message revisions once, which took about
+13 s at that size, so stop schema-40 writers for the migration as above.
+Downgrading to 40 restores the full reference scan.
 
 The native publisher and permission-checked byte reader use this storage API.
 Cloud message decoding retains descriptors, and the native destination

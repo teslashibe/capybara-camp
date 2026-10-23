@@ -203,13 +203,15 @@ func TestAttachmentRetentionRuntimeColumnGrant(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	raw, err := os.ReadFile("../database/migrations/00040_attachment_upload_retention.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	grant := strings.Split(strings.Split(string(raw), "-- +goose StatementBegin")[1], "-- +goose StatementEnd")[0]
-	if _, err = s.pool.Exec(ctx, strings.ReplaceAll(grant, "camp_runtime", role)); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"00040_attachment_upload_retention.sql", "00041_attachment_publication.sql"} {
+		raw, err := os.ReadFile("../database/migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		grant := strings.Split(strings.Split(string(raw), "-- +goose StatementBegin")[1], "-- +goose StatementEnd")[0]
+		if _, err = s.pool.Exec(ctx, strings.ReplaceAll(grant, "camp_runtime", role)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cfg := s.pool.Config().Copy()
 	cfg.ConnConfig.User = role
@@ -231,6 +233,15 @@ func TestAttachmentRetentionRuntimeColumnGrant(t *testing.T) {
 	if _, err = pool.Exec(ctx, `UPDATE transcript_attachment_blobs SET encrypted_body=encrypted_body`); err == nil {
 		t.Fatal("Renewal grant permits rewriting content")
 	}
+	extra := []byte("runtime published")
+	if _, err = limited.PutAttachment(ctx, actors[0], c.ID, parent.ID, transferDigest(extra), AttachmentUpload{Data: extra}); err != nil {
+		t.Fatal(err)
+	}
+	publishedRef := ref
+	publishedRef.SHA256, publishedRef.Size = transferDigest(extra), len(extra)
+	if _, err = limited.WriteTranscript(ctx, actors[0], c.ID, parent.ID, uuid.NewString(), TranscriptInput{Messages: []MessageInput{{ID: "saved", Role: "user", Attachments: []AttachmentReference{publishedRef}}}}); err != nil {
+		t.Fatal("Runtime publication could not mark its upload", err)
+	}
 	if _, err = s.pool.Exec(ctx, `UPDATE transcript_attachment_blobs SET last_uploaded_at=now()-interval '8 days'`); err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +249,51 @@ func TestAttachmentRetentionRuntimeColumnGrant(t *testing.T) {
 		t.Fatal("Runtime cleanup failed", err)
 	}
 	var count int
-	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM transcript_attachment_blobs`).Scan(&count); err != nil || count != 0 {
+	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM transcript_attachment_blobs`).Scan(&count); err != nil || count != 1 {
 		t.Fatal(count, err)
+	}
+}
+
+func TestAttachmentPublicationMarksOnlyItsSession(t *testing.T) {
+	s, actors, c, _, parent, body, ref := attachmentFixture(t)
+	ctx, owner := t.Context(), actors[0]
+	if _, err := s.PutAttachment(ctx, owner, c.ID, parent.ID, ref.SHA256, AttachmentUpload{Data: body}); err != nil {
+		t.Fatal(err)
+	}
+	revision, err := s.WriteTranscript(ctx, owner, c.ID, parent.ID, uuid.NewString(), TranscriptInput{Messages: []MessageInput{{ID: "saved", Role: "user", Attachments: []AttachmentReference{ref}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childID := uuid.NewString()
+	if _, err = s.WriteChildHistory(ctx, owner, c.ID, parent.ID, childID, uuid.NewString(), childInput(revision)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.PutAttachment(ctx, owner, c.ID, parent.ID, ref.SHA256, AttachmentUpload{Data: body, ChildID: childID}); err != nil {
+		t.Fatal(err)
+	}
+	marks := map[string]bool{}
+	rows, err := s.pool.Query(ctx, `SELECT session_id::text,published FROM transcript_attachment_blobs WHERE sha256=$1`, ref.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id string
+		var published bool
+		if err = rows.Scan(&id, &published); err != nil {
+			t.Fatal(err)
+		}
+		marks[id] = published
+	}
+	rows.Close()
+	if len(marks) != 2 || !marks[parent.ID] || marks[childID] {
+		t.Fatal("Publication marked the wrong uploads", marks)
+	}
+	// Aged published bodies are not cleanup candidates at all.
+	if _, err = s.pool.Exec(ctx, `UPDATE transcript_attachment_blobs SET last_uploaded_at=now()-interval '8 days'`); err != nil {
+		t.Fatal(err)
+	}
+	var candidates int
+	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM transcript_attachment_blobs b WHERE NOT b.published AND b.last_uploaded_at < clock_timestamp()-interval '7 days'`).Scan(&candidates); err != nil || candidates != 1 {
+		t.Fatal("Published body stayed a cleanup candidate", candidates, err)
 	}
 }
