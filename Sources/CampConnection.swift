@@ -719,6 +719,24 @@ import SwiftUI
         try await cache.saveTranscript(value, scope: scope, sessionId: session.id, before: before, expectedPermissionRevision: session.permissionRevision, expectedEpoch: epoch); return value
     }
     func childReadAllowed(_ session:CloudSession)->Bool {sessionIndex[session.id]?.permissionRevision==session.permissionRevision}
+    func attachmentBytes(_ selection: CampAttachmentSelection) async throws -> Data {
+        guard let scope, let client, let credential, let cache, selection.valid,
+              selection.session.campId == scope.campId, childReadAllowed(selection.session) else { throw CampCloudError.invalidResponse }
+        let token = generation, epoch = cacheEpoch
+        let childEpoch = try await cache.childEpoch(scope, parent: selection.session.id)
+        func check() async throws {
+            let currentChildEpoch = try await cache.childEpoch(scope, parent: selection.session.id)
+            let currentEpoch = try await cache.epoch(scope)
+            guard generation == token, self.scope == scope, self.credential?.token == credential.token,
+                  childReadAllowed(selection.session), !Task.isCancelled,
+                  currentEpoch == epoch,
+                  selection.childId == nil || currentChildEpoch == childEpoch else { throw CancellationError() }
+        }
+        try await check()
+        let bytes = try await CampAttachmentReader.read(selection, scope: scope, credential: credential, transport: client)
+        try await check()
+        return bytes
+    }
     func refreshSession(_ id:String) async {
         guard let scope,let client,let credential else{return}
         let epoch=cacheEpoch

@@ -11,15 +11,17 @@ private final class CampRedirectPolicy: NSObject, URLSessionTaskDelegate, @unche
 actor CampHTTP {
     let endpoint: CampEndpoint
     private let session: URLSession
+    private let attachmentHTTP: CampBoundedHTTP
     init(endpoint: CampEndpoint, configuration: URLSessionConfiguration = .ephemeral) {
         self.endpoint = endpoint
         configuration.httpCookieStorage = nil
         configuration.urlCredentialStorage = nil
         configuration.timeoutIntervalForRequest = 30
         configuration.timeoutIntervalForResource = 360
+        attachmentHTTP = CampBoundedHTTP(configuration: configuration)
         session = URLSession(configuration: configuration, delegate: CampRedirectPolicy(), delegateQueue: nil)
     }
-    deinit { session.invalidateAndCancel() }
+    deinit { session.invalidateAndCancel(); attachmentHTTP.cancel() }
 
     private func request(_ method: String, path: String, body: Data?, key: String?, token: String?) throws -> URLRequest {
         var request = URLRequest(url: try endpoint.requestURL(path))
@@ -42,6 +44,14 @@ actor CampHTTP {
     }
     func data(_ method: String, path: String, body: Data? = nil, key: String? = nil, token: String? = nil) async throws -> Data {
         let request = try request(method, path: path, body: body, key: key, token: token)
+        let segments = path.split(separator: "/", omittingEmptySubsequences: false)
+        let isAttachment = method == "POST" && segments.count == 7 && segments[0].isEmpty && segments[1] == "v1" &&
+            segments[2] == "camps" && UUID(uuidString: String(segments[3])) != nil && segments[4] == "sessions" &&
+            UUID(uuidString: String(segments[5])) != nil && segments[6] == "attachment"
+        if isAttachment {
+            let (data, response) = try await attachmentHTTP.data(request, limit: 23 << 20)
+            return try Self.accept(data, response: response)
+        }
         let (bytes, response) = try await session.bytes(for: request)
         guard let response = response as? HTTPURLResponse else { throw CampCloudError.invalidResponse }
         var data = Data()
@@ -50,6 +60,9 @@ actor CampHTTP {
             guard data.count < 4 << 20 else { throw CampCloudError.responseTooLarge }
             data.append(byte)
         }
+        return try Self.accept(data, response: response)
+    }
+    private static func accept(_ data: Data, response: HTTPURLResponse) throws -> Data {
         guard (200..<300).contains(response.statusCode) else {
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             throw CampCloudError.server(response.statusCode, object?["error"] as? String ?? "request_failed")
@@ -90,5 +103,5 @@ actor CampHTTP {
             }
         }
     }
-    func cancel() { session.invalidateAndCancel() }
+    func cancel() { session.invalidateAndCancel(); attachmentHTTP.cancel() }
 }

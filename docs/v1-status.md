@@ -22,10 +22,10 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: finish attachment download and transfer, then shared skills
-and Git publication. Local attachment inspection and verified embedded-byte reads
-and the cloud storage API are implemented. Native publication is connected;
-attachment download and destination installation remain unfinished. See [the attachment contract](attachments.md). Native
+Next: finish attachment preview controls and transfer, then shared skills
+and Git publication. Local attachment import, verified publication, cloud storage
+and the native byte reader are implemented. Chat preview controls and destination
+installation remain unfinished. See [the attachment contract](attachments.md). Native
 Local-to-Cloud ancestor selection, cloud-source commit capture and Mac restoration
 are implemented; live-provider transfer acceptance remains open. The native
 return review/adoption screen and duplicate-card
@@ -1494,3 +1494,34 @@ Shared skills, Git publication and the other V1 acceptance/release gates remain
 open. Computer use is responding again; the running review build's footer was
 visually inspected, but the proposed sidebar redesign has not been applied.
 There is no new release or cloud deployment. Memory/Cortex remains excluded.
+
+### Native attachment reader checkpoint — October 22
+
+The native reader verifies Camp origin/user, parent or child, message, pinned
+transcript revision, current permission revision, descriptor, byte count and hash.
+The active Camp connection fences results across cancellation, scope or credential
+changes, session permission changes, cache erasure and child-cache invalidation.
+No attachment bytes are cached or written to disk by this path.
+
+A dedicated reusable URLSession receives large attachment responses in bounded
+chunks. Only the exact attachment POST route has a 23 MiB response allowance;
+ordinary JSON responses remain capped at 4 MiB. Declared and streamed oversized
+responses are refused, redirects are not followed, and request cancellation
+releases its task and buffer. At most two attachment downloads are active.
+
+The native reader and cloud suites pass (`build/attachment-read-native.log`).
+Route-boundary and plan-import regression checks pass
+(`build/attachment-read-bounds.log`). Native integration against the real local
+Go API/PostgreSQL passes for both provider histories (`build/attachment-read-api.log`):
+16 MiB parent and child bodies, two independent logins, exact hashes/bytes, lost
+publication responses, cache-clear refusal, Camp re-selection and revoked sharing.
+The final concurrency, cancellation and same-size corruption checks pass\n(`build/attachment-read-final.log`), including refusal of a third active download\nbefore it reaches the network. ShellCheck and the staged secrets scan pass.
+These are synthetic provider histories; live provider and two-Mac acceptance
+remain open.
+
+Chat preview/download controls, saved-history bytes, orphan reclamation and
+attachment installation in both transfer directions are still unfinished.
+Transfer guards remain. This is not a release or deployment, and it does not
+close the full UI, performance, review or other V1 gates. Memory/Cortex remains
+excluded, and Hetzner provisioning still happens with the owner after local
+acceptance.

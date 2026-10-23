@@ -49,7 +49,7 @@ Child uploads follow creation of the incomplete child history and precede its
 message publication. Completed parent/child histories retain their source
 revision bindings. A failed upload leaves synchronization incomplete. A full storage quota shows\n`Attachment storage full` and stops automatic retry until another sync is requested.
 
-Destination installation and native media download/preview are unfinished.
+The native byte reader is implemented, while chat preview/download controls and\ndestination installation are unfinished.
 Native saved-history publication still refuses attachment-bearing messages.
 Transfer guards remain until both destinations can preserve the bytes, including
 main/subagent provenance, permissions, retries, offline recovery and revocation.
@@ -104,17 +104,41 @@ migration command, and start the schema-39 server. Readiness requires schema 39.
 Downgrade refuses while any attachment blob or message descriptor is retained;
 restore a compatible deployment rather than discard that history.
 
-The native publisher uses this storage API; media preview is unfinished. Cloud message decoding retains descriptors, and the native destination
+The native publisher and permission-checked byte reader use this storage API;\nmedia preview is unfinished. Cloud message decoding retains descriptors, and the native destination
 history downloader refuses an archive that would omit their bodies. Server
 transfer checks also refuse sessions with retained attachment history. Those
 guards remain until destination byte installation is complete.
+
+## Native byte reads
+
+`CampAttachmentReader` binds a read to the Camp origin/user, parent or child,
+message, transcript revision, permission revision and original descriptor. It
+verifies the returned descriptor, exact byte count and SHA-256 before returning
+bytes. References without embedded bytes cannot enter this path. The reader has
+no attachment cache and does not fetch original URLs or local file references.
+
+`CampConnection.attachmentBytes` also checks the active connection generation,
+credential, session permissions and local cache epoch before and after the read.
+Child reads check the child-cache epoch as well. Cancelled or superseded reads
+discard their result. Every new read goes through current server authorization.
+
+Only the exact attachment-read POST route accepts a response up to 23 MiB;
+ordinary JSON responses retain their 4 MiB cap. Attachment bodies arrive through
+a reusable ephemeral URLSession with chunk bounds, declared-length rejection,
+redirect refusal and two active downloads at most. Cancelling one request stops
+its network task without closing the session; closing the client cancels all
+active reads. Data remains in memory and is not written to a file or URL cache.
+
+The underlying reader is ready for chat previews and destination installation.
+The chat still displays attachment type and availability; no preview or download
+button has been added yet.
 
 ## Verification
 
 Run the native and bundled-helper checks with:
 
 ```sh
-./test.sh CampSharingTests BridgeIntegrationTests CampChildHistoryTests CampCloudTests LocalPlanImportTests
+./test.sh CampAttachmentReadTests CampSharingTests BridgeIntegrationTests CampChildHistoryTests CampCloudTests LocalPlanImportTests
 ```
 
 Run the native publisher against a disposable loopback Go API and PostgreSQL:
@@ -124,5 +148,5 @@ Run the native publisher against a disposable loopback Go API and PostgreSQL:
 ```
 
 The API test uses independent owner and teammate logins, parent and child bodies
-above 2 MiB, lost upload/transcript responses and revoked sharing. It uses synthetic
+at the 16 MiB maximum, lost upload/transcript responses, cache erasure/reconnect\nand revoked sharing. It uses synthetic
 provider histories and does not establish live-provider or native visual acceptance.

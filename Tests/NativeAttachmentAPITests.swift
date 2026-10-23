@@ -16,7 +16,6 @@ private actor AttachmentAPITransport: CampPublishingTransport {
 @main struct NativeAttachmentAPITests {
     struct Fixture:Decodable {var url:String;var campId:String;var projectId:String}
     struct Driver:Decodable {var token:String}
-    struct Body:Decodable {var sessionId:String;var messageId:String;var revision:Int64;var permissionRevision:Int64;var attachment:TranscriptAttachment;var data:Data}
     @MainActor static func until(_ condition:() async->Bool) async throws {
         for _ in 0..<600 {if await condition(){return};try await Task.sleep(for:.milliseconds(50))}
         preconditionFailure("Attachment publication did not finish through real API")
@@ -36,11 +35,17 @@ private actor AttachmentAPITransport: CampPublishingTransport {
         let code=try String(contentsOf:root.appendingPathComponent("k-code.txt"),encoding:.utf8)
         let teammate=try CampWire.decoder().decode(CloudLogin.self,from:await api.data("POST",path:"/v1/auth/verify",body:CampWire.body(["email":"k@example.com","code":code,"device_name":"Attachment reader Mac"])))
         precondition(teammate.actor.userId != actor.userId && teammate.actor.deviceId != actor.deviceId)
+        let vault=MemoryCampCredentials()
+        try vault.save(CloudCredential(origin:fixture.url,actor:teammate.actor,token:teammate.token,expiresAt:teammate.expiresAt))
+        let reader=CampConnection(directory:root.appendingPathComponent("attachment-reader"),vault:vault,allowLoopback:true)
+        reader.server=fixture.url
+        await reader.restore()
+        precondition(reader.scope?.campId==fixture.campId && reader.signedIn)
         for provider in ["Codex","Claude"] {
             let scope=CloudScope(origin:fixture.url,userId:actor.userId,campId:fixture.campId)
             let cache=try CampCache(directory:root.appendingPathComponent("attachment-cache-"+provider))
             let local=CampSession(id:"fixture-"+provider,sessionID:UUID().uuidString,provider:provider,sourceID:provider+":fixture",sourceLabel:"Attachment fixture",root:root.path,title:"Attachment "+provider,cwd:root.path,updated:1,path:"",accountID:"",archived:false,model:"fixture")
-            let bytes=Data(repeating:0xff,count:(2<<20)+13)
+            let bytes=Data(repeating:0xff,count:16<<20)
             let ref=TranscriptAttachment(id:"a:0",kind:"image",source:"inline",sourceDigest:String(repeating:"e",count:64),state:"embedded",mediaType:"image/png",sha256:PublishMessage.hash(bytes),size:bytes.count)
             let message=PublishMessage(id:"image",ordinal:0,role:"user",text:"",removed:false,attachments:[ref])
             let revision=String(repeating:"f",count:64)
@@ -63,12 +68,18 @@ private actor AttachmentAPITransport: CampPublishingTransport {
             precondition(transcript.messages.count==1 && transcript.messages[0].attachments==[ref])
             let childTranscript=try await api.get(CloudChildTranscript.self,path:base+"/children/\(child.id)/transcript?limit=120",token:teammate.token)
             precondition(childTranscript.transcript.messages.count==1 && childTranscript.transcript.messages[0].attachments==[ref])
+            await reader.refreshSession(session.id)
             for childID in [nil,Optional(child.id)] {
-                var input:[String:Any]=["revision":session.transcriptRevision,"message_id":"image","attachment_id":ref.id,"source_digest":ref.sourceDigest]
-                if let childID {input["child_id"]=childID}
-                let body=try CampWire.decoder().decode(Body.self,from:await api.data("POST",path:base+"/attachment",body:CampWire.body(input),token:teammate.token))
-                precondition(body.sessionId==(childID ?? session.id) && body.messageId=="image" && body.revision==session.transcriptRevision && body.permissionRevision==session.permissionRevision && body.attachment==ref && body.data==bytes)
+                let selection=CampAttachmentSelection(session:session,childId:childID,revision:session.transcriptRevision,messageId:"image",attachment:ref)
+                let body=try await reader.attachmentBytes(selection)
+                precondition(body==bytes,"Maximum-size attachment did not round-trip through native connection")
             }
+            let selection=CampAttachmentSelection(session:session,revision:session.transcriptRevision,messageId:"image",attachment:ref)
+            try await reader.cache!.clear(reader.scope!)
+            do {_ = try await reader.attachmentBytes(selection);preconditionFailure("Cleared cache scope returned bytes")}catch is CancellationError{}
+            await reader.selectCamp(fixture.campId)
+            let restored=try await reader.attachmentBytes(selection)
+            precondition(restored==bytes,"Attachment reader did not recover after selecting the Camp again")
             try await sharing.configure(local:local,projectId:fixture.projectId,shared:false,allowRequests:false)
             try await until {sharing.shares.first?.state=="Private"}
             do {
@@ -76,8 +87,10 @@ private actor AttachmentAPITransport: CampPublishingTransport {
                 preconditionFailure("Unshared attachment remained readable")
             } catch CampCloudError.server(let status,_) {precondition([403,404].contains(status))}
             sharing.attach(scope:nil,actor:nil,transport:nil)
-            print("Real API attachment publication passed for \(provider): parent/child bytes above 2 MiB, lost upload and transcript responses, independent teammate read and revoked sharing")
+            print("Real API attachment publication passed for \(provider): 16 MiB parent/child bytes through the native reader, cache-clear fencing/recovery, lost upload and transcript responses, independent teammate read and revoked sharing")
         }
+        await reader.signOut()
+        precondition(!reader.signedIn)
         await api.cancel()
     }
 }
