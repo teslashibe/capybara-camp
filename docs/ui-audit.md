@@ -816,3 +816,25 @@ were inspected during this pass. Native pointer coordinates still return
 full keyboard, long-file-list, integrated sheet and final matching-size design
 checks remain open. The review count also needs singular/plural wording in the
 final UI pass (one change currently says “1 reviewed project changes”).
+
+## Attachment preview controls, October 22
+
+The rebuilt `com.capybaracamp.interaction-audit` app used private synthetic
+Codex/Claude profiles and the bundled Go reader. Computer use verified:
+
+- Main document previews from both providers and a Claude subagent document
+- Image rendering and audio playback controls with no autoplay
+- Save a copy through the native picker, exact saved bytes and mode 0600
+- Escape and close returning to the original transcript
+- An unavailable remote reference with no preview action
+- Editing the subagent source while its preview was open dismissing the stale
+  preview and removing its temporary file
+
+The explicit saved copy survived preview closure. Model tests separately cover
+late reads after cancellation/replacement and cleanup on deallocation. The app
+passed strict bundle verification. Logs: `build/attachment-preview-final.log`,
+`build/attachment-preview-ui-build.log`, `build/attachment-preview-ui-assemble.log`.
+
+Cloud previews still require the final integrated multi-user UI walkthrough.
+This focused pass does not close the full screen, keyboard, pointer, performance
+or release acceptance gates.

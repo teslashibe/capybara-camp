@@ -22,10 +22,10 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: finish attachment preview controls and transfer, then shared skills
-and Git publication. Local attachment import, verified publication, cloud storage
-and the native byte reader are implemented. Chat preview controls and destination
-installation remain unfinished. See [the attachment contract](attachments.md). Native
+Next: finish attachment transfer installation, then shared skills and Git
+publication. Local attachment import, verified publication, cloud storage, the
+native byte reader and chat preview/save controls are implemented. Destination
+installation remains unfinished. See [the attachment contract](attachments.md). Native
 Local-to-Cloud ancestor selection, cloud-source commit capture and Mac restoration
 are implemented; live-provider transfer acceptance remains open. The native
 return review/adoption screen and duplicate-card
@@ -1515,7 +1515,9 @@ Route-boundary and plan-import regression checks pass
 Go API/PostgreSQL passes for both provider histories (`build/attachment-read-api.log`):
 16 MiB parent and child bodies, two independent logins, exact hashes/bytes, lost
 publication responses, cache-clear refusal, Camp re-selection and revoked sharing.
-The final concurrency, cancellation and same-size corruption checks pass\n(`build/attachment-read-final.log`), including refusal of a third active download\nbefore it reaches the network. ShellCheck and the staged secrets scan pass.
+The final concurrency, cancellation and same-size corruption checks pass
+(`build/attachment-read-final.log`), including refusal of a third active download
+before it reaches the network. ShellCheck and the staged secrets scan pass.
 These are synthetic provider histories; live provider and two-Mac acceptance
 remain open.
 
@@ -1525,3 +1527,34 @@ Transfer guards remain. This is not a release or deployment, and it does not
 close the full UI, performance, review or other V1 gates. Memory/Cortex remains
 excluded, and Hetzner provisioning still happens with the owner after local
 acceptance.
+
+### Native attachment previews and saved copies, October 22
+
+Main and subagent messages share a Quick Look preview with a native Save a copy
+picker. The preview verifies bytes before creating a private temporary file.
+Closing, replacing or invalidating its selection removes the file; late reads
+cannot restore it. Explicitly saved copies are verified separately and survive
+preview closure. External URL/path references remain descriptive only.
+
+Native preview tests pass for exact bytes, private permissions, export, replaced
+selections, cancellation, close and deallocation (`build/attachment-preview-final.log`).
+The initial preview and underlying download suites pass
+(`build/attachment-preview-validation.log`). The updated module's conversation
+and approval regression suites pass (`build/attachment-preview-ui-build.log`).
+Audit assembly and strict bundle verification pass
+(`build/attachment-preview-ui-assemble.log`). The first audit assembly correctly
+refused the non-private synthetic profile folder; its permissions were corrected
+before launch.
+
+Computer use verified document previews for Codex and Claude, a Claude subagent
+document, an image, audio controls without autoplay, native save, Escape/close and
+an unavailable URL without a preview action. A source edit while the subagent
+preview was open dismissed it; filesystem checks confirmed removal of temporary
+bytes and preservation of the exact explicitly saved document. These tests used
+synthetic profiles. They do not establish live-provider, two-Mac or complete
+native UI acceptance.
+
+Attachment transfer installation, orphan reclamation, shared skills, Git
+publication and the remaining V1 gates stay open. No release or deployment
+occurred; memory/Cortex remains deferred and Hetzner provisioning follows full
+local acceptance with the owner.

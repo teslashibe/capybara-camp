@@ -30,8 +30,8 @@ reading. It accepts no caller-supplied child path.
 Inspection is bounded to 64 attachments, 4,096 content blocks and eight nested
 levels per message. Embedded bodies are limited to 16 MiB; provider records are
 limited to 32 MiB. Inline MIME types are allowlisted, but this metadata does not
-attest that a file is safe to execute or render. Native chat currently shows
-attachment type and availability, not a media preview.
+attest that a file is safe to execute or render. Native chat shows type and availability for every attachment. Embedded images,
+audio and documents can be opened in the shared Quick Look preview.
 
 ## Publication and transfer status
 
@@ -47,14 +47,16 @@ Uploads stop when the active Camp changes, the task is cancelled or its local
 cache scope is cleared. The server independently checks current source ownership.
 Child uploads follow creation of the incomplete child history and precede its
 message publication. Completed parent/child histories retain their source
-revision bindings. A failed upload leaves synchronization incomplete. A full storage quota shows\n`Attachment storage full` and stops automatic retry until another sync is requested.
+revision bindings. A failed upload leaves synchronization incomplete. A full storage quota shows
+`Attachment storage full` and stops automatic retry until another sync is requested.
 
-The native byte reader is implemented, while chat preview/download controls and\ndestination installation are unfinished.
+The native byte reader and chat preview/save controls are implemented. Destination
+installation remains unfinished.
 Native saved-history publication still refuses attachment-bearing messages.
 Transfer guards remain until both destinations can preserve the bytes, including
 main/subagent provenance, permissions, retries, offline recovery and revocation.
 The transfer review must identify unavailable bytes before ownership moves.
-Live provider, media preview, full migration and native visual acceptance remain
+Live provider, full migration and complete native visual acceptance remain
 open. No remote-reference fetching or arbitrary local-path reading is authorized
 by an imported transcript alone.
 
@@ -94,7 +96,8 @@ the byte endpoint cannot resolve them.
 The server accepts at most 16 MiB per body, 1,024 blobs and 128 MiB per parent
 session including its children, and 512 MiB per owner across Camps. Two attachment
 requests can decode or return bodies concurrently per API handler; other requests
-receive `attachment_busy`. The HTTP upload envelope is bounded to 23 MiB. The native uploader leaves\nbase64 slashes unescaped so every valid 16 MiB body fits that bound. There
+receive `attachment_busy`. The HTTP upload envelope is bounded to 23 MiB. The native uploader leaves
+base64 slashes unescaped so every valid 16 MiB body fits that bound. There
 is no compression, executable-file installation or automatic reference fetch.
 Unreferenced uploads count toward storage limits; automatic orphan reclamation
 is not implemented yet.
@@ -104,7 +107,8 @@ migration command, and start the schema-39 server. Readiness requires schema 39.
 Downgrade refuses while any attachment blob or message descriptor is retained;
 restore a compatible deployment rather than discard that history.
 
-The native publisher and permission-checked byte reader use this storage API;\nmedia preview is unfinished. Cloud message decoding retains descriptors, and the native destination
+The native publisher and permission-checked byte reader use this storage API.
+Cloud message decoding retains descriptors, and the native destination
 history downloader refuses an archive that would omit their bodies. Server
 transfer checks also refuse sessions with retained attachment history. Those
 guards remain until destination byte installation is complete.
@@ -129,16 +133,26 @@ redirect refusal and two active downloads at most. Cancelling one request stops
 its network task without closing the session; closing the client cancels all
 active reads. Data remains in memory and is not written to a file or URL cache.
 
-The underlying reader is ready for chat previews and destination installation.
-The chat still displays attachment type and availability; no preview or download
-button has been added yet.
+## Native previews and saved copies
+
+Main and subagent messages use the same preview control. Opening an embedded
+attachment reads and verifies its bytes, then creates a private temporary folder
+(mode 0700) and preview file (0600). Quick Look displays the file without automatic
+audio playback. Closing, switching the selected source or replacing its descriptor
+removes the temporary copy; cancelled or superseded reads cannot reopen it.
+
+Save a copy opens the native destination picker. It verifies the preview bytes
+again and saves only to the chosen destination. That explicit copy survives preview
+closure. A closed or replaced preview cannot complete a pending save. Unavailable
+references stay visible without a preview button; the app never follows their
+original URLs or file paths. Destination installation for transfers remains open.
 
 ## Verification
 
 Run the native and bundled-helper checks with:
 
 ```sh
-./test.sh CampAttachmentReadTests CampSharingTests BridgeIntegrationTests CampChildHistoryTests CampCloudTests LocalPlanImportTests
+./test.sh AttachmentPreviewTests CampAttachmentReadTests CampSharingTests BridgeIntegrationTests CampChildHistoryTests CampCloudTests LocalPlanImportTests
 ```
 
 Run the native publisher against a disposable loopback Go API and PostgreSQL:
@@ -148,5 +162,6 @@ Run the native publisher against a disposable loopback Go API and PostgreSQL:
 ```
 
 The API test uses independent owner and teammate logins, parent and child bodies
-at the 16 MiB maximum, lost upload/transcript responses, cache erasure/reconnect\nand revoked sharing. It uses synthetic
+at the 16 MiB maximum, lost upload/transcript responses, cache erasure/reconnect
+and revoked sharing. It uses synthetic
 provider histories and does not establish live-provider or native visual acceptance.

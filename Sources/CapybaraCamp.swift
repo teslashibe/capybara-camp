@@ -1118,6 +1118,28 @@ final class TranscriptWatch {
         }
     }
     func object(_ s: CampSession) -> [String: Any] { (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(s))) as? [String: Any] ?? [:] }
+    func attachmentAccess(session: CampSession, message: Message, child: ChildSession? = nil, revision: Int64? = nil) -> AttachmentAccess? {
+        if let remote = cloudSessions[session.id], let scope = cloud.scope {
+            let version = revision ?? cloudHistoryRevision[session.id] ?? 0
+            guard version > 0 else { return nil }
+            let identity = "\(scope.key):\(remote.id):\(remote.permissionRevision):\(child?.id ?? "main"):\(version)"
+            return AttachmentAccess(id: identity) { [weak self] attachment in
+                guard let self else { throw CancellationError() }
+                return try await self.cloud.attachmentBytes(CampAttachmentSelection(session: remote, childId: child?.id,
+                    revision: version, messageId: message.id, attachment: attachment))
+            }
+        }
+        guard !session.isCloud, let local = executionSource(session) else { return nil }
+        return AttachmentAccess(id: "\(local.id):\(local.root):\(child?.id ?? "main")") { attachment in
+            var source: LocalChildHistorySource?
+            if let child {
+                let catalog = try await ChildHistoryBridge.catalog(local)
+                guard let selected = catalog.sources.first(where: { $0.localID == child.id }) else { throw CampError.message("This subagent is no longer available") }
+                source = selected
+            }
+            return try await TranscriptAttachmentReader.read(session: local, child: source, messageID: message.id, attachment: attachment)
+        }
+    }
     func send() {
         guard let s = selected, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !preparingPrompts.contains(s.id) else { return }
         let references: [SessionReference]
@@ -1751,7 +1773,7 @@ struct ChatView: View {
                             VStack(alignment: .leading, spacing: 22) {
                                 if s.isCloud ? store.remoteHasMore : store.historyTotal > store.messages.count { Button("Load earlier messages") { store.loadHistory(more: true) }.font(.caption) }
                                 if store.loading { ProgressView().controlSize(.small) }
-                                ForEach(store.messages) { m in MessageView(message: m, provider: s.provider).id(m.id) }
+                                ForEach(store.messages) { m in MessageView(message: m, provider: s.provider, attachmentAccess: store.attachmentAccess(session: s, message: m)).id(m.id) }
                                 if let run = store.conversation(s) { MessageView(message: run.streamedMessage, provider: s.provider) }
                                 if s.isCloud { CloudStreamMessages(live: store.cloud.live, provider: s.provider) }
                                 Color.clear.frame(height: 1).id("bottom")
@@ -2040,6 +2062,7 @@ struct MessageView: View {
     var metadata: String? = nil
     var provider: String? = nil
     var fontSize: CGFloat = 13
+    var attachmentAccess: AttachmentAccess? = nil
     private var responseMetadata: String? {
         guard message.role == "assistant" else { return nil }
         if let metadata { return metadata }
@@ -2055,7 +2078,8 @@ struct MessageView: View {
             Text((try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text)).font(.system(size: fontSize)).lineSpacing(4).textSelection(.enabled)
                 .lineLimit(nil).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
             if let attachments = message.attachments, !attachments.isEmpty {
-                TranscriptAttachmentList(attachments: attachments)
+                TranscriptAttachmentList(attachments: attachments, access: attachmentAccess)
+                    .id(attachmentAccess?.id ?? "unavailable")
             }
         }.padding(message.role == "user" ? 15 : 0).background(message.role == "user" ? Color.white.opacity(0.7) : .clear).clipShape(RoundedRectangle(cornerRadius: 10))
     }

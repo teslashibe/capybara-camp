@@ -39,7 +39,10 @@ struct ChildTranscriptView: View {
                         if parent.isCloud && cloudHasMore {
                             Button("Load earlier messages"){Task{await readCloud(more:true)}}.font(.caption).disabled(loading)
                         }
-                        ForEach(messages) { MessageView(message: $0, provider: parent.provider) }
+                        ForEach(messages) { message in
+                            MessageView(message: message, provider: parent.provider,
+                                attachmentAccess: store.attachmentAccess(session: parent, message: message, child: child, revision: cloudRevision))
+                        }
                         Color.clear.frame(height: 1).id("child-bottom")
                     }
                 }.onChange(of: messages) { _, _ in

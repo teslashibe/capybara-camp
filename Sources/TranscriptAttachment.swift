@@ -56,6 +56,8 @@ enum TranscriptAttachmentReader {
 
 struct TranscriptAttachmentList: View {
     let attachments: [TranscriptAttachment]
+    var access: AttachmentAccess? = nil
+    @State private var selected: TranscriptAttachment?
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(attachments) { attachment in
@@ -65,10 +67,24 @@ struct TranscriptAttachmentList: View {
                         Text(attachment.label).font(.system(size: 12, weight: .medium))
                         Text(attachment.availability).font(.system(size: 11)).foregroundStyle(campMuted)
                     }
+                    Spacer(minLength: 8)
+                    if access != nil, attachment.state == "embedded", AttachmentPreviewModel.fileExtension(attachment) != nil {
+                        CampPlainButton { selected = attachment } label: {
+                            Image(systemName: "eye").frame(width: 32, height: 32).contentShape(Rectangle())
+                        }.accessibilityLabel("Preview \(attachment.label.lowercased())").help("Preview attachment")
+                    }
                 }.foregroundStyle(campInk).padding(9).frame(maxWidth: .infinity, alignment: .leading)
                     .background(campMuted.opacity(0.06)).clipShape(RoundedRectangle(cornerRadius: 7))
-                    .accessibilityElement(children: .combine)
+                    .accessibilityElement(children: .contain)
             }
         }
+        .sheet(item: $selected) { attachment in
+            if let access { AttachmentPreview(attachment: attachment, access: access) }
+        }
+        .onChange(of: attachments) { _, values in
+            if let selected, !values.contains(selected) { self.selected = nil }
+        }
+        .onChange(of: access?.id) { _, _ in selected = nil }
+        .onDisappear { selected = nil }
     }
 }
