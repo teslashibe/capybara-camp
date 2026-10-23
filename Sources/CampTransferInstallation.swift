@@ -86,8 +86,7 @@ enum CampTransferInstallation {
               items.reduce(0, { $0 + ($1.attachment.size ?? 0) }) <= CampTransferHistory.maxAttachmentBytes else {
             throw CampCloudError.invalidResponse
         }
-        let directory = root.appendingPathComponent("CapybaraTransfer-" + UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        let directory = try AttachmentTemporaryFiles.create(kind: "Transfer", root: root)
         do {
             for item in items {
                 try Task.checkCancellation()

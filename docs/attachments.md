@@ -58,7 +58,11 @@ checks the pinned source before and after each read. The local installer copies
 one verified private file at a time and commits its receipt only after all
 files and history are present. Interrupted installation resumes from verified
 files; a changed or missing body cannot produce a completed receipt.
-Native saved-history publication still refuses attachment-bearing messages.
+Saved implementation history retains the original provider conversation as its
+private byte source. Publication uploads verified bodies before journaling their
+descriptors and reconciles attachments alongside text after a lost response or
+restart. A missing or changed source stops publication. A complete saved copy
+can be recovered without rereading the original provider files.
 Restored and cloud history readers expose attachment descriptors through
 `read_session` and exact embedded bytes through `read_attachment`. Each tool
 selection includes the message, attachment ID and source digest. Reads verify
@@ -72,8 +76,8 @@ conversation/message and the pinned transcript revision. Missing or changed
 confirmation identities refuse the move. Missing retained bodies also refuse
 handoff, while cancellation remains available. Source ownership and fresh stop
 proof checks still apply. This replaces the development blanket attachment block;
-it does not complete the release gate. Saved-history byte publication, cleanup of
-abandoned transfer files and live provider acceptance remain unfinished.
+it does not complete the release gate. Reclamation of unreferenced cloud uploads
+and live provider acceptance remain unfinished.
 The PostgreSQL attachment/handoff regression suite and native transfer, export
 and return-screen suites pass, including exact review confirmation, missing-body
 cancellation and preserved contents. Evidence: `build/attachment-review-regression.log`
@@ -179,7 +183,20 @@ Save a copy opens the native destination picker. It verifies the preview bytes
 again and saves only to the chosen destination. That explicit copy survives preview
 closure. A closed or replaced preview cannot complete a pending save. Unavailable
 references stay visible without a preview button; the app never follows their
-original URLs or file paths. Destination installation for transfers remains open.
+original URLs or file paths.
+
+Preview and transfer staging folders include the creating process ID. At startup,
+a background cleanup removes recognized, owner-only folders only after the
+process has stopped. It retains active or ambiguous process IDs, symlinks,
+folders with unexpected permissions and all unrelated files. A reused process ID
+is retained until that process exits. Explicitly saved copies are outside this
+cleanup. Earlier development folders without process ownership are left alone.
+
+The saved-history, plan-import, preview cleanup, transfer-staging and bundled
+helper checks pass in `build/saved-attachment-native-tests.log`. The same run
+verifies 16 MiB saved attachments through the local API for both providers,
+including lost responses and private owner access. Providers are synthetic;
+this does not complete live-provider acceptance.
 
 ## Verification
 

@@ -45,8 +45,7 @@ struct AttachmentAccess {
             guard generation == token, !Task.isCancelled else { return }
             guard data.count > 0, data.count <= 16 << 20, data.count == attachment.size,
                   PublishMessage.hash(data) == attachment.sha256 else { throw CampCloudError.invalidResponse }
-            let folder = root.appendingPathComponent("CapybaraPreview-" + UUID().uuidString, isDirectory: true)
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            let folder = try AttachmentTemporaryFiles.create(kind: "Preview", root: root)
             directory = folder
             let target = folder.appendingPathComponent(attachment.label + "." + ext)
             try data.write(to: target, options: .atomic)

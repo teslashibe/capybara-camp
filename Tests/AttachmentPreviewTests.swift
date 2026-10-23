@@ -9,6 +9,7 @@ import Foundation
 
 @main struct AttachmentPreviewTests {
     @MainActor static func main() async throws {
+        try cleanupAbandoned()
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent("CapybaraPreviewTests-" + UUID().uuidString)
         try fm.createDirectory(at: root, withIntermediateDirectories: false)
@@ -65,5 +66,40 @@ import Foundation
         released = nil
         precondition(weakModel == nil && contents().isEmpty)
         print("Attachment preview tests passed: private files, verified bytes, explicit export, replacement, cancellation, close and deallocation")
+    }
+}
+
+
+extension AttachmentPreviewTests {
+    static func cleanupAbandoned() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("attachment-cleanup-test-" + UUID().uuidString)
+        try fm.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? fm.removeItem(at: root) }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sleep"); process.arguments = ["60"]
+        try process.run()
+        defer { if process.isRunning { process.terminate(); process.waitUntilExit() } }
+        let pid = process.processIdentifier
+        func folder(_ kind: String, permissions: Int = 0o700) throws -> URL {
+            let value = root.appendingPathComponent("Capybara" + kind + "-v2-" + String(pid) + "-" + UUID().uuidString)
+            try fm.createDirectory(at: value, withIntermediateDirectories: false, attributes: [.posixPermissions: permissions])
+            try Data("private bytes".utf8).write(to: value.appendingPathComponent("contents"))
+            return value
+        }
+        let preview = try folder("Preview"), transfer = try folder("Transfer")
+        let foreign = try folder("Preview", permissions: 0o755)
+        let current = try AttachmentTemporaryFiles.create(kind: "Preview", root: root)
+        let outside = root.appendingPathComponent("keep-user-files")
+        try fm.createDirectory(at: outside, withIntermediateDirectories: false)
+        let link = root.appendingPathComponent("CapybaraPreview-v2-" + String(pid) + "-" + UUID().uuidString)
+        try fm.createSymbolicLink(at: link, withDestinationURL: outside)
+        AttachmentTemporaryFiles.removeAbandoned(root: root)
+        precondition(fm.fileExists(atPath: preview.path) && fm.fileExists(atPath: transfer.path), "Removed another live process's bytes")
+        process.terminate(); process.waitUntilExit()
+        AttachmentTemporaryFiles.removeAbandoned(root: root)
+        precondition(!fm.fileExists(atPath: preview.path) && !fm.fileExists(atPath: transfer.path))
+        precondition(fm.fileExists(atPath: current.path) && fm.fileExists(atPath: foreign.path) && fm.fileExists(atPath: outside.path))
+        precondition((try? fm.destinationOfSymbolicLink(atPath: link.path)) != nil)
     }
 }

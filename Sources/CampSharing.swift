@@ -81,6 +81,9 @@ struct LocalShareStatus {
         guard ready, let scope, let actor, let cache, transport != nil, UUID(uuidString: projectId) != nil,
               snapshot.valid, local.id == local.sessionID, local.id.range(of: "^history:[a-f0-9]{64}$", options: .regularExpression) != nil,
               ["Codex", "Claude"].contains(local.provider), !local.sourceID.isEmpty else { throw CampCloudError.invalidResponse }
+        if let source = snapshot.attachmentSource {
+            guard source.provider == local.provider, source.sourceID == local.sourceID, source.root == local.root else { throw CampCloudError.invalidResponse }
+        }
         let existing = binding(for: local)
         guard existing == nil || existing?.historySnapshot == snapshot else { throw CampError.message("A saved history identity cannot be replaced") }
         let total = shares.filter { $0.local.id != local.id }.reduce(0) { $0 + ($1.historySnapshot?.bytes ?? 0) } + snapshot.bytes
@@ -329,7 +332,7 @@ struct LocalShareStatus {
         let receipts = copied.map { message -> PublishedDigest in
             let local = snapshot.messages[Int(message.ordinal)]
             let value = PublishMessage(id: local.id, ordinal: message.ordinal, role: local.role, text: local.text,
-                removed: false, model: local.model, effort: local.effort, speed: local.speed)
+                removed: false, model: local.model, effort: local.effort, speed: local.speed, attachments: local.attachments)
             return PublishedDigest(id: value.id, digest: value.digest)
         }
         try await commit(value, hashes: receipts, generation: token)
@@ -337,13 +340,14 @@ struct LocalShareStatus {
         while copied.count < snapshot.messages.count {
             let page = try snapshot.page(after: after)
             guard !page.messages.isEmpty, let remote = value.remote else { throw CampCloudError.invalidResponse }
+            try await uploadAttachments(page.messages, local: snapshot.attachmentSource ?? value.local, parentID: value.id, generation: token)
             struct Upload: Encodable { let expectedRevision: Int64; let messages: [PublishMessage] }
             value.pending = CampPublication(kind: "transcript", method: "POST", path: "/v1/camps/\(scope.campId)/sessions/\(value.id)/transcript",
                 body: try CampWire.encoder().encode(Upload(expectedRevision: remote.transcriptRevision, messages: page.messages)),
                 hashes: page.messages.map { PublishedDigest(id: $0.id, digest: $0.digest) })
             try await commit(value, generation: token); value = try await perform(value, generation: token)
             after = page.after; copied += page.messages.map { CloudMessage(id: $0.id, ordinal: $0.ordinal, role: $0.role, text: $0.text, removed: false,
-                model: $0.model, effort: $0.effort, speed: $0.speed, revision: value.remote!.transcriptRevision) }
+                model: $0.model, effort: $0.effort, speed: $0.speed, revision: value.remote!.transcriptRevision, attachments: $0.attachments) }
         }
         value.remote = try await readHistorySession(value, generation: token)
         copied = try await historyMessages(value, generation: token)

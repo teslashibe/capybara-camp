@@ -449,6 +449,7 @@ final class TranscriptWatch {
         return cachedBoard[stage] ?? []
     }
     init(stateDirectory: URL = Bridge.support, conversationProcess: @escaping () throws -> Process = { try Bridge.process("conversation") }) {
+        Task.detached(priority: .utility) { AttachmentTemporaryFiles.removeAbandoned() }
         onboarding = CampOnboarding(directory: stateDirectory)
         executionDefaults = ExecutionDefaults(directory: stateDirectory)
         self.stateDirectory = stateDirectory

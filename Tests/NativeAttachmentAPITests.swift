@@ -25,6 +25,7 @@ private actor AttachmentAPITransport: CampPublishingTransport {
             print("SKIP: run tools/test-native-api.sh NativeAttachmentAPITests");return
         }
         let root=URL(fileURLWithPath:directory)
+        let runID=UUID().uuidString
         precondition(directory.hasPrefix("/") && FileManager.default.fileExists(atPath:root.appendingPathComponent(".capybara-api-fixture").path))
         let fixture=try CampWire.decoder().decode(Fixture.self,from:Data(contentsOf:root.appendingPathComponent("fixture.json")))
         precondition(fixture.url.hasPrefix("http://127.0.0.1:"))
@@ -37,13 +38,13 @@ private actor AttachmentAPITransport: CampPublishingTransport {
         precondition(teammate.actor.userId != actor.userId && teammate.actor.deviceId != actor.deviceId)
         let vault=MemoryCampCredentials()
         try vault.save(CloudCredential(origin:fixture.url,actor:teammate.actor,token:teammate.token,expiresAt:teammate.expiresAt))
-        let reader=CampConnection(directory:root.appendingPathComponent("attachment-reader"),vault:vault,allowLoopback:true)
+        let reader=CampConnection(directory:root.appendingPathComponent("attachment-reader-"+runID),vault:vault,allowLoopback:true)
         reader.server=fixture.url
         await reader.restore()
         precondition(reader.scope?.campId==fixture.campId && reader.signedIn)
         for provider in ["Codex","Claude"] {
             let scope=CloudScope(origin:fixture.url,userId:actor.userId,campId:fixture.campId)
-            let cache=try CampCache(directory:root.appendingPathComponent("attachment-cache-"+provider))
+            let cache=try CampCache(directory:root.appendingPathComponent("attachment-cache-"+provider+"-"+runID))
             let local=CampSession(id:"fixture-"+provider,sessionID:UUID().uuidString,provider:provider,sourceID:provider+":fixture",sourceLabel:"Attachment fixture",root:root.path,title:"Attachment "+provider,cwd:root.path,updated:1,path:"",accountID:"",archived:false,model:"fixture")
             let bytes=Data(repeating:0xff,count:16<<20)
             let ref=TranscriptAttachment(id:"a:0",kind:"image",source:"inline",sourceDigest:String(repeating:"e",count:64),state:"embedded",mediaType:"image/png",sha256:PublishMessage.hash(bytes),size:bytes.count)
@@ -87,6 +88,32 @@ private actor AttachmentAPITransport: CampPublishingTransport {
                 preconditionFailure("Unshared attachment remained readable")
             } catch CampCloudError.server(let status,_) {precondition([403,404].contains(status))}
             sharing.attach(scope:nil,actor:nil,transport:nil)
+
+            let savedCache = try CampCache(directory:root.appendingPathComponent("saved-attachment-cache-"+provider+"-"+runID))
+            let snapshot = HistorySourceSnapshot(messages:[Message(id:"image",role:"user",text:"",attachments:[ref])],attachmentSource:local)
+            let savedLocal = LocalPlanImport.historySession(local,id:HistorySourceSnapshot.localID(key:"saved-"+provider,messages:snapshot.messages),title:"Saved attachment",model:"fixture")
+            let saved = CampSharing(cache:savedCache,export:{_,_ in preconditionFailure("Saved history reread live text")})
+            saved.attachmentBytes={source,child,message,attachment in
+                precondition(source == local && child == nil && message == "image" && attachment == ref)
+                return bytes
+            }
+            saved.attach(scope:scope,actor:actor,transport:AttachmentAPITransport(api:api,token:driver.token))
+            try await until {saved.ready}
+            try await saved.configureHistory(local:savedLocal,snapshot:snapshot,projectId:fixture.projectId)
+            try await until {saved.shares.first?.state == "Saved to Camp"}
+            let copied = try await saved.historyTranscript(for:savedLocal.id)
+            precondition(copied.session.isHistoryOnly && copied.messages.first?.attachments == [ref])
+            let savedPath = "/v1/camps/\(scope.campId)/sessions/\(copied.session.id)/attachment"
+            let selectionBody = try CampWire.body(["revision":copied.revision,"message_id":"image","attachment_id":ref.id,"source_digest":ref.sourceDigest])
+            struct SavedBody:Decodable { var data:Data }
+            let savedBody = try CampWire.decoder().decode(SavedBody.self,from:await api.data("POST",path:savedPath,body:selectionBody,token:driver.token))
+            precondition(savedBody.data == bytes)
+            do {
+                _ = try await api.data("POST",path:savedPath,body:selectionBody,token:teammate.token)
+                preconditionFailure("Private saved history exposed bytes to a teammate")
+            } catch CampCloudError.server(let status,_) {precondition([403,404].contains(status))}
+            saved.attach(scope:nil,actor:nil,transport:nil)
+            print("Real API saved-history publication passed for \(provider): 16 MiB exact contents, lost-response recovery and private owner access")
             print("Real API attachment publication passed for \(provider): 16 MiB parent/child bytes through the native reader, cache-clear fencing/recovery, lost upload and transcript responses, independent teammate read and revoked sharing")
         }
         await reader.signOut()

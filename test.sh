@@ -5,8 +5,8 @@ cd "$ROOT"
 mkdir -p build/test-support
 (cd server && go test -race ./internal/attachments ./internal/localcli ./internal/gitcheckout ./internal/config ./cmd/camp-local ./cmd/camp-test-provider && go build -o ../build/camp-test-provider ./cmd/camp-test-provider && go build -o ../build/camp-local ./cmd/camp-local)
 
-# Compile the shared app code once; every suite exercises that same module.
-swiftc -parse-as-library -emit-library -emit-module -enable-testing -D CAMP_TESTING \
+# Compile the app in one compiler pass; every suite exercises that same module.
+swiftc -parse-as-library -whole-module-optimization -Onone -emit-library -emit-module -enable-testing -D CAMP_TESTING \
   -swift-version 5 -module-name CampTestSupport \
   -emit-module-path build/test-support/CampTestSupport.swiftmodule \
   -framework SwiftUI -framework AppKit -framework Security -framework UserNotifications -lsqlite3 Sources/*.swift \

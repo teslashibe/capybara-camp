@@ -50,7 +50,7 @@ actor PublishingFixture: CampPublishingTransport {
                 let before = Int64(parts.queryItems?.first { $0.name == "before" }?.value ?? "0") ?? 0
                 let all = messages.values.filter { before == 0 || $0.ordinal < before }.sorted { $0.ordinal < $1.ordinal }
                 let page = Array(all.suffix(200)).map { CloudMessage(id: $0.id, ordinal: $0.ordinal, role: $0.role, text: $0.text, removed: $0.removed,
-                    model: $0.model, effort: $0.effort, speed: $0.speed, revision: remote.transcriptRevision) }
+                    model: $0.model, effort: $0.effort, speed: $0.speed, revision: remote.transcriptRevision, attachments: $0.attachments) }
                 return try CampWire.encoder().encode(CloudTranscript(revision: remote.transcriptRevision, messages: page,
                     before: all.count > 200 ? page.first!.ordinal : 0, hasMore: all.count > 200))
             }
@@ -159,6 +159,7 @@ actor ChangingHistoryFixture {
         let cache = try CampCache(directory: root)
         let native = CampSession(id: "Claude:/local:fixture", sessionID: UUID().uuidString, provider: "Claude", sourceID: "Claude:/local", sourceLabel: "Fixture account", root: "/local", title: "  A synthetic session  ", cwd: "/local/project", updated: 1, path: "/local/session.jsonl", accountID: "", archived: false, model: "fixture-model")
         try await attachmentPublication(root:root,scope:scope,actor:actor,native:native)
+        try await savedAttachmentPublication(root:root,scope:scope,actor:actor,native:native)
         let changingSource=ChangingHistoryFixture(),changingServer=PublishingFixture(scope:scope,actor:actor)
         let changing=CampSharing(cache:try CampCache(directory:root.appendingPathComponent("changing-history")),export:{_,after in await changingSource.page(after)})
         changing.localSession={_ in native}
@@ -467,5 +468,50 @@ extension CampSharingTests {
             publisher.attach(scope:nil,actor:nil,transport:nil)
         }
         print("Attachment publication: parent/child ordering, retry, dedupe, restart, verification and scope cancellation passed")
+    }
+}
+
+extension CampSharingTests {
+    @MainActor static func savedAttachmentPublication(root: URL, scope: CloudScope, actor: CloudActor, native: CampSession) async throws {
+        let data = Data(repeating: 0x41, count: (1 << 20) + 1)
+        let embedded = TranscriptAttachment(id:"a:0",kind:"document",source:"inline",sourceDigest:String(repeating:"d",count:64),state:"embedded",mediaType:"text/plain",sha256:PublishMessage.hash(data),size:data.count)
+        let unavailable = TranscriptAttachment(id:"a:1",kind:"image",source:"remote",sourceDigest:String(repeating:"e",count:64),state:"reference")
+        let messages = [Message(id:"saved-file",role:"user",text:"",attachments:[embedded,unavailable])]
+        let snapshot = HistorySourceSnapshot(messages:messages,attachmentSource:native)
+        precondition(snapshot.valid && !HistorySourceSnapshot(messages:messages).valid)
+        let local = LocalPlanImport.historySession(native,id:HistorySourceSnapshot.localID(key:"saved-file",messages:messages),title:"Saved file",model:"fixture")
+        for loss in ["body","transcript"] {
+            let cache = try CampCache(directory:root.appendingPathComponent("saved-attachment-"+loss))
+            let server = PublishingFixture(scope:scope,actor:actor)
+            if loss == "body" { await server.loseAttachmentResponse() }
+            let sharing = CampSharing(cache:cache,export:{_,_ in preconditionFailure("Saved history read live text")})
+            sharing.attachmentBytes={source,child,message,ref in
+                precondition(source == native && child == nil && message == "saved-file" && ref == embedded)
+                return data
+            }
+            sharing.attach(scope:scope,actor:actor,transport:server)
+            await eventually("Saved attachments did not initialize"){sharing.ready}
+            try await sharing.configureHistory(local:local,snapshot:snapshot,projectId:UUID().uuidString)
+            await eventually("Saved attachments did not publish"){sharing.shares.first?.state == "Saved to Camp"}
+            let uploaded = await server.snapshot(), blobs = await server.attachmentSnapshot()
+            precondition(uploaded.1 == 1 && uploaded.3["saved-file"]?.attachments == [embedded,unavailable])
+            precondition(blobs.0.count == 1 && blobs.0.values.first == data)
+            let copied = try await sharing.historyTranscript(for:local.id)
+            precondition(copied.messages.first?.attachments == [embedded,unavailable])
+            let journal = try CampWire.encoder().encode(await cache.shares(scope))
+            precondition(journal.range(of:data.base64EncodedData()) == nil)
+            sharing.attach(scope:nil,actor:nil,transport:nil)
+            let restored = CampSharing(cache:cache,export:{_,_ in preconditionFailure("Recovery read live text")})
+            restored.attachmentBytes={_,_,_,_ in preconditionFailure("Committed saved bytes were read again")}
+            restored.attach(scope:scope,actor:actor,transport:server)
+            await eventually("Saved attachment recovery failed"){restored.ready && restored.shares.first?.publishedHistory != nil}
+            _ = try await restored.historyTranscript(for:local.id)
+            restored.attach(scope:nil,actor:nil,transport:nil)
+        }
+        let page = try snapshot.page(after:-1)
+        var copied = page.messages.map { CloudMessage(id:$0.id,ordinal:$0.ordinal,role:$0.role,text:$0.text,removed:false,revision:1,attachments:$0.attachments) }
+        precondition(snapshot.matchesPrefix(copied))
+        copied[0].attachments = nil
+        precondition(!snapshot.matchesPrefix(copied),"Missing attachment descriptors matched saved history")
     }
 }

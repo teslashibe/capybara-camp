@@ -204,7 +204,7 @@ enum LocalPlanImport {
                   binding.messages.enumerated().allSatisfy({ index, cloud in
                       let local = item.messages[index]
                       return cloud.ordinal == Int64(index) && !cloud.removed && cloud.revision > 0 && cloud.revision <= binding.revision && cloud.id == local.id &&
-                          cloud.role == local.role && cloud.text == local.text && (cloud.model ?? "") == (local.model ?? "") && (cloud.effort ?? "") == (local.effort ?? "") && (cloud.speed ?? "") == (local.speed ?? "")
+                          cloud.role == local.role && cloud.text == local.text && (cloud.model ?? "") == (local.model ?? "") && (cloud.effort ?? "") == (local.effort ?? "") && (cloud.speed ?? "") == (local.speed ?? "") && (cloud.attachments ?? []) == (local.attachments ?? [])
                   }) else { throw CampError.message("Save the complete, stopped implementation transcript to this Camp before importing") }
             try authorize(binding.session, provider: item.executor.session.provider, owned: true)
             history.append(.init(sourceId: PublishMessage.hash(Data(item.id.utf8)), planVersion: item.planVersion,

@@ -11,6 +11,7 @@ actor PromotionFixture: CampPublishingTransport {
     var lostTranscript = false
     var lostImport = false
     var imports = 0
+    var attachmentBodies: [String:Data] = [:]
     var holdProfiles = false
     var profileGates: [CheckedContinuation<Void, Never>] = []
     init(scope: CloudScope, actor: CloudActor) { self.scope = scope; self.actor = actor }
@@ -41,7 +42,13 @@ actor PromotionFixture: CampPublishingTransport {
         if path == "/v1/profiles" && holdProfiles { await withCheckedContinuation { profileGates.append($0) } }
         let body = try JSONSerialization.jsonObject(with: operation.body) as! [String: Any]
         let result: Data
-        if path == "/v1/profiles" {
+        if operation.kind == "attachment" {
+            let id = parts[4], hash = parts.last!
+            let data = Data(base64Encoded: body["data"] as! String)!
+            precondition(sessions[id]?.isHistoryOnly == true && PublishMessage.hash(data) == hash)
+            attachmentBodies[id + ":" + hash] = data
+            result = try CampWire.body(["session_id":id,"sha256":hash,"bytes":data.count])
+        } else if path == "/v1/profiles" {
             let localID = body["local_id"] as! String
             let profile = profiles[localID] ?? CloudProfile(id: UUID().uuidString, ownerUserId: actor.userId, ownerDeviceId: actor.deviceId,
                 provider: body["provider"] as! String, localId: localID, label: body["label"] as! String)
@@ -70,8 +77,11 @@ actor PromotionFixture: CampPublishingTransport {
             guard sessions[id]?.transcriptRevision == expected else { throw CampCloudError.server(409, "revision_conflict") }
             let values = try CampWire.decoder().decode([PublishMessage].self, from: JSONSerialization.data(withJSONObject: body["messages"]!))
             for value in values {
+                for ref in value.attachments ?? [] where ref.state == "embedded" {
+                    precondition(attachmentBodies[id + ":" + ref.sha256!]?.count == ref.size)
+                }
                 messages[id, default: [:]][value.id] = CloudMessage(id: value.id, ordinal: value.ordinal, role: value.role, text: value.text,
-                    removed: value.removed, model: value.model, effort: value.effort, speed: value.speed, revision: expected + 1)
+                    removed: value.removed, model: value.model, effort: value.effort, speed: value.speed, revision: expected + 1, attachments: value.attachments)
             }
             sessions[id]?.transcriptRevision = expected + 1
             result = try CampWire.body(["revision": expected + 1])
@@ -114,15 +124,24 @@ actor PromotionFixture: CampPublishingTransport {
             steps: [.init(ordinal: 0, slot: 0, phase: "draft", state: "completed", output: "First draft")], mode: .single)
         let second = LocalPlanVersion(number: 2, brief: "Compare plans", planners: [a, b], budgetPolicy: "calls", state: "ready",
             steps: (0..<5).map { .init(ordinal: $0, slot: $0 == 4 ? 0 : $0 % 2, phase: $0 < 2 ? "draft" : $0 < 4 ? "review" : "combined", state: "completed", output: "Saved output \($0)") }, mode: .comparison)
-        let execution = LocalImplementation(id: UUID().uuidString, planVersion: 2, planDigest: String(repeating: "a", count: 64), executor: b,
+        let attachmentData = Data("Saved implementation attachment".utf8)
+        let attachment = TranscriptAttachment(id:"a:0",kind:"document",source:"inline",sourceDigest:String(repeating:"e",count:64),state:"embedded",mediaType:"text/plain",sha256:PublishMessage.hash(attachmentData),size:attachmentData.count)
+        var execution = LocalImplementation(id: UUID().uuidString, planVersion: 2, planDigest: String(repeating: "a", count: 64), executor: b,
             context: .init(fingerprint: String(repeating: "b", count: 64), cwd: "/private-project", profile: "/private-profile", provider: "Claude", permissionSummary: "Read only"),
             providerSessionID: UUID().uuidString, state: "complete", initialPrompt: "Implement the reviewed plan", messages:
                 (0..<230).map { .init(id: "message-\($0)", role: "assistant", text: $0 == 200 ? String(repeating: "界", count: 100_000) : "Answer \($0)", model: "saved-model", effort: "ultra", speed: "fast") })
+        execution.messages[0].attachments = [attachment]
         let plan = LocalPlan(id: "plan:" + UUID().uuidString, title: "A complete saved ticket", updated: 1, versions: [first, second], implementations: [execution])
         let original = try CampWire.encoder().encode(plan)
         let cache = try CampCache(directory: root)
         let api = PromotionFixture(scope: scope, actor: actor)
+        let sourceConversationID = execution.providerSessionID
         func connect(_ sharing: CampSharing, _ promotion: CampPlanPromotion) async {
+            sharing.attachmentBytes = { source,child,id,ref in
+                precondition(source.sessionID == sourceConversationID && source.sessionID != b.session.sessionID)
+                precondition(source.root == "/private-profile" && child == nil && id == "message-0" && ref == attachment)
+                return attachmentData
+            }
             sharing.published = { [weak promotion] _, _, _ in promotion?.attach(scope: scope, actor: actor, transport: api, sessions: await api.allSessions()) }
             promotion.upload.installed = { precondition($0.valid) }
             sharing.attach(scope: scope, actor: actor, transport: api)

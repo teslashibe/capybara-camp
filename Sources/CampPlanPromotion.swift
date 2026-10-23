@@ -124,9 +124,12 @@ struct PlanPromotionState: Codable {
             }
         }
         for execution in plan.implementations ?? [] {
-            let id = LocalPlanImport.implementationHistoryID(execution), snapshot = HistorySourceSnapshot(messages: execution.messages)
+            let source = execution.session(id: execution.id, title: "", updated: 0)
+            let id = LocalPlanImport.implementationHistoryID(execution)
+            let snapshot = HistorySourceSnapshot(messages: execution.messages,
+                attachmentSource: execution.messages.contains { ($0.attachments ?? []).contains { $0.state == "embedded" } } ? source : nil)
             guard snapshot.valid else { throw CampError.message("An implementation transcript exceeds the copy limits") }
-            output.append(Source(local: LocalPlanImport.historySession(execution.executor.session, id: id, title: plan.title, model: execution.executor.model), snapshot: snapshot))
+            output.append(Source(local: LocalPlanImport.historySession(source, id: id, title: plan.title, model: execution.executor.model), snapshot: snapshot))
         }
         return output
     }
