@@ -88,6 +88,12 @@ broad GitHub token stays in the service. The scoped token is encrypted with the
 workspace, owner, claim, grant and Git epoch bound to it; it appears only in the
 private token response. Public workspace records and events omit it.
 
+Commits made during a cloud turn name the member who asked for it as author
+and the workspace owner's GitHub account as committer, so GitHub shows both.
+Both use GitHub noreply addresses. A requester without a GitHub connection is
+not named in Git; the owner is the author too. The Camp transcript, request
+queue and session Activity list still show who asked and who approved.
+
 A workspace pins its project's repository links and archived state, not its
 name: renaming a project keeps its workspaces, while changing the links or
 archiving the project fails them.

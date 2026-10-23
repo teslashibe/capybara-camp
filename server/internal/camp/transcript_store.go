@@ -48,7 +48,7 @@ func validateTranscriptMessages(messages []MessageInput, allowEmpty bool) error 
 	return nil
 }
 
-func appendTranscriptMessages(ctx context.Context, tx pgx.Tx, id string, revision int64, messages []MessageInput) error {
+func appendTranscriptMessages(ctx context.Context, tx pgx.Tx, id string, revision int64, messages []MessageInput, author string) error {
 	if err := verifyAttachmentBlobs(ctx, tx, id, messages); err != nil {
 		return err
 	}
@@ -74,7 +74,12 @@ func appendTranscriptMessages(ctx context.Context, tx pgx.Tx, id string, revisio
 		if ordinal != m.Ordinal {
 			return ErrConflict
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO message_revisions(session_id,local_id,revision,role,text,removed,model,effort,speed,attachments) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, id, m.ID, revision, m.Role, m.Text, m.Removed, m.Model, m.Effort, m.Speed, encoded); err != nil {
+		// The publishing owner wrote every user message in their own transcript.
+		var writer any
+		if m.Role == "user" && validID(author) {
+			writer = author
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO message_revisions(session_id,local_id,revision,role,text,removed,model,effort,speed,attachments,author_user_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, m.ID, revision, m.Role, m.Text, m.Removed, m.Model, m.Effort, m.Speed, encoded, writer); err != nil {
 			return err
 		}
 	}
@@ -133,8 +138,8 @@ func readTranscriptAt(ctx context.Context, tx pgx.Tx, id string, revision, befor
 	if before == 0 {
 		before = 1 << 62
 	}
-	rows, err := tx.Query(ctx, `SELECT m.local_id,m.ordinal,v.role,v.text,v.removed,v.revision,v.model,v.effort,v.speed,v.attachments FROM messages m
- CROSS JOIN LATERAL(SELECT role,text,removed,revision,model,effort,speed,attachments FROM message_revisions WHERE session_id=m.session_id AND local_id=m.local_id AND revision<=$2 ORDER BY revision DESC LIMIT 1) v
+	rows, err := tx.Query(ctx, `SELECT m.local_id,m.ordinal,v.role,v.text,v.removed,v.revision,v.model,v.effort,v.speed,v.attachments,COALESCE(v.author_user_id::text,'') FROM messages m
+ CROSS JOIN LATERAL(SELECT role,text,removed,revision,model,effort,speed,attachments,author_user_id FROM message_revisions WHERE session_id=m.session_id AND local_id=m.local_id AND revision<=$2 ORDER BY revision DESC LIMIT 1) v
  WHERE m.session_id=$1 AND m.ordinal<$3 AND NOT v.removed ORDER BY m.ordinal DESC LIMIT $4`, id, revision, before, limit+1)
 	if err != nil {
 		return Transcript{}, err
@@ -143,7 +148,7 @@ func readTranscriptAt(ctx context.Context, tx pgx.Tx, id string, revision, befor
 	textBytes := 0
 	for rows.Next() {
 		var m Message
-		if err = rows.Scan(&m.ID, &m.Ordinal, &m.Role, &m.Text, &m.Removed, &m.Revision, &m.Model, &m.Effort, &m.Speed, &m.Attachments); err != nil {
+		if err = rows.Scan(&m.ID, &m.Ordinal, &m.Role, &m.Text, &m.Removed, &m.Revision, &m.Model, &m.Effort, &m.Speed, &m.Attachments, &m.AuthorUserID); err != nil {
 			rows.Close()
 			return out, err
 		}

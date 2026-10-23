@@ -734,6 +734,12 @@ import SwiftUI
         guard self.scope == scope, self.credential?.token == credential.token else { throw CancellationError() }
         try await cache.saveTranscript(value, scope: scope, sessionId: session.id, before: before, expectedPermissionRevision: session.permissionRevision, expectedEpoch: epoch); return value
     }
+    func activity(session: CloudSession) async throws -> [CloudActivity] {
+        guard let scope, let client, let credential else { throw CampCloudError.cacheUnavailable }
+        let value = try await client.get(CloudActivityPage.self, path: "/v1/camps/\(scope.campId)/sessions/\(session.id)/activity", token: credential.token)
+        guard self.scope == scope, self.credential?.token == credential.token, value.activity.count <= 50 else { throw CancellationError() }
+        return value.activity
+    }
     func childReadAllowed(_ session:CloudSession)->Bool {sessionIndex[session.id]?.permissionRevision==session.permissionRevision}
     func attachmentBytes(_ selection: CampAttachmentSelection) async throws -> Data {
         guard let scope, let client, let credential, let cache, selection.valid,
@@ -776,6 +782,23 @@ import SwiftUI
     }
     func cachedTranscript(session: CloudSession) async -> [CloudMessage] {
         guard let scope, let cache else { return [] }; return (try? await cache.transcript(scope, sessionId: session.id)) ?? []
+    }
+    // How the app names the person behind a prompt or action: nil for you or
+    // an unrecorded author, otherwise the member's name.
+    func actorLabel(_ userId: String?) -> String? {
+        guard let userId, !userId.isEmpty, userId != credential?.actor.userId else { return nil }
+        return members.first { $0.userId == userId }?.name ?? "Teammate"
+    }
+    // "Requested by Kate · approved by you", or nil for your own unapproved
+    // request where there is nothing to attribute.
+    func requestCredit(_ request: CloudRequest) -> String? { Self.credit(request, label: actorLabel) }
+    nonisolated static func credit(_ request: CloudRequest, label: (String?) -> String?) -> String? {
+        var parts: [String] = []
+        if let requester = label(request.requesterUserId) { parts.append("Requested by " + requester) }
+        if let approver = request.approvedByUserId, !approver.isEmpty, approver != request.requesterUserId {
+            parts.append((parts.isEmpty ? "Approved by " : "approved by ") + (label(approver) ?? "you"))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
     func signOut() async {
         guard let client, let credential else { return }

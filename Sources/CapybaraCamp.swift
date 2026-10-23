@@ -85,6 +85,10 @@ struct Message: Codable, Identifiable, Equatable, Sendable {
     var effort: String? = nil
     var speed: String? = nil
     var attachments: [TranscriptAttachment]? = nil
+    // Display name of a teammate who wrote this prompt; nil means it is yours.
+    // Not encoded: it never reaches the helper, the model or saved history.
+    var author: String? = nil
+    private enum CodingKeys: String, CodingKey { case id, role, text, model, effort, speed, attachments }
     // Context provenance covers exactly the text supplied to the model.
     var contextMessage: Message { Message(id: id, role: role, text: text) }
     var settingsDescription: String? {
@@ -1103,7 +1107,7 @@ final class TranscriptWatch {
             defer { if readGeneration == generation { loading = false; historyRequestID = nil } }
             if !more && messages.isEmpty {
                 let cached = await cloud.cachedTranscript(session: session)
-                if readGeneration == generation { messages = cached.map(\.transcriptMessage) }
+                if readGeneration == generation { messages = cached.map { $0.displayMessage(author: cloud.actorLabel) } }
             }
             do {
                 let page = try await cloud.transcript(session: session, before: more ? (cloudHistoryBefore[id] ?? 0) : 0, revision: more ? (cloudHistoryRevision[id] ?? 0) : 0)
@@ -1112,7 +1116,7 @@ final class TranscriptWatch {
                 let unique = Dictionary(combined.map { ($0.id, $0) }, uniquingKeysWith: { a, b in a.revision > b.revision ? a : b })
                 let ordered = unique.values.filter { !$0.removed }.sorted { $0.ordinal < $1.ordinal }
                 cloudHistory[id] = ordered; cloudHistoryBefore[id] = page.before; cloudHistoryRevision[id] = page.revision
-                remoteHasMore = page.hasMore; messages = ordered.map(\.transcriptMessage)
+                remoteHasMore = page.hasMore; messages = ordered.map { $0.displayMessage(author: cloud.actorLabel) }
                 cloud.live.acknowledge(ordered)
                 historyTotal = messages.count + (page.hasMore ? 1 : 0)
             } catch { if readGeneration == generation && !silent { banner = error.localizedDescription } }
@@ -1799,7 +1803,7 @@ struct ChatView: View {
                       }
                     VStack(alignment: .leading, spacing: 9) {
                         if let conversation = store.conversation(s) { ConversationApprovalsView(conversation: conversation) }
-                        if let remote = store.cloudSessions[s.id] { CloudRequestQueueView(cloud: store.cloud, session: remote) }
+                        if let remote = store.cloudSessions[s.id] { CloudRequestQueueView(cloud: store.cloud, session: remote); SessionActivityView(cloud: store.cloud, session: remote) }
                         else { PromptQueueView(store: store, session: s) }
                         if let remote = store.cloudSessions[s.id] {
                             CloudControlQueueView(cloud:store.cloud,sessionID:remote.id) { text in store.restoreControlDraft(text,for:s.id) }
@@ -2085,7 +2089,7 @@ struct MessageView: View, Equatable {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Image(systemName: message.role == "user" ? "person.crop.circle" : "sparkle")
-                Text("\(Text(message.role == "user" ? "You" : "Assistant").fontWeight(.semibold))\(Text(responseMetadata.map { " · " + $0 } ?? "").font(.system(size: 10)).foregroundColor(campMuted))")
+                Text("\(Text(message.role == "user" ? message.author ?? "You" : "Assistant").fontWeight(.semibold))\(Text(responseMetadata.map { " · " + $0 } ?? "").font(.system(size: 10)).foregroundColor(campMuted))")
             }.font(.system(size: 11)).foregroundStyle(message.role == "user" ? campMuted : campGreen)
             Text((try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text)).font(.system(size: fontSize)).lineSpacing(4).textSelection(.enabled)
                 .lineLimit(nil).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)

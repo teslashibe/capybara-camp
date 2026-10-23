@@ -145,7 +145,7 @@ func (w *Worker) turnAction(ctx context.Context, r *turnRecord, action string) (
 	return out, err
 }
 
-func (w *Worker) profile(ctx context.Context, state camp.RunnerAccountState) (*localcli.App, string, profileRecord, error) {
+func (w *Worker) profile(ctx context.Context, state camp.RunnerAccountState, extra ...string) (*localcli.App, string, profileRecord, error) {
 	var remote camp.RunnerCredentials
 	if err := w.client.call(ctx, "GET", "/v1/runner/credentials", nil, &remote); err != nil {
 		return nil, "", profileRecord{}, err
@@ -223,12 +223,30 @@ func (w *Worker) profile(ctx context.Context, state camp.RunnerAccountState) (*l
 			return nil, "", saved, ErrState
 		}
 	}
-	configuration := config.Local{Home: home, Support: filepath.Join(home, "support"), Environment: localcli.IsolatedEnvironment(w.environment, home, root, state.Provider)}
+	configuration := config.Local{Home: home, Support: filepath.Join(home, "support"), Environment: append(localcli.IsolatedEnvironment(w.environment, home, root, state.Provider), extra...)}
 	app := localcli.NewIsolated(configuration)
 	if w.guarded {
 		app = localcli.NewConfined(configuration)
 	}
 	return app, root, saved, nil
+}
+
+// Commits made during the turn name the member who asked as author and the
+// workspace owner as committer.
+func gitIdentityEnvironment(identity *camp.RunnerGitIdentity) []string {
+	if identity == nil {
+		return nil
+	}
+	clean := func(value string) string {
+		return strings.Map(func(r rune) rune {
+			if r < 0x20 || r == 0x7f {
+				return -1
+			}
+			return r
+		}, value)
+	}
+	return []string{"GIT_AUTHOR_NAME=" + clean(identity.AuthorName), "GIT_AUTHOR_EMAIL=" + clean(identity.AuthorEmail),
+		"GIT_COMMITTER_NAME=" + clean(identity.CommitterName), "GIT_COMMITTER_EMAIL=" + clean(identity.CommitterEmail)}
 }
 
 func (w *Worker) saveProfile(ctx context.Context, state camp.RunnerAccountState, root string, meta profileRecord) error {
@@ -316,7 +334,7 @@ func (w *Worker) turnTick(ctx context.Context, state camp.RunnerAccountState, wo
 		}
 		return err
 	}
-	app, root, meta, err := w.profile(ctx, state)
+	app, root, meta, err := w.profile(ctx, state, gitIdentityEnvironment(work.GitIdentity)...)
 	if err != nil {
 		return err
 	}

@@ -161,6 +161,16 @@ func (a *API) sessionRoutes(mux *http.ServeMux) {
 			write(w, 200, map[string]int64{"revision": value})
 		}
 	}))
+	mux.HandleFunc("GET /v1/camps/{camp}/sessions/{session}/activity", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		before, ok := queryInt(w, r, "before")
+		if !ok {
+			return
+		}
+		out, err := a.Camps.SessionActivity(r.Context(), u, r.PathValue("camp"), r.PathValue("session"), before)
+		if !fail(w, err) {
+			write(w, 200, map[string]any{"activity": out})
+		}
+	}))
 	mux.HandleFunc("GET /v1/camps/{camp}/sessions/{session}/transcript", a.authorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		limit, ok := pageLimit(w, r)
 		if !ok {

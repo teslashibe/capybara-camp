@@ -82,6 +82,9 @@ type MessageInput struct {
 type Message struct {
 	MessageInput
 	Revision int64 `json:"revision"`
+	// The member whose prompt this is; empty for assistant text and history
+	// saved before authors were recorded.
+	AuthorUserID string `json:"author_user_id,omitempty"`
 }
 type TranscriptInput struct {
 	ExpectedRevision int64          `json:"expected_revision"`
@@ -399,7 +402,7 @@ func (s *Store) WriteTranscript(ctx context.Context, a auth.Actor, campID, id, r
 		return 0, ErrRevision
 	}
 	result = session.TranscriptRevision + 1
-	if err = appendTranscriptMessages(ctx, tx, id, result, input.Messages); err != nil {
+	if err = appendTranscriptMessages(ctx, tx, id, result, input.Messages, a.UserID); err != nil {
 		return 0, err
 	}
 

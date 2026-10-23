@@ -65,7 +65,8 @@ struct SharedImplementationView: View {
                 ScrollViewReader { proxy in
                     CampTranscriptViewport(followBottom: { proxy.scrollTo("shared-implementation-bottom", anchor: .bottom) }) {
                         LazyVStack(alignment: .leading, spacing: 18) {
-                            MessageView(message: Message(id: request.id, role: "user", text: request.prompt), provider: run.provider)
+                            MessageView(message: Message(id: request.id, role: "user", text: request.prompt, author: cloud.actorLabel(request.requesterUserId)), provider: run.provider)
+                            if let credit = cloud.requestCredit(request) { Text(credit).font(.caption).foregroundStyle(campMuted) }
                             ForEach(live.messages) { MessageView(message: $0, metadata: "\(live.head?.model ?? request.model) · \(ModelMenu.effortName(live.head?.effort ?? request.effort)) · \(ModelMenu.speedName(live.head?.speed ?? request.speed))", provider: run.provider) }
                             if !live.notice.isEmpty { Text(live.notice).font(.caption).foregroundStyle(campMuted) }
                             Color.clear.frame(height: 1).id("shared-implementation-bottom")

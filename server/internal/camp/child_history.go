@@ -156,7 +156,7 @@ func (s *Store) WriteChildHistory(ctx context.Context, a auth.Actor, campID, par
 	transcriptRevision := old.TranscriptRevision
 	if len(in.Messages) > 0 {
 		transcriptRevision++
-		if err = appendTranscriptMessages(ctx, tx, id, transcriptRevision, in.Messages); err != nil {
+		if err = appendTranscriptMessages(ctx, tx, id, transcriptRevision, in.Messages, a.UserID); err != nil {
 			return result, err
 		}
 	}

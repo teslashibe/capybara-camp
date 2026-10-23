@@ -251,6 +251,22 @@ import SQLite3
         check(warm.sessions == locals && warm.selectedID == locals.first?.id, "warm launch uses saved local index")
         let indexPermissions = try FileManager.default.attributesOfItem(atPath: indexDirectory.appendingPathComponent("session-index.json").path)
         check(indexPermissions[.posixPermissions] as? Int == 0o600, "local index owner-only permissions")
+        // Teammates' prompts and approvals are named; your own stay "You".
+        let me = "me-user", kate = "kate-user"
+        let label: (String?) -> String? = { id in id == nil || id == me ? nil : id == kate ? "Kate" : "Teammate" }
+        let wire = try CampWire.decoder().decode(CloudMessage.self, from: Data(#"{"id":"m1","ordinal":0,"role":"user","text":"Fix the header","removed":false,"revision":1,"author_user_id":"kate-user"}"#.utf8))
+        check(wire.displayMessage(author: label).author == "Kate", "teammate prompt keeps its author")
+        var mine = wire; mine.authorUserId = me
+        check(mine.displayMessage(author: label).author == nil, "own prompt stays You")
+        let encoded = String(decoding: try JSONEncoder().encode(wire.displayMessage(author: label)), as: UTF8.self)
+        check(!encoded.contains("author") && !encoded.contains("Kate"), "author never reaches saved history or the helper")
+        var asked = CloudRequest(id: "r", campId: "c", sessionId: "s", requesterUserId: kate, ownerUserId: me, ownerDeviceId: "d", permissionRevision: 1, revision: 1, prompt: "p", model: "m", effort: "high", speed: "standard", state: "queued", createdAt: Date(), sources: [])
+        asked.approvedByUserId = me
+        check(CampConnection.credit(asked, label: label) == "Requested by Kate · approved by you", "request credit names requester and approver")
+        asked.requesterUserId = me; asked.approvedByUserId = nil
+        check(CampConnection.credit(asked, label: label) == nil, "own request needs no credit line")
+        let page = try CampWire.decoder().decode(CloudActivityPage.self, from: Data(#"{"activity":[{"cursor":9,"kind":"request.updated","actor_user_id":"me-user","state":"queued","created_at":"2026-10-23T10:00:00Z"},{"cursor":8,"kind":"request.created","actor_user_id":"kate-user","state":"pending_approval","created_at":"2026-10-23T09:59:00Z"}]}"#.utf8))
+        check(page.activity.map(\.action) == ["approved a request", "asked for a turn"], "activity reads as who did what")
         print("\(assertions) native cloud checks passed")
     }
 }

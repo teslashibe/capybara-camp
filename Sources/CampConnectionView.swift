@@ -171,6 +171,7 @@ struct CloudRequestQueueView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(request.promptLabel).lineLimit(2)
                             Text(stateName(request.state, cloud: request.executionLocation == "cloud")).foregroundStyle(campMuted)
+                            if let credit = cloud.requestCredit(request) { Text(credit).foregroundStyle(campMuted) }
                         }
                         Spacer()
                         if request.contentRestricted != true && request.state == "pending_approval" && request.ownerUserId == cloud.credential?.actor.userId {
@@ -243,6 +244,35 @@ struct CampWorkerStatusView: View {
                     }
                 }
             }.padding(24).frame(width: 580).campWindowBehavior()
+        }
+    }
+}
+
+// A shared session's recent history of who asked, approved, ran and moved it.
+struct SessionActivityView: View {
+    @ObservedObject var cloud: CampConnection
+    let session: CloudSession
+    @State private var expanded = false
+    @State private var entries: [CloudActivity] = []
+    @State private var error = ""
+    var body: some View {
+        DisclosureGroup("Activity", isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 5) {
+                if !error.isEmpty { Text(error).foregroundStyle(.orange) }
+                else if entries.isEmpty { Text("No shared activity yet").foregroundStyle(campMuted) }
+                ForEach(entries) { entry in
+                    Text("\(cloud.actorLabel(entry.actorUserId) ?? "You") \(entry.action) · \(entry.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                        .foregroundStyle(campMuted)
+                }
+            }.padding(.top, 4)
+        }
+        .font(.system(size: 11))
+        .onChange(of: expanded) { _, open in if open { load() } }
+    }
+    private func load() {
+        Task {
+            do { entries = try await cloud.activity(session: session); error = "" }
+            catch is CancellationError {} catch { self.error = error.localizedDescription }
         }
     }
 }

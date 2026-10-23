@@ -48,6 +48,31 @@ struct CampProject: Codable, Identifiable, Equatable, Sendable {
     var repositoryURLs: [String] { repositories ?? [] }
 }
 typealias CloudProject = CampProject
+// Who did what to a session and when. It never carries prompts or text.
+struct CloudActivity: Codable, Identifiable, Equatable, Sendable {
+    var cursor: Int64; var kind: String; var actorUserId: String
+    var state: String? = nil; var reason: String? = nil; var automatic: Bool? = nil; var createdAt: Date
+    var id: Int64 { cursor }
+    var action: String {
+        switch (kind, state ?? "") {
+        case ("request.created", "pending_approval"): return "asked for a turn"
+        case ("request.created", _): return "sent a prompt"
+        case (_, "queued") where kind.hasPrefix("request."): return "approved a request"
+        case (_, "claimed"): return "picked up a request"
+        case (_, "started"): return "started a turn"
+        case (_, "completed"): return "finished a turn"
+        case (_, "failed"): return "turn failed"
+        case (_, "cancel_requested"), (_, "cancelled"): return reason == "permission_changed" ? "stopped a turn after access changed" : "cancelled a request"
+        case (_, "outcome_unknown"): return "turn outcome needs review"
+        case ("session.execution", _): return "changed where it runs"
+        case ("session.updated", _): return "updated the session"
+        case (let value, _) where value.hasPrefix("transfer."): return "moved the session"
+        case (let value, _) where value.hasPrefix("workspace."): return "updated the cloud workspace"
+        default: return "updated the session"
+        }
+    }
+}
+struct CloudActivityPage: Codable, Sendable { var activity: [CloudActivity] }
 struct CloudMember: Codable, Identifiable, Sendable {
     var userId: String; var name: String; var role: String
     var id: String { userId }
@@ -77,7 +102,12 @@ struct CloudMessage: Codable, Identifiable, Equatable, Sendable {
     var id: String; var ordinal: Int64; var role: String; var text: String; var removed: Bool
     var model: String?; var effort: String?; var speed: String?; var revision: Int64
     var attachments: [TranscriptAttachment]? = nil
+    var authorUserId: String? = nil
     var transcriptMessage: Message { Message(id: id, role: role, text: text, model: model, effort: effort, speed: speed, attachments: attachments) }
+    // The transcript row as shown: a teammate's prompt carries their name.
+    func displayMessage(author label: (String?) -> String?) -> Message {
+        var value = transcriptMessage; value.author = role == "user" ? label(authorUserId) : nil; return value
+    }
 }
 struct CloudTranscript: Codable, Sendable { var revision: Int64; var messages: [CloudMessage]; var before: Int64; var hasMore: Bool }
 struct CloudSourceRef: Codable, Equatable, Sendable {
@@ -88,6 +118,7 @@ struct CloudRequest: Codable, Identifiable, Equatable, Sendable {
     var contentRestricted: Bool? = nil
     var promptLabel: String { contentRestricted == true ? "Context access changed" : prompt }
     var id: String; var campId: String; var sessionId: String; var requesterUserId: String; var ownerUserId: String; var ownerDeviceId: String
+    var approvedByUserId: String? = nil
     var permissionRevision: Int64; var revision: Int64; var prompt: String; var model: String; var effort: String; var speed: String; var state: String
     var leaseToken: String?; var leaseUntil: Date?; var createdAt: Date; var evidence: String?; var reason: String?; var sources: [CloudSourceRef]
     var kind: String? = nil

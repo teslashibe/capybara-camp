@@ -22,6 +22,50 @@ type RunnerTurn struct {
 	Context           json.RawMessage          `json:"context"`
 	ProviderSessionID string                   `json:"provider_session_id"`
 	History           []localcli.HistorySource `json:"history,omitempty"`
+	GitIdentity       *RunnerGitIdentity       `json:"git_identity,omitempty"`
+}
+
+// RunnerGitIdentity attributes commits made during a cloud turn. The
+// committer is the workspace owner's GitHub account; the author is the member
+// who asked for the turn when they have connected GitHub. Both use GitHub
+// noreply addresses so no private email enters the history.
+type RunnerGitIdentity struct {
+	AuthorName     string `json:"author_name"`
+	AuthorEmail    string `json:"author_email"`
+	CommitterName  string `json:"committer_name"`
+	CommitterEmail string `json:"committer_email"`
+}
+
+func githubNoreply(id int64, login string) string {
+	return strconv.FormatInt(id, 10) + "+" + login + "@users.noreply.github.com"
+}
+
+func runnerGitIdentity(ctx context.Context, tx pgx.Tx, workspaceID string, r Request) (*RunnerGitIdentity, error) {
+	var ownerID int64
+	var ownerLogin string
+	if err := tx.QueryRow(ctx, `SELECT github_user_id,github_login FROM ticket_workspaces WHERE id=$1`, workspaceID).Scan(&ownerID, &ownerLogin); err != nil {
+		return nil, err
+	}
+	if ownerID <= 0 || ownerLogin == "" {
+		return nil, nil
+	}
+	out := &RunnerGitIdentity{AuthorName: ownerLogin, AuthorEmail: githubNoreply(ownerID, ownerLogin), CommitterName: ownerLogin, CommitterEmail: githubNoreply(ownerID, ownerLogin)}
+	if r.RequesterUserID == r.OwnerUserID {
+		return out, nil
+	}
+	var id int64
+	var login string
+	err := tx.QueryRow(ctx, `SELECT github_user_id,github_login FROM git_connections WHERE owner_user_id=$1 AND state='connected' AND github_user_id IS NOT NULL ORDER BY updated_at DESC LIMIT 1`, r.RequesterUserID).Scan(&id, &login)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if id > 0 && login != "" {
+		out.AuthorName, out.AuthorEmail = login, githubNoreply(id, login)
+	}
+	return out, nil
 }
 type StreamEvent struct {
 	Seq   int64           `json:"seq"`
@@ -220,7 +264,11 @@ func (g *GitStore) runnerTurn(ctx context.Context, token, workspaceID, id string
 		return RunnerTurn{}, ErrInput
 	}
 	contextJSON, _ := json.Marshal(sources)
-	return RunnerTurn{Request: r, Context: contextJSON, ProviderSessionID: providerSession, History: history}, nil
+	identity, err := runnerGitIdentity(ctx, tx, workspaceID, r)
+	if err != nil {
+		return RunnerTurn{}, err
+	}
+	return RunnerTurn{Request: r, Context: contextJSON, ProviderSessionID: providerSession, History: history, GitIdentity: identity}, nil
 }
 
 // contextRefMessages reads one source as a turn sends it: the selected
@@ -611,7 +659,12 @@ func (s *Store) publishRunnerTranscript(ctx context.Context, tx pgx.Tx, r Reques
 		if _, err = tx.Exec(ctx, `INSERT INTO messages(session_id,local_id,ordinal) VALUES($1,$2,$3)`, r.SessionID, id, ordinal+int64(i)); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO message_revisions(session_id,local_id,revision,role,text,model,effort,speed) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, r.SessionID, id, revision, part.role, part.text, model, effort, speed); err != nil {
+		// The prompt belongs to whoever asked for this turn, not the owner.
+		var author any
+		if part.role == "user" && validID(r.RequesterUserID) {
+			author = r.RequesterUserID
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO message_revisions(session_id,local_id,revision,role,text,model,effort,speed,author_user_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, r.SessionID, id, revision, part.role, part.text, model, effort, speed, author); err != nil {
 			return err
 		}
 	}

@@ -42,6 +42,7 @@ type Request struct {
 	CampID               string                      `json:"camp_id"`
 	SessionID            string                      `json:"session_id"`
 	RequesterUserID      string                      `json:"requester_user_id"`
+	ApprovedByUserID     string                      `json:"approved_by_user_id,omitempty"`
 	OwnerUserID          string                      `json:"owner_user_id"`
 	OwnerDeviceID        string                      `json:"owner_device_id"`
 	PermissionRevision   int64                       `json:"permission_revision"`
@@ -80,12 +81,12 @@ type RequestAction struct {
 }
 
 const requestColumns = `r.id,r.camp_id,r.session_id,r.requester_user_id,r.owner_user_id,r.owner_device_id,r.permission_revision,r.revision,r.prompt,r.model,r.effort,r.speed,r.state,
- COALESCE(r.lease_token::text,''),r.lease_until,r.created_at,r.outcome_evidence,r.reason,r.kind,COALESCE(r.plan_id::text,''),COALESCE(r.plan_version,0),COALESCE(r.plan_step,-1),r.execution_location,r.execution_epoch,COALESCE(r.execution_workspace_id::text,''),r.execution_permissions,r.execution_mode,COALESCE(r.runner_grant_id::text,''),r.context_revision,r.stream_seq,COALESCE(r.implementation_id::text,''),(` + localContinuationSQL + `)`
+ COALESCE(r.lease_token::text,''),r.lease_until,r.created_at,r.outcome_evidence,r.reason,r.kind,COALESCE(r.plan_id::text,''),COALESCE(r.plan_version,0),COALESCE(r.plan_step,-1),r.execution_location,r.execution_epoch,COALESCE(r.execution_workspace_id::text,''),r.execution_permissions,r.execution_mode,COALESCE(r.runner_grant_id::text,''),r.context_revision,r.stream_seq,COALESCE(r.implementation_id::text,''),COALESCE(r.approved_by_user_id::text,''),(` + localContinuationSQL + `)`
 
 func scanRequest(row rowScanner, extra ...any) (Request, error) {
 	r := Request{Sources: []SourceRef{}}
 	var permissions []byte
-	columns := []any{&r.ID, &r.CampID, &r.SessionID, &r.RequesterUserID, &r.OwnerUserID, &r.OwnerDeviceID, &r.PermissionRevision, &r.Revision, &r.Prompt, &r.Model, &r.Effort, &r.Speed, &r.State, &r.LeaseToken, &r.LeaseUntil, &r.CreatedAt, &r.Evidence, &r.Reason, &r.Kind, &r.PlanID, &r.PlanVersion, &r.PlanStep, &r.ExecutionLocation, &r.ExecutionEpoch, &r.ExecutionWorkspaceID, &permissions, &r.Mode, &r.RunnerGrantID, &r.ContextRevision, &r.StreamSeq, &r.ImplementationID}
+	columns := []any{&r.ID, &r.CampID, &r.SessionID, &r.RequesterUserID, &r.OwnerUserID, &r.OwnerDeviceID, &r.PermissionRevision, &r.Revision, &r.Prompt, &r.Model, &r.Effort, &r.Speed, &r.State, &r.LeaseToken, &r.LeaseUntil, &r.CreatedAt, &r.Evidence, &r.Reason, &r.Kind, &r.PlanID, &r.PlanVersion, &r.PlanStep, &r.ExecutionLocation, &r.ExecutionEpoch, &r.ExecutionWorkspaceID, &permissions, &r.Mode, &r.RunnerGrantID, &r.ContextRevision, &r.StreamSeq, &r.ImplementationID, &r.ApprovedByUserID}
 	columns = append(columns, &r.LocalContinuation)
 	err := row.Scan(append(columns, extra...)...)
 	if err == nil {
@@ -688,6 +689,7 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 			return r, ErrTransition
 		}
 		r.State = "queued"
+		r.ApprovedByUserID = a.UserID
 	case "start":
 		if err = s.planWorkCanStart(ctx, tx, r, input.ExecutionContext); err != nil {
 			return r, err
@@ -751,7 +753,8 @@ func (s *Store) actOnRequest(ctx context.Context, tx pgx.Tx, a auth.Actor, campI
 	 started_at=CASE WHEN $4='start' THEN now() ELSE started_at END,
 	 lease_until=CASE WHEN $4 IN ('start','heartbeat') THEN clock_timestamp()+interval '60 seconds' WHEN $5 OR $4='release' THEN NULL ELSE lease_until END,
 	 lease_token=CASE WHEN $4='release' THEN NULL ELSE lease_token END,
-	 finished_at=CASE WHEN $5 THEN now() ELSE finished_at END,reason=$6 WHERE id=$1`, id, r.State, r.Evidence, input.Action, terminal, r.Reason)
+	 finished_at=CASE WHEN $5 THEN now() ELSE finished_at END,reason=$6,
+	 approved_by_user_id=CASE WHEN $4='approve' THEN $7::uuid ELSE approved_by_user_id END WHERE id=$1`, id, r.State, r.Evidence, input.Action, terminal, r.Reason, a.UserID)
 	if err != nil {
 		return r, err
 	}

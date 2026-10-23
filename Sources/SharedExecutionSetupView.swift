@@ -133,7 +133,7 @@ struct SharedExecutionSetupView: View {
             PlanningLocationLabel(execution: value.execution)
             Text(value.settings?.summary ?? "Permissions unavailable").font(.caption).foregroundStyle(campMuted)
             Text("Plan version \(value.planVersion) · \(ownerName(value.ownerUserId)) · \(cloud.sessions.first { $0.id == value.sessionId }?.profileLabel ?? value.provider)").font(.caption).foregroundStyle(campMuted)
-            DisclosureGroup("Approved plan and instructions") { MessageView(message: Message(id: value.id, role: "user", text: value.prompt), provider: value.provider) }
+            DisclosureGroup("Approved plan and instructions") { MessageView(message: Message(id: value.id, role: "user", text: value.prompt, author: cloud.actorLabel(value.creatorUserId)), provider: value.provider) }
             if value.execution.location == "local", value.ownerUserId == cloud.scope?.userId, value.ownerDeviceId != cloud.credential?.actor.deviceId {
                 Text("Open this Camp on the assigned Mac to approve its actual CLI settings").font(.caption).foregroundStyle(campMuted)
             }
