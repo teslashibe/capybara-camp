@@ -163,6 +163,42 @@ actor CampCache {
         guard UUID(uuidString:id) != nil else {throw CampCloudError.invalidResponse}
         try transaction {try checkEpoch(scope,expectedEpoch);try setMetadata("transfer-cancel:"+scope.key,Data(id.utf8))}
     }
+    func saveReturnHandoff(_ value: ReturnHandoffJournal, scope: CloudScope, expectedEpoch: Int64, previousRevision: Int64?) throws {
+        let raw=try JSONEncoder().encode(value)
+        guard raw.count<=256<<10,value.destination.session.campId==scope.campId,
+              value.destination.session.ownerUserId==scope.userId else{throw CampCloudError.invalidResponse}
+        try transaction {
+            try checkEpoch(scope,expectedEpoch)
+            let key="return-handoff:"+scope.key
+            if let previousRevision {
+                guard let saved=try metadata(key) else{throw CancellationError()}
+                let old=try JSONDecoder().decode(ReturnHandoffJournal.self,from:saved)
+                guard old.id==value.id,old.revision==previousRevision,value.revision==previousRevision+1,
+                      old.destination.id==value.destination.id,old.destination.target==value.destination.target,
+                      old.destination.session==value.destination.session,old.destination.installation==value.destination.installation,
+                      old.createKey==value.createKey,old.holdKey==value.holdKey,old.commitKey==value.commitKey,
+                      old.payloadBytes==value.payloadBytes,!old.cancelling || value.cancelling,
+                      old.commitRevision==nil || old.commitRevision==value.commitRevision,
+                      old.permissions==nil || old.permissions==value.permissions,
+                      old.executionApproved==nil || old.executionApproved==value.executionApproved else{throw CancellationError()}
+            } else {
+                guard try metadata(key)==nil,value.revision==1,value.phase=="uploading",!value.cancelling,
+                      value.transfer==nil,value.handoff==nil,value.commitRevision==nil else{throw CampCloudError.invalidResponse}
+            }
+            try setMetadata(key,raw)
+        }
+    }
+    func discardReturnHandoff(_ expected:ReturnHandoffJournal,scope:CloudScope,expectedEpoch:Int64)throws {
+        try transaction {
+            try checkEpoch(scope,expectedEpoch)
+            let key="return-handoff:"+scope.key
+            guard let raw=try metadata(key) else{return}
+            let old=try JSONDecoder().decode(ReturnHandoffJournal.self,from:raw)
+            guard old.id==expected.id,old.revision==expected.revision,old.phase=="cancelled",old.cancelling,
+                  try metadata("local-destination:"+scope.key)==nil else{throw CancellationError()}
+            try execute("DELETE FROM metadata WHERE key=?",[.text(key)])
+        }
+    }
     func saveLocalDestination(_ value: LocalDestinationJournal, scope: CloudScope, expectedEpoch: Int64, previousRevision: Int64?) throws {
         let raw=try JSONEncoder().encode(value)
         guard raw.count<=128<<10,value.session.campId==scope.campId,value.session.ownerUserId==scope.userId else { throw CampCloudError.invalidResponse }
@@ -683,6 +719,7 @@ actor CampCache {
             try execute("DELETE FROM metadata WHERE key=?", [.text("workspace-export:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("transfer-history:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key=?", [.text("local-destination:" + scope.key)])
+            try execute("DELETE FROM metadata WHERE key=?", [.text("return-handoff:" + scope.key)])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-history-page:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("workspace-export-chunk:" + scope.key + ":%")])
             try execute("DELETE FROM metadata WHERE key LIKE ?", [.text("transfer-payload:" + scope.key + ":%")])

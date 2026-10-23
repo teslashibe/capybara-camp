@@ -79,43 +79,113 @@ private actor ExportFixture: CampAccountTransport {
     }
 }
 
-private actor DestinationBridgeFixture {
+private actor ReturnHandoffFixture: CampAccountTransport {
+    let original: CloudSession
+    let device: String
+    let files: ExportFixture
+    let payload: Data
     let review: TransferCapture
-    var checkoutCalls=0
-    var installCalls=0
-    var loseCheckout=false
-    var loseInstall=false
-    var delayInstall=false
-    var installStarted=false
-    init(_ review:TransferCapture) { self.review=review }
-    func lose(_ phase:String) { loseCheckout=phase=="checkout";loseInstall=phase=="install" }
-    func delay() { delayInstall=true }
-    func started() -> Bool { installStarted }
-    func counts() -> (Int,Int) { (checkoutCalls,installCalls) }
-    func call(_ action:String,_ data:Data) async throws -> Data {
-        if action=="transfer-review" { return try CampWire.encoder().encode(review) }
-        let input=try JSONSerialization.jsonObject(with:data) as! [String:Any]
-        if action=="transfer-checkout" {
-            checkoutCalls+=1
-            let scope=input["scope"] as! String,id=input["transferID"] as! String
-            let receipt=TransferCheckoutReceipt(version:1,scope:scope,transferID:id,repository:"fixture/repo",baseCommit:review.baseCommit,branch:review.branch,destination:"/fixture/workspace-\(scope)-\(id)")
-            if loseCheckout { loseCheckout=false;throw URLError(.networkConnectionLost) }
-            return try JSONEncoder().encode(receipt)
+    var transfer: CloudTransfer?
+    var handoff: CloudHandoff?
+    var createKeys=Set<String>(),holdKeys=Set<String>(),commitKeys=Set<String>()
+    var dropped=Set<String>()
+    var dropAll=false
+
+    var malformed=false
+    init(session:CloudSession,device:String,files:ExportFixture,payload:Data,review:TransferCapture) {
+        original=session;self.device=device;self.files=files;self.payload=payload;self.review=review
+    }
+    func losses(){dropAll=true}
+func corrupt(){malformed=true}
+    func finishIssued()async {
+        precondition(handoff?.commitNonce != nil)
+        handoff!.state="committed";handoff!.executionEpoch=original.executionEpoch!+1;transfer!.state="completed"
+        await files.configure(reject:true);await files.history(projected())
+    }
+    func counts()->(Int,Int,Int){(createKeys.count,holdKeys.count,commitKeys.count)}
+    private func deliver<T:Encodable>(_ value:T,_ stage:String)throws->Data {
+        if dropAll && !dropped.contains(stage) {dropped.insert(stage);throw URLError(.networkConnectionLost)}
+        return try CampWire.encoder().encode(value)
+    }
+    private func projected()->CloudSession {
+        var session=original
+        if let h=handoff,h.state=="committed",let d=h.localDestination {
+            session.ownerDeviceId=device;session.profileId=d.profileId;session.localSessionId=d.sessionId
+            session.executionLocation="local";session.executionWorkspaceId=nil;session.executionEpoch=h.executionEpoch
+            session.revision+=1;session.permissionRevision+=1
         }
-        precondition(action=="transfer-install")
-        installCalls+=1;installStarted=true
-        if delayInstall { try await Task.sleep(for:.milliseconds(180)) }
-        let target=try JSONDecoder().decode(TransferInstallationTarget.self,from:JSONSerialization.data(withJSONObject:input["target"]!))
-        let exported=try CampWire.decoder().decode(CloudWorkspaceExport.self,from:JSONSerialization.data(withJSONObject:input["export"]!))
-        let receipt=TransferInstallationReceipt(version:1,scope:input["scope"] as! String,transferID:input["transferID"] as! String,
-            exportID:exported.id,destination:input["destination"] as! String,target:target,
-            payloadSHA256:input["payloadSHA256"] as! String,historySHA256:input["historySHA256"] as! String,
-            sourceID:exported.sessionId,transcriptRevision:exported.transcriptRevision,
-            files:.init(reviewSHA256:review.reviewSha256,baseCommit:review.baseCommit,branch:review.branch,files:review.files.count))
-        let encoder=JSONEncoder();encoder.outputFormatting = .sortedKeys
-        let result=TransferInstallationResult(receipt:receipt,receiptSHA256:PublishMessage.hash(try encoder.encode(receipt)))
-        if loseInstall { loseInstall=false;throw URLError(.networkConnectionLost) }
-        return try JSONEncoder().encode(result)
+        return session
+    }
+    func data(_ method:String,path:String,body:Data?,key:String?,token:String?)async throws->Data {
+        if path.contains("/transfers") {
+            if path.hasSuffix("/transfers") {
+                precondition(method=="POST" && key != nil)
+                let input=try JSONSerialization.jsonObject(with:body!) as! [String:Any]
+                precondition(input["target_location"] as? String=="local" && input["payload_sha256"] as? String==review.payloadSha256)
+                createKeys.insert(key!)
+                if transfer==nil {
+                    transfer=CloudTransfer(id:UUID().uuidString.lowercased(),campId:original.campId,sessionId:original.id,ownerUserId:original.ownerUserId,
+                        sourceLocation:"cloud",sourceEpoch:original.executionEpoch!,sourceRevision:original.revision,sourceTranscriptRevision:original.transcriptRevision,
+                        sourcePermissionRevision:original.permissionRevision,targetLocation:"local",targetAccountId:nil,payloadSha256:review.payloadSha256,
+                        reviewSha256:review.reviewSha256,payloadBytes:payload.count,uploadedBytes:0,uploadedChunks:[],chunkBytes:256<<10,
+                        state:"uploading",revision:1,expiresAt:Date().addingTimeInterval(600),baseCommit:nil,fileCount:0,
+                        sourceWorkspaceId:original.executionWorkspaceId,targetDeviceId:device)
+                }
+                return try deliver(transfer!,"create")
+            }
+            if path.contains("/chunks/") {
+                precondition(method=="PUT")
+                let index=Int(path.split(separator:"/").last!)!
+                let input=try JSONSerialization.jsonObject(with:body!) as! [String:String]
+                let part=Data(base64Encoded:input["data"]!)!
+                precondition(part==payload.subdata(in:(index*(256<<10))..<min(payload.count,(index+1)*(256<<10))))
+                precondition(input["sha256"]==PublishMessage.hash(part))
+                if !transfer!.uploadedChunks!.contains(index){transfer!.uploadedChunks!.append(index);transfer!.uploadedBytes+=part.count;transfer!.revision+=1}
+                return try deliver(transfer!,"chunk-\(index)")
+            }
+            if path.hasSuffix("/complete") {
+                precondition(transfer?.uploadedBytes==payload.count)
+                if transfer!.state=="uploading"{transfer!.state="ready";transfer!.baseCommit=review.baseCommit;transfer!.fileCount=review.files.count;transfer!.revision+=1}
+                return try deliver(transfer!,"complete")
+            }
+            if path.hasSuffix("/handoffs") {
+                precondition(method=="POST" && key != nil);holdKeys.insert(key!)
+                let input=try JSONSerialization.jsonObject(with:body!) as! [String:Any]
+                let local=try CampWire.decoder().decode(CloudLocalDestination.self,from:JSONSerialization.data(withJSONObject:input["local_destination"]!))
+                if handoff==nil {handoff=CloudHandoff(id:UUID().uuidString.lowercased(),transferId:transfer!.id,campId:original.campId,sessionId:original.id,ownerUserId:original.ownerUserId,
+                    sourceDeviceId:original.ownerDeviceId,sourceLocation:"cloud",sourceWorkspaceId:original.executionWorkspaceId,sourceEpoch:original.executionEpoch!,
+                    workspaceId:"",workspaceRevision:0,state:"pending",claimId:nil,revision:1,expiresAt:Date().addingTimeInterval(300),commitNonce:nil,executionEpoch:nil,
+                    targetLocation:"local",targetDeviceId:device,localDestination:local)}
+                return try deliver(handoff!,"hold")
+            }
+            if path.hasSuffix("/cancel") {
+                guard transfer!.state != "completed" else {throw CampCloudError.server(409,"transition")}
+                transfer!.state="cancelled";transfer!.revision+=1
+                if handoff != nil{handoff!.state="released";handoff!.revision+=1}
+                return try deliver(transfer!,"cancel")
+            }
+            precondition(method=="GET");return try CampWire.encoder().encode(transfer!)
+        }
+        if path.contains("/handoffs/") {
+            if path.hasSuffix("/commit") {
+                precondition(method=="POST" && key != nil);commitKeys.insert(key!)
+                let input=try JSONSerialization.jsonObject(with:body!) as! [String:Any]
+                precondition(input["context_continuation_approved"] as? Bool==true)
+                if handoff!.localDestination!.purpose=="implementation" {precondition(input["execution_approved"] as? Bool==true)}
+                if handoff!.commitNonce==nil{handoff!.commitNonce=UUID().uuidString.lowercased();handoff!.revision+=1}
+                return try deliver(handoff!,"commit")
+            }
+            if handoff!.commitNonce != nil {
+                handoff!.state="committed";handoff!.executionEpoch=original.executionEpoch!+1;transfer!.state="completed"
+                await files.configure(reject:true)
+                await files.history(projected())
+            } else if handoff!.state=="pending" {handoff!.state="acknowledged";handoff!.revision+=1}
+            var response=handoff!
+            if malformed{response.localDestination!.profileId=UUID().uuidString.lowercased()}
+            return try CampWire.encoder().encode(response)
+        }
+        if handoff?.state=="committed",path.hasSuffix("/sessions/"+original.id) {return try CampWire.encoder().encode(projected())}
+        return try await files.data(method,path:path,body:body,key:key,token:token)
     }
 }
 
@@ -366,7 +436,77 @@ private actor DestinationBridgeFixture {
                 await rejects("Installed receipt returned after source permissions changed") { _=try await destination().advance() }
             }
         }
-        print("PASS: export, checkout/install restart composition, profile binding, cancellation, erasure and integrity")
+        for (provider,scenario) in ["Codex","Claude"].flatMap({ p in ["complete","losses","cancel","early-cancel","finished-cancel","wrong-destination"].map{(p,$0)}}) {
+            try await cache.clear(scope)
+            var source=session;source.provider=provider
+            let fixture=ExportFixture(value,payload:payload);await fixture.checkout(device:credential.actor.deviceId);await fixture.history(source)
+            let review=TransferCapture(payloadSha256:value.resultSha256,reviewSha256:String(repeating:"b",count:64),baseCommit:String(repeating:"c",count:40),branch:"main",files:[.init(path:"notes.txt",bytes:payload.count,deleted:false)],excluded:[])
+            let transport=ReturnHandoffFixture(session:source,device:credential.actor.deviceId,files:fixture,payload:payload,review:review)
+            if scenario=="losses"{await transport.losses()}
+            let bridge=DestinationBridgeFixture(review),localEpoch=try await cache.epoch(scope)
+            let files=try CampWorkspaceExport(cache:cache,scope:scope,credential:credential,transport:transport,epoch:localEpoch)
+            let history=try CampTransferHistory(cache:cache,scope:scope,credential:credential,transport:transport,epoch:localEpoch)
+            try await files.begin(session:source,kind:"capture",paths:["notes.txt"])
+            await rejects("Expected lost export create"){try await files.advance()}
+            try await files.advance();try await files.advance();try await history.begin(session:source);try await history.advance()
+            let target=TransferInstallationTarget(profileID:UUID().uuidString.lowercased(),sourceID:"fixture-source",provider:provider,root:"/fixture/profile",sessionID:UUID().uuidString.lowercased(),purpose:"implementation")
+            let local=try CampLocalDestination(cache:cache,scope:scope,credential:credential,transport:transport,epoch:localEpoch,callLocal:{try await bridge.call($0,$1)})
+            try await local.begin(target:target,reviewedSHA256:review.reviewSha256)
+            _=try await local.advance();_=try await local.advance()
+            func handoff()throws->CampReturnHandoff{try CampReturnHandoff(cache:cache,scope:scope,credential:credential,transport:transport,epoch:localEpoch,callLocal:{try await bridge.call($0,$1)})}
+            try await handoff().begin()
+            if scenario=="early-cancel" {
+                try await handoff().requestCancellation()
+                for _ in 0..<5 { _=try await handoff().advance();if try await handoff().current()?.phase=="cancelled"{break} }
+                let ended=try await handoff().current()!,counts=await transport.counts()
+                precondition(ended.phase=="cancelled" && counts.0==1 && counts.1==0 && counts.2==0)
+                try await handoff().discardCancelled()
+                let cleared=try await handoff().current();precondition(cleared==nil)
+                continue
+            }
+            for _ in 0..<30 {
+                if try await handoff().current()?.phase=="confirm"{break}
+                do{_=try await handoff().advance()}catch is URLError{}
+            }
+            let ready=try await handoff().current()!
+            precondition(ready.phase=="confirm" && ready.handoff?.localDestination?.sessionId==target.sessionID)
+            let permissions=provider=="Codex" ? PermissionSettings(sandbox:"workspace-write",approval:"on-request",reviewer:"user") : PermissionSettings(claudeMode:"manual")
+            await rejects("Implicit continuation approved"){try await handoff().confirm(contextContinuationApproved:false,executionApproved:true,permissions:permissions)}
+            await rejects("Implicit implementation approved"){try await handoff().confirm(contextContinuationApproved:true,executionApproved:false,permissions:permissions)}
+            if scenario=="wrong-destination" {
+                await transport.corrupt()
+                await rejects("Foreign destination accepted"){_=try await handoff().advance()}
+                continue
+            }
+            if scenario=="cancel" {try await handoff().requestCancellation()}
+            else {
+                try await handoff().confirm(contextContinuationApproved:true,executionApproved:true,permissions:permissions)
+                if scenario=="finished-cancel" {
+                    _=try await handoff().advance()
+                    await transport.finishIssued()
+                    try await handoff().requestCancellation()
+                }
+            }
+            for _ in 0..<20 {
+                if let phase=try await handoff().current()?.phase,["complete","cancelled"].contains(phase){break}
+                do{_=try await handoff().advance()}catch is URLError{}
+            }
+            let finished=try await handoff().current()!,counts=await transport.counts()
+            precondition(counts.0==1 && counts.1==1)
+            if scenario=="cancel" {
+                precondition(finished.phase=="cancelled" && counts.2==0)
+                try await handoff().discardCancelled()
+                let cleared=try await handoff().current();precondition(cleared==nil)
+                await rejects("Discarded handoff journal recreated"){try await cache.saveReturnHandoff(finished,scope:scope,expectedEpoch:localEpoch,previousRevision:finished.revision-1)}
+            }
+            else {
+                precondition(finished.phase=="complete" && counts.2==1)
+                precondition(finished.session?.id==source.id && finished.session?.ownerDeviceId==credential.actor.deviceId && finished.session?.profileId==target.profileID && finished.session?.transcriptRevision==source.transcriptRevision)
+                precondition(finished.session?.executionEpoch==(source.executionEpoch ?? 0)+1)
+            }
+        }
+        print("PASS: export, destination restart, approved return handoff, lost responses, cancellation and integrity")
+
 
 
 

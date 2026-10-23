@@ -311,6 +311,11 @@ coordinator passes it directly to the helper after verifying the reviewed export
 A saved native preparation journal resumes checkout and installation across
 restarts, preserves the selected profile, and prevents cancellation from being
 overwritten by a late helper response.
+The return handoff coordinator now uploads that reviewed snapshot, obtains the
+source hold and saves explicit continuation/implementation approval before
+confirmation. Restart and lost responses reuse the saved operation keys. The
+server changes ownership only after the source answers the stop proof; a
+committed move retains the same ticket and parent/subagent history.
 The review screen integration, missing remote commits, attachments and connecting the
 handoff to actual local continuation remain part of the unfinished transfer flow.
 The native publisher includes saved subagent histories with a shared or private

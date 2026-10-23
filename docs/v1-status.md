@@ -22,8 +22,9 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: connect the native checkout/grant coordinator, file/history installation, attachments and review
-to the local handoff protocol, then finish the remaining transfer cases,
+Next: connect the native review screen to the saved checkout, installation and
+return-handoff coordinators, establish runnable local continuation, then finish
+attachments and the remaining transfer cases,
 shared skills and Git publication. Continue executor-setup acceptance and the
 native design audit as those surfaces are implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
@@ -173,6 +174,24 @@ keys before hashing; Go's real installer already produces stable receipt bytes.
 These are synthetic coordinator tests alongside the real bundled installer
 regressions, not a live provider transfer or native visual acceptance.
 
+
+The native return-handoff coordinator now composes the installed destination
+with resumable upload, source hold and explicit owner confirmation. It saves
+stable operation keys and approved permissions, checks returned destination
+bindings, and verifies the committed ticket/profile/device/execution epoch.
+It reconciles a lost commit response before reading old export bytes, and keeps
+cancellation distinct from a move the source already committed. The native
+screen and runnable continuation mapping are still required.
+
+The four native export/handoff/transfer/worker suites pass
+(`build/return-handoff-final.log`). The new integration suite also passes for
+Codex and Claude against the real Go API and disposable PostgreSQL, with a
+separate destination device login, 260 parent and 250 child messages per ticket,
+lost create/hold/commit responses, exact permission retention and rejection of
+confirmation by another device or teammate (`build/return-handoff-real-api.log`).
+It uses the production manifest reviewer, but synthetic checkout/install
+receipts and runner stop acknowledgements. It does not prove live continuation,
+real GitHub access, source-process isolation or native visual acceptance.
 
 Cloud source inspection and selected-file capture are now implemented at schema
 34. The owner creates a bounded export; only its assigned runner can claim it.

@@ -1,11 +1,18 @@
 import Foundation
 
+struct CloudLocalDestination: Codable, Equatable, Sendable {
+    var profileId: String; var sessionId: String; var purpose: String
+    var receiptSha256: String; var transcriptRevision: Int64
+}
 struct CloudHandoff: Codable, Sendable {
     var id: String; var transferId: String; var campId: String; var sessionId: String; var ownerUserId: String
     var sourceDeviceId: String; var sourceLocation: String; var sourceWorkspaceId: String?
     var sourceEpoch: Int64; var workspaceId: String; var workspaceRevision: Int64
     var state: String; var claimId: String?; var revision: Int64; var expiresAt: Date
     var commitNonce: String?; var executionEpoch: Int64?
+    var targetLocation: String? = nil
+    var targetDeviceId: String? = nil
+    var localDestination: CloudLocalDestination? = nil
 }
 struct CloudTransferSource: Codable, Sendable {
     struct Transfer: Codable, Sendable {

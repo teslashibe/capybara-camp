@@ -28,6 +28,8 @@ struct CloudTransfer: Codable, Sendable {
     var targetLocation: String; var targetAccountId: String?; var payloadSha256: String; var reviewSha256: String
     var payloadBytes: Int; var uploadedBytes: Int; var uploadedChunks: [Int]?; var chunkBytes: Int
     var state: String; var revision: Int64; var expiresAt: Date; var baseCommit: String?; var fileCount: Int
+    var sourceWorkspaceId: String? = nil
+    var targetDeviceId: String? = nil
 }
 struct TransferReviewJob: Codable, Sendable {
     var id: String; var session: CloudSession; var input: CloudWorkspaceInput; var capture: TransferCapture

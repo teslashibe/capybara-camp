@@ -23,6 +23,7 @@ func seedNativeTransferHistory(t *testing.T, s *camp.Store, g *camp.GitStore, ow
 		t.Fatal("fixture Git connection", err)
 	}
 	sessions := []camp.Session{}
+	runnerTokens := map[string]string{}
 	for account, grant := range grants {
 		state, err := s.RunnerAccount(ctx, grant.Token)
 		if err != nil {
@@ -84,6 +85,7 @@ func seedNativeTransferHistory(t *testing.T, s *camp.Store, g *camp.GitStore, ow
 			t.Fatal(err)
 		}
 		sessions = append(sessions, session)
+		runnerTokens[state.Provider] = grant.Token
 	}
 	raw, err := json.Marshal(sessions)
 	if err != nil {
@@ -91,5 +93,16 @@ func seedNativeTransferHistory(t *testing.T, s *camp.Store, g *camp.GitStore, ow
 	}
 	if err = os.WriteFile(filepath.Join(directory, "history-sessions.json"), raw, 0600); err != nil {
 		t.Fatal(err)
+	}
+	// Disposable fixture grants only. The test drives the runner's HTTP
+	// acknowledgements; it does not attest a live model or real source process.
+	if os.Getenv("CAMP_NATIVE_FIXTURE_RETURN") == "1" {
+		raw, err = json.Marshal(runnerTokens)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(directory, "return-runner-tokens.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

@@ -835,6 +835,44 @@ This coordinator prepares a destination; it does not publish a local session,
 start a provider or change execution ownership. Its integration with the native
 selection/review screen and committed handoff remains required.
 
+## Native return handoff coordinator
+
+`CampReturnHandoff` starts from an installed destination and re-verifies its
+receipt before creating a move. A private journal saves separate stable keys for
+transfer creation, the source hold and owner confirmation. Uploads advance one
+chunk at a time and reconcile the server's saved chunk inventory after restart.
+The hold binds the selected profile, new conversation UUID, installation receipt
+and transcript revision.
+
+Run its HTTP/PostgreSQL integration test with:
+
+```sh
+CAMP_NATIVE_FIXTURE_HISTORY=1 CAMP_NATIVE_FIXTURE_RETURN=1 \
+  bash tools/test-native-api.sh NativeReturnHandoffAPITests
+```
+
+The fixture uses a separate owner device and teammate login, both providers and
+510 parent/child messages per ticket. It drops responses after the real server
+persists transfer creation, the hold and confirmation. The production Go helper
+reviews the manifest; checkout/install receipts and runner stop proofs are
+synthetic. Provider processes, real GitHub access and the native review screen
+need their separate acceptance tests. Fixture credentials and caches are removed
+when the test exits.
+
+An acknowledged source hold exposes confirmation. Context continuation requires
+an explicit approval; implementation additionally requires explicit execution
+permissions. The exact permissions and handoff revision are saved before the
+confirmation request. The coordinator reconciles a lost confirmation response
+before trying to read an old export that may have become inaccessible after the
+source moved. Completion requires the committed handoff plus the same ticket
+assigned to the selected Mac/profile/conversation at the next execution epoch.
+
+Cancellation is persisted and reconciles any uncertain transfer creation before
+cancelling its upload/hold. If the source already committed, the coordinator
+observes that completed move instead of reporting cancellation. Cache erasure
+invalidates late responses. These states do not themselves start a local model;
+the verified local continuation mapping and native screen remain required.
+
 ## Local destination receipts
 
 Schema 35 extends the existing source-hold protocol to a local destination.
