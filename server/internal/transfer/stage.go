@@ -341,7 +341,10 @@ func (s *Stager) verifyBase(ctx context.Context, m Manifest) error {
 		if err != nil {
 			return err
 		}
-		if hash(body) != file.BeforeSHA256 || secretPattern.Match(body) {
+		// The base already lives in this authorized clone and nothing is
+		// exported from it, so only its reviewed identity matters here. Capture
+		// scans the new body, which is what leaves the source.
+		if hash(body) != file.BeforeSHA256 {
 			return ErrDestination
 		}
 	}

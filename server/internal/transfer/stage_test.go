@@ -436,3 +436,45 @@ func TestStageDoesNotExecuteRepositoryDiffOrMonitorCommands(t *testing.T) {
 		t.Fatal("executed repository command", err)
 	}
 }
+
+func TestStageAppliesChangesToSecretBearingBase(t *testing.T) {
+	source := repo(t)
+	key := "AKIA" + strings.Repeat("Q", 16)
+	write(t, source, "edited.txt", "key = "+key+"\n", 0600)
+	write(t, source, "deleted.txt", "key = "+key+"\n", 0600)
+	gitTest(t, source, "add", ".")
+	gitTest(t, source, "commit", "-qm", "Base")
+	destination, state := t.TempDir(), t.TempDir()
+	gitTest(t, destination, "clone", "-q", "--no-local", source, ".")
+	for _, dir := range []string{destination, state} {
+		if err := os.Chmod(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	branch := "camp/secret-base"
+	gitTest(t, destination, "checkout", "-qb", branch)
+	write(t, source, "edited.txt", "key = removed\n", 0600)
+	if err := os.Remove(filepath.Join(source, "deleted.txt")); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Capture(t.Context(), source, []string{"edited.txt", "deleted.txt"})
+	if err != nil || len(m.Files) != 2 {
+		t.Fatal("Capture refused a change that removes a secret", m.Excluded, err)
+	}
+	review, err := m.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := OpenStager(destination, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err = s.Apply(t.Context(), m, review, branch); err != nil {
+		t.Fatal("Destination refused a reviewed change to a secret-bearing base", err)
+	}
+	assertFile(t, destination, "edited.txt", "key = removed\n")
+	if _, err = os.Lstat(filepath.Join(destination, "deleted.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("deletion not applied", err)
+	}
+}

@@ -229,3 +229,30 @@ func TestManifestRejectsTamperingAndIncludesExclusionsInReview(t *testing.T) {
 		t.Fatal("unknown contract accepted", err)
 	}
 }
+
+func TestCaptureUsesGitExecutableBit(t *testing.T) {
+	dir := repo(t)
+	write(t, dir, "group.txt", "same\n", 0600)
+	write(t, dir, "edited.txt", "before\n", 0600)
+	gitTest(t, dir, "add", ".")
+	gitTest(t, dir, "commit", "-qm", "Base")
+	for _, name := range []string{"group.txt", "edited.txt"} {
+		if err := os.Chmod(filepath.Join(dir, name), 0654); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, dir, "edited.txt", "after\n", 0654)
+	if err := os.Chmod(filepath.Join(dir, "edited.txt"), 0654); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Capture(t.Context(), dir, []string{"group.txt", "edited.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Excluded) != 1 || m.Excluded[0] != (Exclusion{"group.txt", "unchanged"}) {
+		t.Fatal("Group execute bit was reported as a mode change", m.Excluded)
+	}
+	if len(m.Files) != 1 || m.Files[0].Path != "edited.txt" || m.Files[0].Executable || m.Files[0].BeforeExecutable {
+		t.Fatal("Git mode 100644 was captured as executable", m.Files)
+	}
+}

@@ -214,7 +214,8 @@ func readFile(root *os.Root, name string) ([]byte, bool, string, error) {
 	if len(data) > MaxFileBytes {
 		return nil, false, "", ErrLimit
 	}
-	return data, before.Mode()&0111 != 0, "", nil
+	// Git records 100755 from the owner execute bit only.
+	return data, before.Mode()&0100 != 0, "", nil
 }
 
 func Capture(ctx context.Context, dir string, selected []string) (Manifest, error) {
