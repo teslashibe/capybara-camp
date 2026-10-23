@@ -491,6 +491,7 @@ schema and removes it on exit. It must never point at production.
 | [GitHub](docs/github.md) | GitHub App setup, repository authorization and checkouts |
 | [Execution locations](docs/execution-locations.md) | Run on Local/Cloud and transfer limits |
 | [Transfer payload](docs/transfer-payload.md) | Capture format, resumable upload API, encryption, limits and remaining handoff work |
+| [Transcript attachments](docs/attachments.md) | Local import, encrypted byte storage, message permissions and remaining synchronization work |
 | [Cloud provider turns](docs/runner-turns.md) | Streaming, recovery and pending live acceptance |
 | [Cloud chat controls](docs/cloud-controls.md) | Steering, queues, approvals and delivery recovery |
 | [Self-hosting](docs/self-hosting.md) | Kubernetes/K3s configuration, upgrades and backups |

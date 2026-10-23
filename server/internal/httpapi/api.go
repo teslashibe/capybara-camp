@@ -85,6 +85,7 @@ func (a *API) Handler() http.Handler {
 	}))
 	mux.HandleFunc("GET /v1/camps/{camp}/events", a.authorize(a.events))
 	a.sessionRoutes(mux)
+	a.attachmentRoutes(mux)
 	a.transferRoutes(mux)
 	a.workspaceExportRoutes(mux)
 	a.handoffRoutes(mux)
@@ -105,6 +106,9 @@ func (a *API) Handler() http.Handler {
 		}
 		if r.Method != "GET" && r.Method != "HEAD" && r.Body != nil {
 			maximum := int64(64 << 10)
+			if r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/v1/camps/") && strings.Contains(r.URL.Path, "/attachments/") {
+				maximum = 23 << 20
+			}
 			if strings.HasSuffix(r.URL.Path, "/transcript") {
 				maximum = 2 << 20
 			}
@@ -180,6 +184,8 @@ func fail(w http.ResponseWriter, err error) bool {
 		problem(w, 409, "request_state_changed")
 	case errors.Is(err, camp.ErrPlanningBudget):
 		problem(w, 409, "token_ceiling_unavailable")
+	case errors.Is(err, camp.ErrAttachmentCapacity):
+		problem(w, 409, "attachment_storage_limit")
 	case errors.Is(err, camp.ErrInput):
 		problem(w, 400, "invalid_input")
 	default:
@@ -224,6 +230,10 @@ func (a *API) authorize(next authorizedHandler) http.HandlerFunc {
 			if strings.HasSuffix(r.URL.Path, "/transcript") || (r.Method == "PUT" && strings.Contains(r.URL.Path, "/sessions/")) {
 				maximum = 12000
 				scope = "sync:" + u.DeviceID
+			}
+			if strings.Contains(r.URL.Path, "/attachments/") || strings.HasSuffix(r.URL.Path, "/attachment") {
+				maximum = 120
+				scope = "attachment:" + u.DeviceID
 			}
 			if strings.Contains(r.URL.Path, "/requests/") {
 				maximum = 1200

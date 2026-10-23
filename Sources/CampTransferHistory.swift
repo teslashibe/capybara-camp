@@ -107,6 +107,9 @@ actor CampTransferHistory {
         try await cache.saveTransferHistory(TransferHistoryJournal(id:UUID().uuidString.lowercased(),session:session,streams:streams),scope:scope,expectedEpoch:epoch,previousRevision:nil)
     }
     private func validatePage(_ p: CloudTranscript, stream s: TransferHistoryStream, session: CloudSession) throws {
+        guard p.messages.allSatisfy({ ($0.attachments ?? []).isEmpty }) else {
+            throw CampError.message("This history contains attachments; destination byte installation is not available in this build")
+        }
         let revision=s.child?.transcriptRevision ?? session.transcriptRevision
         guard p.revision==revision, p.messages.count<=120, p.before==(p.messages.first?.ordinal ?? 0),
               !p.hasMore || !p.messages.isEmpty && p.before>0,

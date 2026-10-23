@@ -24,8 +24,8 @@ remain in scope. The historical goal text is superseded by this explicit change.
 
 Next: finish attachment byte synchronization and transfer, then shared skills
 and Git publication. Local attachment inspection and verified embedded-byte reads
-are implemented; cloud attachment storage and destination installation remain
-unfinished. See [the attachment contract](attachments.md). Native
+and the cloud storage API are implemented; native synchronization and destination
+installation remain unfinished. See [the attachment contract](attachments.md). Native
 Local-to-Cloud ancestor selection, cloud-source commit capture and Mac restoration
 are implemented; live-provider transfer acceptance remains open. The native
 return review/adoption screen and duplicate-card
@@ -1416,3 +1416,38 @@ These are synthetic local tests; media rendering, cloud transfer and native visu
 acceptance are not established. Computer use remains unavailable while the Mac is
 locked. The sidebar/footer redesign remains a proposal. No release or deployment
 occurred, and memory/Cortex remains excluded.
+
+### Cloud attachment storage checkpoint — October 22
+
+Schema 39 adds encrypted attachment bodies scoped to a parent/conversation and
+immutable attachment descriptors on message revisions. The owner-only upload API
+verifies content hashes and reuses a verified existing body on retry. Publishing
+an embedded descriptor requires a matching stored body in that conversation;
+the complete batch is checked with one query. Byte reads require an authorized
+message, pinned transcript revision and source digest, with current device,
+membership, sharing and parent/child permissions. There is no public or
+hash-only download route. Size, storage and concurrent-request limits are explicit
+in [the attachment contract](attachments.md).
+
+The full PostgreSQL-backed Go race suite and vet pass
+(`build/cloud-attachments-server.log`). Focused final tests also pass after
+batching blob verification and extending the controller-role access check
+(`build/cloud-attachments-final.log`). They cover concurrent/replayed uploads,
+missing-body publication rollback, encrypted storage, corrupted content and
+ciphertext, scope isolation, private sessions, revoked devices, child authority,
+pinned history, HTTP bounds and downgrade refusal. The infrastructure controller
+cannot read encrypted attachment bodies. Linux server, runner and migration builds
+pass.
+
+Native transfer-history, cloud and child-cache suites pass
+(`build/cloud-attachments-native.log`). Native message decoding now retains
+attachment metadata. The native history downloader and server transfer checks
+refuse to move history that would omit its bytes. The additional cloud-cache
+roundtrip test is recorded in `build/cloud-attachments-cache.log`.
+
+Automatic native upload/download, orphan reclamation, media previews, attachment
+installation in both transfer directions and live provider acceptance remain
+unfinished. The local export guard remains until those paths are connected. These
+are local synthetic tests, not a cloud deployment or native visual acceptance.
+V1 remains unreleased, memory/Cortex remains excluded, and Hetzner provisioning
+still happens with the owner after full local acceptance.

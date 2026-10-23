@@ -148,6 +148,40 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if err = Ready(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
+	// Schema 39 cannot be removed while bytes or message references survive.
+	if _, err = pool.Exec(ctx, `INSERT INTO transcript_attachment_blobs(camp_id,parent_session_id,session_id,sha256,byte_count,encrypted_body) VALUES($1,$2,$2,$3,1,$4)`, camp, session, strings.Repeat("e", 64), bytes.Repeat([]byte{1}, 29)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 38); err == nil {
+		t.Fatal("Downgrade discarded attachment bytes")
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM transcript_attachment_blobs`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO messages(session_id,local_id,ordinal) VALUES($1,'attachment-probe',9999);`, session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO message_revisions(session_id,local_id,revision,role,text,attachments) VALUES($1,'attachment-probe',1,'user','', '[{"id":"a:0"}]')`, session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 38); err == nil {
+		t.Fatal("Downgrade discarded attachment provenance")
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM message_revisions WHERE local_id='attachment-probe'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM messages WHERE local_id='attachment-probe'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 38); err != nil {
+		t.Fatal("Empty attachment schema could not downgrade", err)
+	}
+	if Ready(ctx, pool) == nil {
+		t.Fatal("Schema 38 declared ready for attachment-aware writers")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
 	var transferCount int
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM session_transfers WHERE id=$1 AND state='ready' AND base_commit IS NULL AND source_branch IS NULL AND file_count IS NULL`, transfer).Scan(&transferCount); err != nil || transferCount != 1 {
 		t.Fatal("migration lost or invented transfer review metadata", err)
@@ -158,8 +192,14 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = provider.DownTo(ctx, 37); err == nil {
 		t.Fatal("Downgrade discarded unpublished commit ancestry")
 	}
+	if Ready(ctx, pool) == nil {
+		t.Fatal("Partially downgraded attachment schema declared ready")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
 	if err = Ready(ctx, pool); err != nil {
-		t.Fatal("Refused ancestry downgrade changed readiness", err)
+		t.Fatal(err)
 	}
 	var remoteBase string
 	if err = pool.QueryRow(ctx, `SELECT remote_base_commit FROM session_transfers WHERE id=$1`, transfer).Scan(&remoteBase); err != nil || remoteBase != strings.Repeat("b", 40) {
@@ -173,6 +213,9 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	}
 	if _, err = provider.DownTo(ctx, 37); err == nil {
 		t.Fatal("Downgrade discarded retained workspace ancestry")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
 	}
 	if err = Ready(ctx, pool); err != nil {
 		t.Fatal(err)

@@ -35,6 +35,9 @@ func TestProviderContentAndBoundRead(t *testing.T) {
 				t.Fatal(refs, err)
 			}
 			ref := refs[0]
+			if !ref.Valid() {
+				t.Fatal("Parser produced an invalid reference", ref)
+			}
 			if ref.ID != "a:1" || ref.State != "embedded" || ref.Size != len(body) || ref.SHA256 != digest(body) || ref.MediaType != test.media {
 				t.Fatal(ref)
 			}

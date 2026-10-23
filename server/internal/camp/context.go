@@ -2,6 +2,7 @@ package camp
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/teslashibe/capybara-camp/server/internal/auth"
@@ -65,8 +66,8 @@ func readContextMessagesBudget(ctx context.Context, tx pgx.Tx, ref SourceRef, bu
 		}
 		seen[id] = true
 	}
-	rows, err := tx.Query(ctx, `SELECT m.local_id,m.ordinal,v.role,v.text,v.removed,v.revision,v.model,v.effort,v.speed FROM messages m
-      CROSS JOIN LATERAL(SELECT role,text,removed,revision,model,effort,speed FROM message_revisions
+	rows, err := tx.Query(ctx, `SELECT m.local_id,m.ordinal,v.role,v.text,v.removed,v.revision,v.model,v.effort,v.speed,v.attachments FROM messages m
+      CROSS JOIN LATERAL(SELECT role,text,removed,revision,model,effort,speed,attachments FROM message_revisions
         WHERE session_id=m.session_id AND local_id=m.local_id AND revision<=$2 ORDER BY revision DESC LIMIT 1) v
       WHERE m.session_id=$1 AND m.local_id=ANY($3::text[]) AND NOT v.removed ORDER BY m.ordinal`, ref.SessionID, ref.TranscriptRevision, ref.MessageIDs)
 	if err != nil {
@@ -77,10 +78,17 @@ func readContextMessagesBudget(ctx context.Context, tx pgx.Tx, ref SourceRef, bu
 	size := 0
 	for rows.Next() {
 		var m Message
-		if err = rows.Scan(&m.ID, &m.Ordinal, &m.Role, &m.Text, &m.Removed, &m.Revision, &m.Model, &m.Effort, &m.Speed); err != nil {
+		if err = rows.Scan(&m.ID, &m.Ordinal, &m.Role, &m.Text, &m.Removed, &m.Revision, &m.Model, &m.Effort, &m.Speed, &m.Attachments); err != nil {
 			return nil, err
 		}
 		size += len(m.Text)
+		if len(m.Attachments) > 0 {
+			raw, err := json.Marshal(m.Attachments)
+			if err != nil {
+				return nil, err
+			}
+			size += len(raw)
+		}
 		if size > budget {
 			return nil, ErrInput
 		}

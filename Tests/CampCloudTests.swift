@@ -163,10 +163,15 @@ import SQLite3
         catch { assertions += 1 }
         check(try await cache.sessions(scope).count == 1, "failed snapshot leaves records intact")
 
-        let first = CloudMessage(id: "first", ordinal: 0, role: "user", text: "Question", removed: false, revision: 1)
+        var first = CloudMessage(id: "first", ordinal: 0, role: "user", text: "Question", removed: false, revision: 1)
+        first.attachments = [TranscriptAttachment(id:"a:0",kind:"image",source:"inline",sourceDigest:String(repeating:"a",count:64),state:"embedded",mediaType:"image/png",sha256:String(repeating:"b",count:64),size:12)]
+        let attachmentWire = try CampWire.encoder().encode(first)
+        let decodedAttachment = try CampWire.decoder().decode(CloudMessage.self,from:attachmentWire)
+        check(decodedAttachment==first && decodedAttachment.transcriptMessage.attachments==first.attachments,"cloud wire and message projection retain attachment provenance")
         let second = CloudMessage(id: "second", ordinal: 1, role: "assistant", text: "Answer", removed: false, revision: 1)
         try await cache.saveTranscript(CloudTranscript(revision: 1, messages: [first, second], before: 0, hasMore: false), scope: scope, sessionId: value.id)
         check(try await cache.transcript(scope, sessionId: value.id).count == 2, "transcript saved")
+        check(try await cache.transcript(scope,sessionId:value.id).first?.attachments==first.attachments,"cached transcript retains attachment descriptors")
         var amended = second; amended.revision = 2; amended.text = "Amended"
         try await cache.saveTranscript(CloudTranscript(revision: 2, messages: [amended], before: 1, hasMore: false), scope: scope, sessionId: value.id)
         check(try await cache.transcript(scope, sessionId: value.id).map(\.id) == ["second"], "server deletion removes cached message")

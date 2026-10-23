@@ -102,6 +102,9 @@ func transferSource(ctx context.Context, tx pgx.Tx, session Session, t Transfer)
 	if session.ExecutionEpoch != t.SourceEpoch || session.ExecutionLocation != t.SourceLocation || session.ExecutionWorkspaceID != t.SourceWorkspaceID || session.Revision != t.SourceRevision || session.TranscriptRevision != t.SourceTranscriptRevision || session.PermissionRevision != t.SourcePermissionRevision {
 		return ErrRevision
 	}
+	if err := transferAttachmentsPending(ctx, tx, session.ID); err != nil {
+		return err
+	}
 	if session.ExternalOwner || !(oneOf(session.State, "idle", "done") || session.ExecutionLocation == "cloud" && session.State == "waiting") {
 		return ErrTransition
 	}

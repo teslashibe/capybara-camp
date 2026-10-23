@@ -194,7 +194,7 @@ func sourceBytes(block map[string]any, typ, kind string) ([]byte, string, string
 	return nil, "", "unknown", "unsupported"
 }
 
-func decode(encoded, media, kind string) ([]byte, string, string, string) {
+func allowedMediaType(media, kind string) bool {
 	allowed := false
 	switch kind {
 	case "image":
@@ -204,7 +204,11 @@ func decode(encoded, media, kind string) ([]byte, string, string, string) {
 	case "document":
 		allowed = media == "application/pdf" || media == "text/plain" || media == "application/octet-stream"
 	}
-	if !allowed {
+	return allowed
+}
+
+func decode(encoded, media, kind string) ([]byte, string, string, string) {
+	if !allowedMediaType(media, kind) {
 		return nil, "", "inline", "unsupported"
 	}
 	// Reject line breaks and bound before allocating; DecodeString otherwise

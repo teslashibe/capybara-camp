@@ -192,13 +192,13 @@ func (g *GitStore) runnerTurn(ctx context.Context, token, workspaceID, id string
 		if len(ref.MessageIDs) > 0 {
 			messages, err = readContextMessages(ctx, tx, ref)
 		} else {
-			rows, e := tx.Query(ctx, `SELECT m.local_id,m.ordinal,v.role,v.text,v.removed,v.revision,v.model,v.effort,v.speed FROM messages m CROSS JOIN LATERAL(SELECT * FROM message_revisions WHERE session_id=m.session_id AND local_id=m.local_id AND revision<=$2 ORDER BY revision DESC LIMIT 1) v WHERE m.session_id=$1 AND NOT v.removed ORDER BY m.ordinal LIMIT 121`, ref.SessionID, ref.TranscriptRevision)
+			rows, e := tx.Query(ctx, `SELECT m.local_id,m.ordinal,v.role,v.text,v.removed,v.revision,v.model,v.effort,v.speed,v.attachments FROM messages m CROSS JOIN LATERAL(SELECT * FROM message_revisions WHERE session_id=m.session_id AND local_id=m.local_id AND revision<=$2 ORDER BY revision DESC LIMIT 1) v WHERE m.session_id=$1 AND NOT v.removed ORDER BY m.ordinal LIMIT 121`, ref.SessionID, ref.TranscriptRevision)
 			if e != nil {
 				return RunnerTurn{}, e
 			}
 			for rows.Next() {
 				var m Message
-				if e = rows.Scan(&m.ID, &m.Ordinal, &m.Role, &m.Text, &m.Removed, &m.Revision, &m.Model, &m.Effort, &m.Speed); e != nil {
+				if e = rows.Scan(&m.ID, &m.Ordinal, &m.Role, &m.Text, &m.Removed, &m.Revision, &m.Model, &m.Effort, &m.Speed, &m.Attachments); e != nil {
 					rows.Close()
 					return RunnerTurn{}, e
 				}

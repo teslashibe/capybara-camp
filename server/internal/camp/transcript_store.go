@@ -2,6 +2,7 @@ package camp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/jackc/pgx/v5"
@@ -17,6 +18,24 @@ func validateTranscriptMessages(messages []MessageInput, allowEmpty bool) error 
 	positions := map[int64]bool{}
 	for _, m := range messages {
 		size += len(m.Text)
+		if len(m.Attachments) > 64 || m.Removed && len(m.Attachments) > 0 {
+			return ErrInput
+		}
+		ids := map[string]bool{}
+		for _, ref := range m.Attachments {
+			if !ref.valid() || ids[ref.ID] {
+				return ErrInput
+			}
+			ids[ref.ID] = true
+		}
+		metadata, err := json.Marshal(m.Attachments)
+		if err != nil {
+			return ErrInput
+		}
+		if len(m.Attachments) > 0 {
+			size += len(metadata)
+		}
+
 		if len(m.ID) == 0 || len(m.ID) > 256 || len(m.Model) > 200 || len(m.Effort) > 32 || len(m.Speed) > 32 || m.Ordinal < 0 || seen[m.ID] || positions[m.Ordinal] || !oneOf(m.Role, "user", "assistant", "system", "tool") {
 			return ErrInput
 		}
@@ -30,9 +49,20 @@ func validateTranscriptMessages(messages []MessageInput, allowEmpty bool) error 
 }
 
 func appendTranscriptMessages(ctx context.Context, tx pgx.Tx, id string, revision int64, messages []MessageInput) error {
-	var err error
+	if err := verifyAttachmentBlobs(ctx, tx, id, messages); err != nil {
+		return err
+	}
 	for _, m := range messages {
+		refs := m.Attachments
+		if refs == nil {
+			refs = []AttachmentReference{}
+		}
+		encoded, err := json.Marshal(refs)
+		if err != nil {
+			return err
+		}
 		var ordinal int64
+
 		err = tx.QueryRow(ctx, `INSERT INTO messages(session_id,local_id,ordinal) VALUES($1,$2,$3) ON CONFLICT(session_id,local_id) DO UPDATE SET local_id=EXCLUDED.local_id RETURNING ordinal`, id, m.ID, m.Ordinal).Scan(&ordinal)
 		if err != nil {
 			var pgErr *pgconn.PgError
@@ -44,9 +74,53 @@ func appendTranscriptMessages(ctx context.Context, tx pgx.Tx, id string, revisio
 		if ordinal != m.Ordinal {
 			return ErrConflict
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO message_revisions(session_id,local_id,revision,role,text,removed,model,effort,speed) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, m.ID, revision, m.Role, m.Text, m.Removed, m.Model, m.Effort, m.Speed); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO message_revisions(session_id,local_id,revision,role,text,removed,model,effort,speed,attachments) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, id, m.ID, revision, m.Role, m.Text, m.Removed, m.Model, m.Effort, m.Speed, encoded); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func verifyAttachmentBlobs(ctx context.Context, tx pgx.Tx, id string, messages []MessageInput) error {
+	needed := map[string]int{}
+	for _, m := range messages {
+		for _, ref := range m.Attachments {
+			if ref.State == "embedded" {
+				if size, ok := needed[ref.SHA256]; ok && size != ref.Size {
+					return ErrInput
+				}
+				needed[ref.SHA256] = ref.Size
+			}
+		}
+	}
+	if len(needed) == 0 {
+		return nil
+	}
+	hashes := make([]string, 0, len(needed))
+	for hash := range needed {
+		hashes = append(hashes, hash)
+	}
+	rows, err := tx.Query(ctx, `SELECT sha256,byte_count FROM transcript_attachment_blobs WHERE session_id=$1 AND sha256=ANY($2::text[])`, id, hashes)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var hash string
+		var size int
+		if err = rows.Scan(&hash, &size); err != nil {
+			return err
+		}
+		if needed[hash] != size {
+			return ErrInput
+		}
+		delete(needed, hash)
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if len(needed) != 0 {
+		return ErrRevision
 	}
 	return nil
 }
@@ -55,8 +129,8 @@ func readTranscriptAt(ctx context.Context, tx pgx.Tx, id string, revision, befor
 	if before == 0 {
 		before = 1 << 62
 	}
-	rows, err := tx.Query(ctx, `SELECT m.local_id,m.ordinal,v.role,v.text,v.removed,v.revision,v.model,v.effort,v.speed FROM messages m
- CROSS JOIN LATERAL(SELECT role,text,removed,revision,model,effort,speed FROM message_revisions WHERE session_id=m.session_id AND local_id=m.local_id AND revision<=$2 ORDER BY revision DESC LIMIT 1) v
+	rows, err := tx.Query(ctx, `SELECT m.local_id,m.ordinal,v.role,v.text,v.removed,v.revision,v.model,v.effort,v.speed,v.attachments FROM messages m
+ CROSS JOIN LATERAL(SELECT role,text,removed,revision,model,effort,speed,attachments FROM message_revisions WHERE session_id=m.session_id AND local_id=m.local_id AND revision<=$2 ORDER BY revision DESC LIMIT 1) v
  WHERE m.session_id=$1 AND m.ordinal<$3 AND NOT v.removed ORDER BY m.ordinal DESC LIMIT $4`, id, revision, before, limit+1)
 	if err != nil {
 		return Transcript{}, err
@@ -65,15 +139,24 @@ func readTranscriptAt(ctx context.Context, tx pgx.Tx, id string, revision, befor
 	textBytes := 0
 	for rows.Next() {
 		var m Message
-		if err = rows.Scan(&m.ID, &m.Ordinal, &m.Role, &m.Text, &m.Removed, &m.Revision, &m.Model, &m.Effort, &m.Speed); err != nil {
+		if err = rows.Scan(&m.ID, &m.Ordinal, &m.Role, &m.Text, &m.Removed, &m.Revision, &m.Model, &m.Effort, &m.Speed, &m.Attachments); err != nil {
 			rows.Close()
 			return out, err
 		}
-		if len(out.Messages) == limit || (textBytes+len(m.Text) > 1<<20 && len(out.Messages) > 0) {
+		metadata, e := json.Marshal(m.Attachments)
+		if e != nil {
+			rows.Close()
+			return out, e
+		}
+		messageBytes := len(m.Text)
+		if len(m.Attachments) > 0 {
+			messageBytes += len(metadata)
+		}
+		if len(out.Messages) == limit || (textBytes+messageBytes > 1<<20 && len(out.Messages) > 0) {
 			out.HasMore = true
 			break
 		}
-		textBytes += len(m.Text)
+		textBytes += messageBytes
 		out.Messages = append(out.Messages, m)
 	}
 	err = rows.Err()

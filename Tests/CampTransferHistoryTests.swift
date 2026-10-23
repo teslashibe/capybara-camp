@@ -40,6 +40,9 @@ private actor HistoryDownloadFixture: CampAccountTransport {
             let positions: [Int64]=before==0 ? [1,2] : [0]
             var messages=positions.map { CloudMessage(id:"main-\($0)",ordinal:$0,role:$0==0 ? "user" : "assistant",text:"Full original message \($0)",removed:false,model:"recorded",effort:"high",speed:"ultrafast",revision:1) }
             var page=CloudTranscript(revision:3,messages:messages,before:positions[0],hasMore:before==0)
+            if mode=="attachments" {
+                page.messages[0].attachments=[TranscriptAttachment(id:"a:0",kind:"image",source:"inline",sourceDigest:String(repeating:"a",count:64),state:"embedded",mediaType:"image/png",sha256:String(repeating:"b",count:64),size:12)]
+            }
             if mode=="wrong-revision" { page.revision=4 }
             if mode=="bad-cursor" { page.before=99 }
             if mode=="removed" { page.messages[0].removed=true }
@@ -112,7 +115,7 @@ private actor HistoryDownloadFixture: CampAccountTransport {
             var stale=completed; stale.revision += 1
             try await cache.saveTransferHistory(stale,scope:scope,expectedEpoch:await cache.epoch(scope),previousRevision:completed.revision,page:Data("{}".utf8),streamID:session.id,pageIndex:2)
         }
-        for mode in ["wrong-revision","bad-cursor","removed","incomplete","wrong-child","duplicate"] {
+        for mode in ["attachments","wrong-revision","bad-cursor","removed","incomplete","wrong-child","duplicate"] {
             await fixture.configure("")
             let c=try await client()
             if mode=="incomplete" {

@@ -69,14 +69,15 @@ type Session struct {
 	HistoryOnly          bool      `json:"history_only,omitempty"`
 }
 type MessageInput struct {
-	ID      string `json:"id"`
-	Ordinal int64  `json:"ordinal"`
-	Role    string `json:"role"`
-	Text    string `json:"text"`
-	Model   string `json:"model,omitempty"`
-	Effort  string `json:"effort,omitempty"`
-	Speed   string `json:"speed,omitempty"`
-	Removed bool   `json:"removed"`
+	Attachments []AttachmentReference `json:"attachments,omitempty"`
+	ID          string                `json:"id"`
+	Ordinal     int64                 `json:"ordinal"`
+	Role        string                `json:"role"`
+	Text        string                `json:"text"`
+	Model       string                `json:"model,omitempty"`
+	Effort      string                `json:"effort,omitempty"`
+	Speed       string                `json:"speed,omitempty"`
+	Removed     bool                  `json:"removed"`
 }
 type Message struct {
 	MessageInput
