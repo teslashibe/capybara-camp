@@ -146,8 +146,11 @@ extension NoticeDelivery { func updateBadge(_ count: Int) async {} }
                 let size = (try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.intValue ?? Int.max
                 guard size <= 4 << 20 else { throw CampError.message("Notification history exceeds its storage limit") }
                 archive = try JSONDecoder().decode(NoticeArchive.self, from: Data(contentsOf: file))
+                // Older builds could save two cloud notices under one ID. Keep the
+                // newest copy so the archive stays writable.
+                var ids = Set<String>()
+                archive.entries = archive.entries.sorted { $0.created > $1.created }.filter { ids.insert($0.id).inserted }
                 guard archive.version == 1, archive.entries.count <= 1000, archive.seen.count <= 4096,
-                      Set(archive.entries.map(\.id)).count == archive.entries.count,
                       archive.entries.allSatisfy({ $0.id.count == 64 && $0.title.utf8.count <= 1024 && $0.sessionID.utf8.count <= 512 && ["finished", "attention", "plan"].contains($0.kind) }) else { throw CampError.message("Notification history is invalid") }
             } catch { archive = NoticeArchive(); readable = false; self.error = "Notification history could not be opened" }
         }
@@ -267,8 +270,8 @@ extension NoticeDelivery { func updateBadge(_ count: Int) async {} }
     }
     func applyCloud(_ values: [CloudNotification], scope: CloudScope, live: Bool) {
         guard self.scope == scope, values.count <= 1000, values.allSatisfy(\.valid) else { return }
-        var next = archive, alerts: [CampNotice] = []
-        let incoming = values.map { value -> CampNotice in
+        var next = archive, alerts: [CampNotice] = [], ids = Set<String>()
+        let incoming = values.filter { ids.insert($0.id).inserted }.map { value -> CampNotice in
             let id = PublishMessage.hash(Data(value.key(scope: scope).utf8))
             let notice = CampNotice(id: id, sessionID: value.sessionId.map { "camp:" + $0 } ?? "camp-plan:" + (value.planId ?? ""),
                 scope: scope, title: value.title, kind: value.kind, created: value.createdAt, read: value.read,

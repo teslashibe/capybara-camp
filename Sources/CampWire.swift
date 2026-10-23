@@ -164,7 +164,9 @@ struct CloudNotification: Codable, Equatable, Identifiable, Sendable {
     }
     func key(scope: CloudScope) -> String {
         if let requestId { return "request:\(scope.key):\(requestId)" }
-        return "cloud-plan:\(scope.key):\(planId ?? ""):\(planVersion ?? 0)"
+        // One plan version can carry both a ready notice and implementation
+        // notices, so plan-scoped keys include the server's notification ID.
+        return "cloud-plan:\(scope.key):\(planId ?? ""):\(planVersion ?? 0):\(id)"
     }
 }
 struct CloudNotificationPage: Codable, Sendable { var notifications: [CloudNotification]; var next: String; var unread: Int }

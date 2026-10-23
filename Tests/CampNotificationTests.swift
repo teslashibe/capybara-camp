@@ -176,6 +176,30 @@ import Foundation
         precondition(store.selectedID == session.id && store.notifications.unread == 0)
         await store.notifications.flush(); await race.flush()
         precondition(Bridge.activeProcesses.isEmpty)
+        // A plan-ready notice and an implementation notice share one plan version.
+        let planID = UUID().uuidString
+        let ready = CloudNotification(id: UUID().uuidString, kind: "plan", title: "Shared plan", planId: planID, planVersion: 1, revision: 1, read: false, createdAt: Date())
+        let built = CloudNotification(id: UUID().uuidString, kind: "attention", title: "Shared plan", planId: planID, planVersion: 1, revision: 1, read: false, createdAt: Date().addingTimeInterval(1))
+        let planDirectory = root.appendingPathComponent("plan-pair")
+        let planNotices = CampNotifications(directory: planDirectory, delivery: FakeNoticeDelivery(), isActive: { false })
+        planNotices.setScope(a); planNotices.applyCloud([ready, built, built], scope: a, live: false)
+        await planNotices.flush()
+        precondition(planNotices.entries.count == 2 && planNotices.unread == 2, "Plan and implementation notices for one version must stay distinct")
+        let reopenedPlans = CampNotifications(directory: planDirectory, delivery: FakeNoticeDelivery(), isActive: { false })
+        precondition(reopenedPlans.entries.count == 2 && reopenedPlans.error.isEmpty, "Plan notices must reload after restart")
+        // An archive written by an older build with a duplicated ID still opens and saves.
+        let brokenDirectory = root.appendingPathComponent("duplicate-ids")
+        try FileManager.default.createDirectory(at: brokenDirectory, withIntermediateDirectories: true)
+        let pair = try JSONSerialization.jsonObject(with: Data(contentsOf: planDirectory.appendingPathComponent("notifications.json"))) as! [String: Any]
+        var entries = pair["entries"] as! [[String: Any]]
+        entries[1]["id"] = entries[0]["id"]
+        var brokenArchive = pair; brokenArchive["entries"] = entries
+        try JSONSerialization.data(withJSONObject: brokenArchive).write(to: brokenDirectory.appendingPathComponent("notifications.json"))
+        let recovered = CampNotifications(directory: brokenDirectory, delivery: FakeNoticeDelivery(), isActive: { false })
+        precondition(recovered.entries.count == 1 && recovered.error.isEmpty, "Duplicate IDs must not lock the archive")
+        recovered.setScope(a); recovered.applyCloud([ready, built], scope: a, live: false)
+        await recovered.flush()
+        precondition(CampNotifications(directory: brokenDirectory, delivery: FakeNoticeDelivery(), isActive: { false }).entries.count == 2, "Recovered archive must save again")
         print("PASS: notification persistence, replay dedupe, cloud scope/reconnect, private desktop defaults, permission denial, bounded history and native completion routing")
     }
 }
