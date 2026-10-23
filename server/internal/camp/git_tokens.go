@@ -211,6 +211,9 @@ func (g *GitStore) Reap(ctx context.Context) error {
 	if err := g.ReapWorkspaces(ctx); err != nil {
 		return err
 	}
+	if err := g.reapExportTokens(ctx); err != nil {
+		return err
+	}
 	if _, err := g.store.pool.Exec(ctx, `UPDATE git_logins SET state='expired',encrypted_context=NULL,updated_at=now() WHERE state IN ('waiting','exchanging') AND expires_at<=clock_timestamp()`); err != nil {
 		return err
 	}

@@ -11,6 +11,11 @@ private actor ExportFixture: CampAccountTransport {
     var corruptChunk = false
     var loseCancel = false
     var delayChunk = false
+    var checkoutDevice = ""
+    var checkoutMismatch = ""
+    var checkoutRequests = 0
+    func checkout(device:String,mismatch:String="") { checkoutDevice=device; checkoutMismatch=mismatch }
+    func tokenRequests() -> Int { checkoutRequests }
     var historySession: CloudSession?
     func history(_ session:CloudSession) { historySession=session }
     func revokeHistory() { historySession?.permissionRevision += 1 }
@@ -32,7 +37,19 @@ private actor ExportFixture: CampAccountTransport {
             return try CampWire.encoder().encode(session)
         }
 
+        if path.hasSuffix("/checkout-token") {
+            precondition(method=="POST" && key==nil)
+            let input=try JSONSerialization.jsonObject(with:body!) as! [String:Any]
+            precondition(input["sha256"] as? String==value.resultSha256)
+            checkoutRequests += 1
+            var result:[String:Any] = ["token":"ghu_"+String(repeating:"x",count:36),"expires_at":ISO8601DateFormatter().string(from:Date().addingTimeInterval(180)),
+                "export_id":value.id,"device_id":checkoutDevice,"workspace_id":value.workspaceId,
+                "repository":"fixture/repo","base_commit":String(repeating:"c",count:40),"branch":"main","sha256":value.resultSha256]
+            if !checkoutMismatch.isEmpty { result[checkoutMismatch]="wrong" }
+            return try CampWire.body(result)
+        }
         if path.hasSuffix("/exports") {
+
             precondition(method == "POST" && key != nil)
             creates.insert(key!)
             if loseCreate { loseCreate=false; throw URLError(.networkConnectionLost) }
@@ -201,7 +218,49 @@ private actor ExportFixture: CampAccountTransport {
                 }
             }
         }
-        print("PASS: cloud export recovery, installation, changed permissions, cancellation, erasure and integrity")
+        for mismatch in ["", "device_id", "workspace_id", "sha256", "base_commit", "repository", "changed-after-checkout", "cancel-during-checkout", "erase-during-checkout", "receipt"] {
+            try await cache.clear(scope)
+            let checkoutFixture=ExportFixture(value,payload:payload)
+            await checkoutFixture.checkout(device:credential.actor.deviceId,mismatch:["changed-after-checkout","cancel-during-checkout","erase-during-checkout","receipt"].contains(mismatch) ? "" : mismatch)
+            let files=try CampWorkspaceExport(cache:cache,scope:scope,credential:credential,transport:checkoutFixture,epoch:await cache.epoch(scope))
+            try await files.begin(session:session,kind:"capture",paths:["notes.txt"])
+            await rejects("Expected lost create") { try await files.advance() }
+            try await files.advance();try await files.advance()
+            let transferID=UUID().uuidString.lowercased()
+            let review=TransferCapture(payloadSha256:value.resultSha256,reviewSha256:String(repeating:"b",count:64),baseCommit:String(repeating:"c",count:40),branch:"main",files:[.init(path:"notes.txt",bytes:payload.count,deleted:false)],excluded:[])
+            let receipt=TransferCheckoutReceipt(version:1,scope:scope.key,transferID:transferID,repository:"fixture/repo",baseCommit:review.baseCommit,branch:review.branch,destination:"/fixture/workspace-\(scope.key)-\(transferID)")
+            let bridge: @Sendable (String,Data) async throws -> Data = { action,body in
+                if action=="transfer-review" { precondition(body==payload);return try CampWire.encoder().encode(review) }
+                precondition(["","changed-after-checkout","cancel-during-checkout","erase-during-checkout","receipt"].contains(mismatch),"Invalid grant reached the helper")
+                precondition(action=="transfer-checkout")
+                let input=try JSONSerialization.jsonObject(with:body) as! [String:Any]
+                let secret=input["credential"] as! [String:String]
+                precondition(secret["url"]=="https://github.com/fixture/repo.git" && secret["token"]=="ghu_"+String(repeating:"x",count:36))
+                precondition(input["scope"] as? String==scope.key && input["transferID"] as? String==transferID)
+                if mismatch=="changed-after-checkout" { await checkoutFixture.configure(reject:true) }
+                if mismatch=="cancel-during-checkout" { try await files.requestCancellation() }
+                if mismatch=="erase-during-checkout" { try await cache.clear(scope) }
+                var result=receipt
+                if mismatch=="receipt" { result.baseCommit=String(repeating:"f",count:40) }
+                return try JSONEncoder().encode(result)
+            }
+            await rejects("Unreviewed checkout requested a credential") {
+                _ = try await files.prepareLocalCheckout(transferID:transferID,reviewedSHA256:"wrong",callLocal:bridge)
+            }
+            let unreviewedRequests=await checkoutFixture.tokenRequests();precondition(unreviewedRequests==0)
+            if mismatch.isEmpty {
+                let prepared=try await files.prepareLocalCheckout(transferID:transferID,reviewedSHA256:review.reviewSha256,callLocal:bridge)
+                precondition(prepared==receipt)
+                let journal=try await cache.metadata("workspace-export:"+scope.key)!
+                precondition(!String(decoding:journal,as:UTF8.self).contains("ghu_"),"Credential cached in export journal")
+            } else {
+                await rejects("Checkout returned a receipt after \(mismatch)") {
+                    _ = try await files.prepareLocalCheckout(transferID:transferID,reviewedSHA256:review.reviewSha256,callLocal:bridge)
+                }
+            }
+        }
+        print("PASS: cloud export recovery, device-bound checkout, installation, changed permissions, cancellation, erasure and integrity")
+
 
     }
 }

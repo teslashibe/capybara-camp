@@ -727,8 +727,30 @@ removed on exit.
 The bundled Go `transfer-checkout` action prepares a private checkout for one
 owner/Camp scope and transfer UUID. Input selects a GitHub repository, exact base
 commit and destination branch, with a matching short-lived read credential.
-The native account service still needs to issue that credential to the selected
-Mac and connect this helper to transfer review; no token-entry UI is planned.
+Schema 36 adds `POST /v1/camps/{camp}/sessions/{session}/exports/{export}/checkout-token`
+with the reviewed capture's `sha256`. The authenticated device must belong to the
+source owner. The API checks the completed capture, source/history/permission
+revisions, current project, provider installation and Git connection before and
+after GitHub scopes a read token to the exact repository. Root OAuth and runner
+credentials are never returned to the Mac.
+
+One durable grant belongs to each export/device pair. Concurrent or lost-response
+retries return its encrypted saved result; an uncertain provider result closes
+that pair without minting again. Start a new capture to recover from a closed
+or expired grant. Responses are non-cacheable and excluded from shared events
+and idempotency-command payloads. Effective validity is at most five minutes and
+never exceeds the provider or export deadline. Cancellation queues immediate
+revocation; periodic reaping also closes grants after device/membership/source,
+project, provider or Git authority changes. GitHub revocation is an external
+operation and can fail or be delayed; the helper also enforces the response's
+expiry. No promise of instantaneous bearer-token invalidation is made.
+
+The native export coordinator verifies the reviewed digest before requesting the
+grant, validates its device/workspace/repository/base binding, and passes it to
+the bundled helper without saving it to the export cache. It rechecks source
+access and cancellation before returning a receipt. The native selection/review
+screen still needs to compose this operation with history/file installation and
+the committed local handoff; no token-entry UI is planned.
 
 `internal/gitcheckout` contains the transport, credential helper and tree checks
 shared with the cloud runner. Git ignores ambient user/system configuration,

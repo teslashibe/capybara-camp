@@ -154,7 +154,7 @@ actor CampWorkspaceExport {
         busy = true; defer { busy = false }
         return try await readPayload()
     }
-    // Called only while payload() or installLocally() owns the actor's busy guard.
+    // Called only while a public operation owns the actor's busy guard.
     private func readPayload() async throws -> Data? {
         guard let j = try await current(), !j.cancelling, let e = j.export, e.state == "ready" else { return nil }
         var bytes = Data(); bytes.reserveCapacity(e.resultBytes)
@@ -229,5 +229,30 @@ actor CampWorkspaceExport {
         try await authority()
         guard let after=try await current(), after.key==j.key, !after.cancelling else { throw CancellationError() }
         return result
+    }
+
+    // Run before installation. Once files have been staged, resume installation
+    // using its receipt rather than asking checkout preparation to reset them.
+    func prepareLocalCheckout(transferID: String, reviewedSHA256: String,
+                              callLocal: @Sendable (String,Data) async throws -> Data = { try await Bridge.call($0,input:$1) }) async throws -> TransferCheckoutReceipt {
+        guard !busy else { throw CampError.message("A workspace export is already being updated") }
+        busy=true; defer { busy=false }
+        guard let j=try await current(), !j.cancelling, j.kind=="capture", let e=j.export,
+              let raw=try await readPayload() else { throw CampCloudError.invalidResponse }
+        let review=try CampWire.decoder().decode(TransferCapture.self,from:await callLocal("transfer-review",raw))
+        guard review.valid,review.history==nil,review.payload==nil,review.reviewSha256==reviewedSHA256,
+              review.payloadSha256==e.resultSha256,
+              review.files.count+review.excluded.count==j.paths.count,
+              Set(review.files.map(\.path)+review.excluded.map(\.path))==Set(j.paths) else { throw CampCloudError.invalidResponse }
+        guard let before=try await current(),before.key==j.key,!before.cancelling else { throw CancellationError() }
+        let grant=try await request(CloudExportCheckoutToken.self,"POST",base(j)+"/"+e.id+"/checkout-token",
+                                    body:CampWire.body(["sha256":e.resultSha256]))
+        guard let authorized=try await current(),authorized.key==j.key,!authorized.cancelling else { throw CancellationError() }
+        let receipt=try await CampTransferCheckout.prepare(scope:scope,deviceID:credential.actor.deviceId,transferID:transferID,
+            export:e,review:review,grant:grant,callLocal:callLocal)
+        _ = try await fetchChunk(j,index:0)
+        try await authority()
+        guard let after=try await current(),after.key==j.key,!after.cancelling else { throw CancellationError() }
+        return receipt
     }
 }

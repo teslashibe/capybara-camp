@@ -211,6 +211,10 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 	if _, err = provider.DownTo(ctx, 34); err == nil {
 		t.Fatal("Downgrade discarded local destination receipt")
 	}
+	// Newer empty migrations can roll back before the retained receipt refuses.
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
 	if err = Ready(ctx, pool); err != nil {
 		t.Fatal("Refused local destination downgrade changed readiness", err)
 	}
@@ -228,6 +232,18 @@ func TestMigrationPreservesExistingIdentityData(t *testing.T) {
 		t.Fatal("Local handoff reapply", err)
 	}
 	if _, err = pool.Exec(ctx, `INSERT INTO workspace_exports(id,camp_id,session_id,owner_user_id,device_id,workspace_id,workspace_revision,source_epoch,source_revision,transcript_revision,permission_revision,kind,paths) VALUES($1,$2,$3,$4,$5,$6,1,1,1,0,1,'inspect','[]')`, exportID, camp, session, id, device, workspace); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO workspace_export_git_grants(export_id,device_id,state) VALUES($1,$2,'closed')`, exportID, device); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 35); err == nil {
+		t.Fatal("Downgrade discarded export grant replay fence")
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal("Refused grant downgrade changed readiness", err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM workspace_export_git_grants WHERE export_id=$1`, exportID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = provider.DownTo(ctx, 33); err == nil {

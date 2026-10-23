@@ -22,8 +22,7 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: issue owner/device-scoped Git read grants to the native transfer flow and
-connect checkout preparation, file/history installation, attachments and review
+Next: connect the native checkout/grant coordinator, file/history installation, attachments and review
 to the local handoff protocol, then finish the remaining transfer cases,
 shared skills and Git publication. Continue executor-setup acceptance and the
 native design audit as those surfaces are implemented. Validate the full workflow locally before the owner provisions
@@ -134,6 +133,28 @@ HTTP transport and synthetic credentials. No live GitHub authorization or model
 turn is implied. Owner/device-scoped native Git grant issuance, UI invocation,
 missing remote commits, attachments and committed-handoff continuation remain
 open. This does not complete reverse transfer or cloud acceptance.
+
+Schema 36 now issues owner/device-bound Git checkout credentials for a reviewed
+capture. Issuance rechecks source, project, provider and Git authority around the
+external GitHub call; concurrent/replayed requests reuse the same saved grant.
+Uncertain minting closes that export/device pair without automatic retry.
+Cancellation and periodic authority checks retire stored tokens and queue
+revocation. The native export coordinator validates the grant and review, invokes
+the bundled checkout helper without caching credentials, and rechecks access
+before returning its receipt. Native screen composition and actual local
+continuation are still outstanding; this does not complete reverse transfer.
+The focused PostgreSQL race/migration/HTTP tests pass
+(`build/export-grants-final.log`), including concurrent issuance, lost replies,
+teammate/device isolation, changed source authority during provider work,
+revocation and abandoned issuance. The full server race suite and vet pass
+(`build/export-grants-server-suite.log`). Native export, pinned history, transfer
+and bundled-helper regression suites pass (`build/export-checkout-native.log`).
+The coordinator tests reject mismatched grant fields, unreviewed input, changed
+permissions, cancellation and cache erasure, and verify that the grant is absent
+from the export journal. Linux API/migration builds and staged secret scanning
+pass. These tests use synthetic Git/provider credentials; they do not establish
+live GitHub authorization, native screen acceptance or provider continuation.
+
 
 Cloud source inspection and selected-file capture are now implemented at schema
 34. The owner creates a bounded export; only its assigned runner can claim it.

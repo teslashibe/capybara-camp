@@ -99,6 +99,16 @@ func (s *Store) expireWorkspaceExports(ctx context.Context, tx pgx.Tx, owner str
 	if err != nil {
 		return err
 	}
+	// Match the reaper's grant-before-revocation order across owner devices.
+	if _, err = tx.Exec(ctx, `SELECT t.export_id FROM workspace_export_git_grants t JOIN workspace_exports e ON e.id=t.export_id WHERE e.owner_user_id=$1 AND e.state IN ('expired','cancelled','failed') ORDER BY t.export_id,t.device_id FOR UPDATE OF t`, owner); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE git_revocations SET not_before=LEAST(not_before,now()) WHERE id IN (SELECT t.revocation_id FROM workspace_export_git_grants t JOIN workspace_exports e ON e.id=t.export_id WHERE e.owner_user_id=$1 AND e.state IN ('expired','cancelled','failed'))`, owner); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE workspace_export_git_grants t SET state='closed',encrypted_token=NULL FROM workspace_exports e WHERE t.export_id=e.id AND e.owner_user_id=$1 AND e.state IN ('expired','cancelled','failed') AND t.state<>'closed'`, owner); err != nil {
+		return err
+	}
 	_, err = tx.Exec(ctx, `DELETE FROM workspace_export_chunks c USING workspace_exports e WHERE c.export_id=e.id AND e.owner_user_id=$1 AND e.state IN ('expired','cancelled','failed')`, owner)
 	return err
 }
@@ -269,38 +279,49 @@ func (g *GitStore) WorkspaceExportChunk(ctx context.Context, a auth.Actor, campI
 		return out, err
 	}
 	defer tx.Rollback(ctx)
-	e, err := s.ownerWorkspaceExport(ctx, tx, a, campID, sessionID, id, false)
+	e, _, err := g.authorizedWorkspaceExport(ctx, tx, a, campID, sessionID, id)
 	if err != nil {
 		return out, err
-	}
-	if e.State != "ready" {
-		return out, ErrTransition
-	}
-	// Recheck current owner access and pinned source before exposing file bytes.
-	session, err := s.readSession(ctx, tx, a, campID, sessionID)
-	if err != nil {
-		return out, err
-	}
-	if err = exportSource(ctx, tx, session, e); err != nil {
-		return out, err
-	}
-	w, err := readWorkspace(ctx, tx, a, campID, e.WorkspaceID)
-	if err != nil {
-		return out, err
-	}
-	if w.State != "ready" || w.Revision != e.WorkspaceRevision {
-		return out, ErrRevision
-	}
-	authority, err := g.workspaceAuthority(ctx, tx, a, campID, sessionID, WorkspaceInput{ProviderAccountID: w.ProviderAccountID, GitConnectionID: w.GitConnectionID})
-	if err != nil {
-		return out, err
-	}
-	if authority.git.Epoch != w.GitEpoch || authority.account.Epoch != w.ProviderEpoch || authority.project.ID != w.ProjectID || authority.project.Revision != w.ProjectRevision {
-		return out, ErrRevision
 	}
 	out, err = s.exportChunk(ctx, tx, e, index)
 	if err != nil {
 		return out, err
 	}
 	return out, tx.Commit(ctx)
+}
+
+// File downloads and checkout credentials share the same source and authority checks.
+func (g *GitStore) authorizedWorkspaceExport(ctx context.Context, tx pgx.Tx, a auth.Actor, campID, sessionID, id string) (WorkspaceExport, workspaceLease, error) {
+	e, err := g.store.ownerWorkspaceExport(ctx, tx, a, campID, sessionID, id, false)
+	if err != nil {
+		return e, workspaceLease{}, err
+	}
+	if e.State != "ready" {
+		return e, workspaceLease{}, ErrTransition
+	}
+	// Recheck current owner access and pinned source before exposing file bytes.
+	session, err := g.store.readSession(ctx, tx, a, campID, sessionID)
+	if err != nil {
+		return e, workspaceLease{}, err
+	}
+	if err = exportSource(ctx, tx, session, e); err != nil {
+		return e, workspaceLease{}, err
+	}
+	w, err := readWorkspace(ctx, tx, a, campID, e.WorkspaceID)
+	if err != nil {
+		return e, workspaceLease{}, err
+	}
+	if w.State != "ready" || w.Revision != e.WorkspaceRevision {
+		return e, workspaceLease{}, ErrRevision
+	}
+	authority, err := g.workspaceAuthority(ctx, tx, a, campID, sessionID, WorkspaceInput{ProviderAccountID: w.ProviderAccountID, GitConnectionID: w.GitConnectionID})
+	if err != nil {
+		return e, workspaceLease{}, err
+	}
+	if authority.git.Epoch != w.GitEpoch || authority.account.Epoch != w.ProviderEpoch || authority.project.ID != w.ProjectID || authority.project.Revision != w.ProjectRevision {
+		return e, workspaceLease{}, ErrRevision
+	}
+	l := workspaceLease{value: w}
+	err = tx.QueryRow(ctx, `SELECT installation_page,repository_page FROM ticket_workspaces WHERE id=$1`, w.ID).Scan(&l.installationPage, &l.repositoryPage)
+	return e, l, err
 }

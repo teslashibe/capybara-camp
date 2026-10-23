@@ -297,7 +297,7 @@ unfinished. See the [export contract](docs/transfer-payload.md#cloud-source-expo
 The local destination API now accepts an owner-Mac receipt and explicit context
 continuation approval. A fresh source stop proof then moves the same ticket to
 the selected local profile while preserving its shared parent/subagent history.
-Native checkout preparation, continuation and the reverse-transfer review remain open;
+Native continuation and the reverse-transfer review remain open;
 this backend path does not yet provide a complete Cloud-to-Local journey.
 The native history downloader preserves pinned parent and subagent messages in a
 resumable local cache, with integrity and permission checks before it returns an
@@ -305,8 +305,10 @@ archive. Real local API tests cover both providers. The bundled installer now
 preserves that archive privately alongside reviewed files in an existing isolated
 checkout, with restart recovery and a receipt bound to the selected profile.
 The Go checkout preparer can create that private workspace at an exact remote
-commit, sharing the cloud runner's Git safeguards. Native Git grant issuance and
-review integration, missing remote commits, attachments and connecting the
+commit, sharing the cloud runner's Git safeguards. The API issues a short-lived,
+repository-scoped read grant to the signed-in owner device, and the native
+coordinator passes it directly to the helper after verifying the reviewed export.
+The review screen integration, missing remote commits, attachments and connecting the
 handoff to actual local continuation remain part of the unfinished transfer flow.
 The native publisher includes saved subagent histories with a shared or private
 Camp copy. Child transcripts stay under the parent's permissions and have their

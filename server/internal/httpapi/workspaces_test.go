@@ -214,6 +214,54 @@ func TestWorkspaceHTTPRequiresOwnerAndReplaysReceipt(t *testing.T) {
 	call("PUT", executionPath, tokens[0], uuid.NewString(), assignment, 200)
 	call("GET", executionPath, tokens[1], "", nil, 404)
 	call("GET", executionPath, tokens[0], "", nil, 200)
+	{
+		// A destination Mac gets a distinct owner/device-bound read credential
+		// after capturing a reviewed export, never the runner's credential response.
+		current, err := store.Session(ctx, actors[0], c.ID, session.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		exportsPath := "/v1/camps/" + c.ID + "/sessions/" + session.ID + "/exports"
+		exportBody, _ := json.Marshal(camp.WorkspaceExportInput{Kind: "capture", Paths: []string{"file.txt"}, ExpectedEpoch: current.ExecutionEpoch, ExpectedRevision: current.Revision, ExpectedTranscriptRevision: current.TranscriptRevision, ExpectedPermissionRevision: current.PermissionRevision})
+		var exported camp.WorkspaceExport
+		if err = json.Unmarshal(call("POST", exportsPath, tokens[0], uuid.NewString(), exportBody, 201), &exported); err != nil {
+			t.Fatal(err)
+		}
+		exportClaim := uuid.NewString()
+		claimBody, _ := json.Marshal(map[string]string{"claim_id": exportClaim})
+		runnerExportPath := "/v1/runner/exports/" + exported.ID
+		call("POST", runnerExportPath+"/claim", grant.Token, "", claimBody, 200)
+		fileBytes := []byte("reviewed bytes")
+		fileHash := sha256.Sum256(fileBytes)
+		payload, _ := json.Marshal(transfer.Manifest{Version: 1, BaseCommit: workspace.BaseCommit, Branch: workspace.Branch, Files: []transfer.File{{Path: "file.txt", Data: fileBytes, SHA256: hex.EncodeToString(fileHash[:])}}})
+		payloadHash := sha256.Sum256(payload)
+		digest := hex.EncodeToString(payloadHash[:])
+		resultBody, _ := json.Marshal(camp.WorkspaceExportResultInput{ClaimID: exportClaim, SHA256: digest, Bytes: len(payload)})
+		call("POST", runnerExportPath+"/result", grant.Token, "", resultBody, 200)
+		chunkBody, _ := json.Marshal(map[string]any{"claim_id": exportClaim, "data": payload, "sha256": digest})
+		call("PUT", runnerExportPath+"/chunks/0", grant.Token, "", chunkBody, 200)
+		call("POST", runnerExportPath+"/complete", grant.Token, "", claimBody, 200)
+		tokenPath := exportsPath + "/" + exported.ID + "/checkout-token"
+		checkoutBody, _ := json.Marshal(map[string]string{"sha256": digest})
+		call("POST", tokenPath, "", "", checkoutBody, 401)
+		call("POST", tokenPath, grant.Token, "", checkoutBody, 401)
+		call("POST", tokenPath, tokens[1], "", checkoutBody, 404)
+		call("POST", tokenPath, tokens[0], "", []byte(`{"sha256":"wrong"}`), 409)
+		call("POST", tokenPath, tokens[0], "", []byte(`{"sha256":"wrong","device_id":"injected"}`), 400)
+		checkoutRaw := call("POST", tokenPath, tokens[0], "", checkoutBody, 200)
+		var checkout camp.ExportCheckoutToken
+		if err = json.Unmarshal(checkoutRaw, &checkout); err != nil || checkout.DeviceID != actors[0].DeviceID || checkout.WorkspaceID != workspace.ID || checkout.Token == "" || checkout.SHA256 != digest {
+			t.Fatal("invalid native checkout response", err)
+		}
+		if !bytes.Equal(checkoutRaw, call("POST", tokenPath, tokens[0], "", checkoutBody, 200)) {
+			t.Fatal("lost native token response changed")
+		}
+		if bytes.Contains(call("GET", exportsPath+"/"+exported.ID, tokens[0], "", nil, 200), []byte(checkout.Token)) {
+			t.Fatal("export metadata leaked credential")
+		}
+		call("POST", exportsPath+"/"+exported.ID+"/cancel", tokens[0], "", []byte(`{}`), 200)
+		call("POST", tokenPath, tokens[0], "", checkoutBody, 409)
+	}
 	raw = call("POST", "/v1/camps/"+c.ID+"/sessions/"+session.ID+"/requests", tokens[0], uuid.NewString(), []byte(`{"prompt":"Use this workspace"}`), 201)
 	var request camp.Request
 	if err = json.Unmarshal(raw, &request); err != nil {

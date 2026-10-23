@@ -10,6 +10,18 @@ import (
 
 func (a *API) workspaceExportRoutes(mux *http.ServeMux) {
 	const base = "/v1/camps/{camp}/sessions/{session}/exports"
+	mux.HandleFunc("POST "+base+"/{export}/checkout-token", a.gitAuthorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
+		var in struct {
+			SHA256 string `json:"sha256"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		value, err := a.Git.WorkspaceExportCheckoutToken(r.Context(), u, r.PathValue("camp"), r.PathValue("session"), r.PathValue("export"), in.SHA256)
+		if !fail(w, err) {
+			write(w, 200, value)
+		}
+	}))
 	mux.HandleFunc("POST "+base, a.gitAuthorize(func(w http.ResponseWriter, r *http.Request, u auth.Actor) {
 		var in camp.WorkspaceExportInput
 		if !decode(w, r, &in) {
