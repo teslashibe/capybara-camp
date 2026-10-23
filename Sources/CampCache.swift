@@ -728,6 +728,14 @@ actor CampCache {
             attempt.request.streamSeq = seq; attempt.pendingStream = nil; try saveAttempt(attempt)
         }
     }
+    // The server refused this staged event for good; the turn it belonged to is over.
+    func discardWorkerEvent(_ id: String, body: Data, scope: CloudScope, expectedEpoch: Int64) throws {
+        try transaction {
+            try checkEpoch(scope, expectedEpoch)
+            guard var attempt = try workerAttempt(id, scope: scope), attempt.pendingStream == body else { return }
+            attempt.pendingStream = nil; try saveAttempt(attempt)
+        }
+    }
     func markWorkerControl(_ id: String, control: String, scope: CloudScope, expectedEpoch: Int64) throws -> Bool {
         try transaction {
             try checkEpoch(scope, expectedEpoch)

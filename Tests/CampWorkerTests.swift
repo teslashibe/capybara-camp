@@ -18,7 +18,9 @@ actor WorkerFixture: CampPublishingTransport {
     var streamEvents: [Data] = []
     var controls: [[String: Any]] = []
     var loseStream = false
+    var refuseFinish = false
     func loseNextStream() { loseStream = true }
+    func refuseFinishes() { refuseFinish = true }
     func addControl(_ input: [String: Any]) { controls.append(input) }
     func events() -> [Data] { streamEvents }
     func liveText() -> String { streamedText }
@@ -89,6 +91,7 @@ actor WorkerFixture: CampPublishingTransport {
             case "release": request.state = "queued"; request.leaseToken = nil
             case "heartbeat": break
             case "finish", "reconcile":
+                if refuseFinish { throw CampCloudError.server(409, "invalid_transition") }
                 request.state = body["outcome"] as! String
                 finalPayload["output"] = body["output"] as? String
                 if let usage = body["usage"] as? [String: Int] { finalPayload["input_tokens"] = usage["input_tokens"].map(String.init) }
@@ -145,6 +148,27 @@ actor WorkerFixture: CampPublishingTransport {
         await worker.poll(); await worker.poll()
         check(await api.snapshot().1["claim"]?.count == idleClaims, "Idle polling kept writing claim receipts")
         worker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+
+        // A finish the server refuses outright returns the turn to review instead
+        // of blocking every later poll on the same settle.
+        let refusedCache = try CampCache(directory: root.appendingPathComponent("refused-finish"))
+        let refusedAPI = WorkerFixture(request: request(), session: remote)
+        let refused = CampLocalWorker(readFences:{[]},cache: refusedCache, automatic: false, heartbeatInterval: 0)
+        refused.nativeSession = { _ in local }; refused.available = { _ in true }; refused.readHistory = { _ in [] }
+        var refusedFinish: ((ConversationResult) -> Void)?
+        refused.execute = { native, _, prompt, history, _, completed in refusedFinish = completed; return LocalConversation(session: native, history: history, prompt: prompt) }
+        refused.attach(scope: scope, actor: actor, transport: refusedAPI, sessions: [remote])
+        try await eventually("Refused fixture did not start") { await refused.poll(); return refusedFinish != nil }
+        await refused.poll()
+        await refusedAPI.refuseFinishes()
+        refusedFinish?(ConversationResult(state: "completed", message: "", accepted: true))
+        try await eventually("Refused finish was not returned to review") { try await refusedCache.attempts(scope).first?.state == "uncertain" }
+        check(try await refusedCache.attempts(scope).first?.state == "uncertain", "Refused finish stayed pending")
+        check(refused.issues.contains { $0.state == "uncertain" }, "Refused finish was hidden from review")
+        let finishes = await refusedAPI.snapshot().1["finish"]?.count
+        await refused.poll()
+        check(await refusedAPI.snapshot().1["finish"]?.count == finishes, "Refused finish was retried automatically")
+        refused.attach(scope: nil, actor: nil, transport: nil, sessions: [])
 
         // Shared implementations use their own provider identity and deliver
         // persisted stream events and owner controls through the real pipe.

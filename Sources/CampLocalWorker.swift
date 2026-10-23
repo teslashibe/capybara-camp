@@ -151,7 +151,13 @@ import SwiftUI
             }
             let saved = try await cache.attempts(c.scope); try check(c)
             issues = saved.filter { ["uncertain", "start_pending", "running"].contains($0.state) }
-            for attempt in saved where attempt.state == "finish_pending" { try await settle(attempt, c) }
+            // One attempt the server keeps refusing must not stop this Mac from
+            // claiming other shared work.
+            for attempt in saved where attempt.state == "finish_pending" {
+                do { try await settle(attempt, c) }
+                catch is CancellationError { throw CancellationError() }
+                catch { status = "Could not record a finished shared turn · " + error.localizedDescription }
+            }
             if let attempt = saved.first(where: { $0.state == "claimed" }) {
                 try await begin(attempt, c); return
             }
@@ -437,15 +443,34 @@ import SwiftUI
         } catch { if context?.generation == c.generation { status = "Completion needs review · " + error.localizedDescription } }
     }
     private func settle(_ attempt: CloudAttempt, _ c: Context) async throws {
+        let current = try await get(CloudRequest.self, "/v1/camps/\(c.scope.campId)/requests/\(attempt.id)", c)
         if attempt.request.isStreamedLocal, let cache, let epoch = c.epoch,
            let saved = try await cache.attempts(c.scope).first(where: { $0.id == attempt.id }), let pending = saved.pendingStream {
-            let stream = CampLocalImplementationStream(request: saved.request, scope: c.scope, epoch: epoch, cache: cache, transport: c.transport)
-            try await stream.flush(pending)
+            // A staged event can only land while the turn is live. Otherwise, or
+            // when the server refuses it outright, it belongs to an ended turn.
+            var deliverable = ["started", "cancel_requested"].contains(current.state)
+            if deliverable {
+                let stream = CampLocalImplementationStream(request: saved.request, scope: c.scope, epoch: epoch, cache: cache, transport: c.transport)
+                do { try await stream.flush(pending) }
+                catch CampCloudError.server(let code, _) where (400..<500).contains(code) && code != 408 && code != 429 { deliverable = false }
+            }
+            if !deliverable { try await cache.discardWorkerEvent(attempt.id, body: pending, scope: c.scope, expectedEpoch: epoch) }
         }
-        let current = try await get(CloudRequest.self, "/v1/camps/\(c.scope.campId)/requests/\(attempt.id)", c)
-        if !["completed", "failed", "cancelled"].contains(current.state) {
+        if current.state == "claimed" || current.state == "queued" {
+            // The server never saw this turn start: give the claim back rather
+            // than report a finish it cannot accept.
+            if current.state == "claimed", current.leaseToken == attempt.request.leaseToken {
+                _ = try await action("release", attempt: attempt, context: c, key: attempt.startKey)
+            }
+        } else if !["completed", "failed", "cancelled"].contains(current.state) {
             let actionName = current.state == "outcome_unknown" ? "reconcile" : "finish"
-            _ = try await action(actionName, attempt: attempt, context: c, key: attempt.finishKey)
+            do { _ = try await action(actionName, attempt: attempt, context: c, key: attempt.finishKey) }
+            catch CampCloudError.server(let code, _) where (400..<500).contains(code) && code != 408 && code != 429 {
+                // Show it for review again instead of retrying a refused result forever.
+                var value = attempt; value.state = "uncertain"; try await save(value, c)
+                if !issues.contains(where: { $0.id == value.id }) { issues.append(value) }
+                throw CampCloudError.server(code, "finish_refused")
+            }
         }
         try await cache?.removeWorkerAttempt(attempt.id, scope: c.scope, expectedEpoch: c.epoch!)
         issues.removeAll { $0.id == attempt.id }; status = "Shared work finished"; hasWorkHint = true; queueSignal &+= 1
