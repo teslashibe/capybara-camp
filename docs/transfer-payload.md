@@ -873,6 +873,40 @@ observes that completed move instead of reporting cancellation. Cache erasure
 invalidates late responses. These states do not themselves start a local model;
 the verified local continuation mapping and native screen remain required.
 
+## Restored history in a local conversation
+
+The native conversation transport accepts an optional `restoredHistory`
+reference containing the installation scope, transfer ID and receipt hash. The
+bundled helper opens only the corresponding private installation directory,
+verifies its receipt, intent and complete archive, and checks that the selected
+provider profile and checkout match the installation.
+
+The archive uses the existing read-only `read_session` and `list_subagents`
+context tools. Each page contains at most 20 messages and 48 KiB of text;
+individual text chunks are at most 16 KiB and end at UTF-8 boundaries. Original
+message IDs, sparse ordinals and parent/child links are retained. The helper
+holds one bounded snapshot for the conversation and rechecks the receipt and
+archive identity on each read. Erasure, replacement, file permission changes or a
+new hard link refuse further reads. Cancellation closes the existing context
+channel with the provider conversation.
+
+Attaching history does not select new-versus-resumed execution, alter provider
+conversation IDs or grant project tools. The native owner must first verify the
+committed handoff and current execution assignment, then persist the new CLI
+conversation ID before treating it as resumable. That mapping and its native
+review flow remain unfinished. The archived history is the pinned context from
+the move; subsequent provider messages belong to the continuation.
+
+The remaining continuation binding must keep the stable Camp ticket/destination
+identity separate from the actual CLI conversation ID. Normal session publication
+requires its existing local session ID and cannot be used to replace that
+identity. It must also append new continuation messages after the imported
+history with durable, noncolliding message IDs and ordinals. Publishing the new
+provider's transcript from ordinal zero would conflict with the retained parent
+history. Save a provider-created ID before acknowledging it; an uncertain first
+submission must remain reviewable rather than automatically creating another
+conversation.
+
 ## Local destination receipts
 
 Schema 35 extends the existing source-hold protocol to a local destination.

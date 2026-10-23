@@ -18,19 +18,20 @@ import (
 const maxConversationText = 2 << 20
 
 type conversationRequest struct {
-	Session             Session            `json:"session"`
-	Prompt              string             `json:"prompt"`
-	Model               string             `json:"model"`
-	Effort              string             `json:"effort"`
-	Speed               string             `json:"speed"`
-	Mode                string             `json:"mode"`
-	ExecutionApproved   bool               `json:"executionApproved"`
-	NewSession          bool               `json:"newSession"`
-	ExecutionContext    string             `json:"executionContext"`
-	Permissions         PermissionSettings `json:"permissions"`
-	Context             json.RawMessage    `json:"context"`
-	History             []HistorySource    `json:"-"`
-	ReadHistory         HistoryReader      `json:"-"`
+	Session             Session                   `json:"session"`
+	Prompt              string                    `json:"prompt"`
+	Model               string                    `json:"model"`
+	Effort              string                    `json:"effort"`
+	Speed               string                    `json:"speed"`
+	Mode                string                    `json:"mode"`
+	ExecutionApproved   bool                      `json:"executionApproved"`
+	NewSession          bool                      `json:"newSession"`
+	ExecutionContext    string                    `json:"executionContext"`
+	Permissions         PermissionSettings        `json:"permissions"`
+	Context             json.RawMessage           `json:"context"`
+	History             []HistorySource           `json:"-"`
+	ReadHistory         HistoryReader             `json:"-"`
+	RestoredHistory     *RestoredHistoryReference `json:"restoredHistory,omitempty"`
 	grant               *contextGrant
 	inferenceSystem     string
 	inferenceSystemFile string
@@ -180,6 +181,10 @@ func (a *App) runConversation(ctx context.Context, request conversationRequest, 
 	session.CWD, err = canonical(session.CWD, a.Config.Home)
 	if err != nil || !isDir(session.CWD) {
 		return errors.New("Restore the original project folder before resuming this session")
+	}
+	request.Session = session
+	if err = a.attachRestoredHistory(ctx, &request); err != nil {
+		return err
 	}
 	if session.IsSubagent && !planning {
 		return errors.New("Subagents are read-only in Camp. Continue their parent session")

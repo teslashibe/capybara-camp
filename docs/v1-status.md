@@ -193,6 +193,27 @@ It uses the production manifest reviewer, but synthetic checkout/install
 receipts and runner stop acknowledgements. It does not prove live continuation,
 real GitHub access, source-process isolation or native visual acceptance.
 
+The local conversation transport now accepts a pinned installed-history
+reference. The bundled Go helper validates the receipt, archive, provider
+profile and checkout, then serves parent/child history through the existing
+read-only context tool. Pages preserve original IDs, sparse ordinals and Unicode
+text within bounded message/text limits. Cancellation, erasure, replacement and
+unsafe file changes refuse further reads. The helper never changes permissions
+or creates a provider conversation merely because history was attached.
+
+The focused race suite passes for Codex/Claude archives with 260 parent and
+250 child messages, long Unicode text and original-message links
+(`build/restored-history-go-final.log`). The full local helper race suite also
+passes, along with vet and a Linux helper build. The rebuilt native conversation,
+worker, bundled-helper and implementation suites pass
+(`build/restored-history-native-final.log`). The native test caught and corrected
+chat-mode rejection of an explicitly requested new CLI conversation ID; ordinary
+resume calls still reject unsolicited identity changes. Staged secret scanning
+passes. These tests do not complete
+the runnable continuation mapping or native transfer screen. The mapping must
+retain the Camp identity, durably capture the CLI-created conversation ID and
+append new messages without colliding with imported history.
+
 Cloud source inspection and selected-file capture are now implemented at schema
 34. The owner creates a bounded export; only its assigned runner can claim it.
 The runner captures its isolated Git checkout, excludes credentials and uploads

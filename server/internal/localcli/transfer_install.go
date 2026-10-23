@@ -93,6 +93,7 @@ type installedHistory struct {
 		ProfileID          string `json:"profile_id"`
 		ProjectID          string `json:"project_id"`
 		Provider           string `json:"provider"`
+		Title              string `json:"title"`
 		Location           string `json:"execution_location"`
 		WorkspaceID        string `json:"execution_workspace_id"`
 		Epoch              int64  `json:"execution_epoch"`
@@ -105,6 +106,7 @@ type installedHistory struct {
 		ID    string `json:"id"`
 		Child *struct {
 			ID                 string `json:"id"`
+			Name               string `json:"name"`
 			ParentID           string `json:"parent_id"`
 			SourceKey          string `json:"source_key"`
 			SourceRevision     string `json:"source_revision"`

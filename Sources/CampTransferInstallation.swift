@@ -1,5 +1,11 @@
 import Foundation
 
+struct RestoredHistoryReference: Codable, Equatable, Sendable {
+    var scope: String
+    var transferID: String
+    var receiptSHA256: String
+}
+
 struct TransferInstallationTarget: Codable, Equatable, Sendable {
     var profileID: String
     var sourceID: String

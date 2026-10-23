@@ -149,6 +149,26 @@ import Foundation
         try await until { result != nil }
         precondition(result?.state == "uncertain", "A closed input pipe must report an uncertain result without terminating Camp")
         precondition(Bridge.activeProcesses.isEmpty)
-        print("PASS: background navigation, queues, cancellation, isolated planning, usage and bounded process IO")
+        result = nil
+        let restored = LocalConversation(session: a, history: [], prompt: "Continue")
+        var createdID: String?
+        restored.sessionCreated = { createdID = $0 }
+        restored.completed = { result = $0 }
+        try restored.start(prompt: "Continue", model: "", tuning: ModelTuning(), newSession: true,
+                           restoredHistory: RestoredHistoryReference(scope: String(repeating: "a", count: 64), transferID: "11111111-1111-4111-8111-111111111111", receiptSHA256: String(repeating: "b", count: 64)),
+                           makeProcess: { fixtureProcess("restored-history") })
+        try await until { result != nil }
+        precondition(result?.state == "completed" && createdID == "22222222-2222-4222-8222-222222222222")
+        precondition(restored.session.sessionID == a.sessionID && Bridge.activeProcesses.isEmpty)
+        result = nil
+        createdID = nil
+        let unexpected = LocalConversation(session: a, history: [], prompt: "Resume")
+        unexpected.sessionCreated = { createdID = $0 }
+        unexpected.completed = { result = $0 }
+        try unexpected.start(prompt: "Resume", model: "", tuning: ModelTuning(),
+                             makeProcess: { fixtureProcess("unexpected-session-id") })
+        try await until { result != nil }
+        precondition(result?.state == "uncertain" && createdID == nil && Bridge.activeProcesses.isEmpty)
+        print("PASS: background navigation, queues, cancellation, isolated planning, restored history references, usage and bounded process IO")
     }
 }

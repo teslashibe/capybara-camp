@@ -222,6 +222,17 @@ func run(scenario string, args []string) error {
 				return emit(message{"type": "done"})
 			}
 		}
+	case "unexpected-session-id":
+		_ = emit(message{"type": "session", "sessionID": "22222222-2222-4222-8222-222222222222"})
+		_ = emit(message{"type": "started"})
+	case "restored-history":
+		ref := object(r["restoredHistory"])
+		if err := require(len(ref) == 3 && text(ref["scope"]) == strings.Repeat("a", 64) && text(ref["receiptSHA256"]) == strings.Repeat("b", 64) && text(ref["transferID"]) == "11111111-1111-4111-8111-111111111111" && r["newSession"] == true && r["executionApproved"] == false && text(r["mode"]) == "chat"); err != nil {
+			return err
+		}
+		_ = emit(message{"type": "session", "sessionID": "22222222-2222-4222-8222-222222222222"})
+		_ = emit(message{"type": "started"})
+		_ = emit(message{"type": "text", "text": "Continued with attached history"})
 	case "message-settings":
 		_ = emit(message{"type": "started"})
 		_ = emit(message{"type": "settings", "model": "actual-first", "effort": "ultra", "speed": "ultrafast"})

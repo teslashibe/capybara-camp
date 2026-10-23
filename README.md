@@ -316,6 +316,10 @@ source hold and saves explicit continuation/implementation approval before
 confirmation. Restart and lost responses reuse the saved operation keys. The
 server changes ownership only after the source answers the stop proof; a
 committed move retains the same ticket and parent/subagent history.
+The local conversation transport can attach the installed archive through the
+existing read-only Camp context tools, with bounded pages and original message
+links. It verifies the receipt and selected profile/checkout; it does not create
+a provider conversation or authorize execution merely by attaching history.
 The review screen integration, missing remote commits, attachments and connecting the
 handoff to actual local continuation remain part of the unfinished transfer flow.
 The native publisher includes saved subagent histories with a shared or private

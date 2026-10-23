@@ -77,6 +77,7 @@ struct ConversationResult: Sendable {
                contexts: [SessionContext] = [], mode: ConversationMode = .chat,
                executionApproved: Bool = false, newSession: Bool = false,
                executionContext: String = "", permissions: PermissionSettings? = nil,
+               restoredHistory: RestoredHistoryReference? = nil,
                makeProcess: () throws -> Process = { try Bridge.process("conversation") }) throws {
         guard process == nil, !finished, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               prompt.utf8.count <= 65536 else { throw CampError.message("Write a prompt under 64 KB") }
@@ -86,6 +87,7 @@ struct ConversationResult: Sendable {
         let p = try makeProcess(), out = Pipe(), err = Pipe(), stdin = Pipe()
         var object: [String: Any] = ["session": try JSONSerialization.jsonObject(with: JSONEncoder().encode(session)), "prompt": prompt, "model": model, "effort": tuning.effort, "speed": tuning.speed, "context": try JSONSerialization.jsonObject(with: JSONEncoder().encode(contexts)), "mode": mode.rawValue, "executionApproved": executionApproved, "newSession": newSession, "executionContext": executionContext]
         if let permissions { object["permissions"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(permissions)) }
+        if let restoredHistory { object["restoredHistory"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(restoredHistory)) }
         var payload = try JSONSerialization.data(withJSONObject: object)
         payload.append(10)
         let initial = payload
@@ -125,7 +127,8 @@ struct ConversationResult: Sendable {
                             continue
                         }
                         if type == "session", let id = value["sessionID"] as? String {
-                            guard mode == .implementation, !id.isEmpty, id.utf8.count <= 200, !id.contains("/"), !id.contains("\\") else { throw CampError.message("The CLI returned an invalid session identity") }
+                            guard newSession, mode != .planning, !id.isEmpty, id.utf8.count <= 200,
+                                  !id.contains(where: { "/\\\r\n\0".contains($0) }) else { throw CampError.message("The CLI returned an invalid session identity") }
                             await self?.createdSession(id)
                             continue
                         }
