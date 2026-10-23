@@ -10,6 +10,11 @@ means the payload passed validation and is ready for staging; it does not
 change the session's assignment. Used cloud workspaces remain protected by
 the existing transfer requirement.
 
+Attachment import and byte-read behavior is documented in
+[Transcript attachments](attachments.md). Attachment-bearing histories currently
+refuse publication and transfer rather than lose bytes. This temporary guard must
+be replaced by complete attachment synchronization before V1 acceptance.
+
 ## Captured state
 
 `Capture(ctx, directory, selectedPaths)` reads an explicitly selected set of

@@ -1,6 +1,42 @@
 import Foundation
 
 @main struct BridgeIntegrationTests {
+    @MainActor static func attachments(root: URL) async throws {
+        let bytes = Data(repeating: 0x5a, count: (1 << 20) + 13)
+        for provider in ["Codex", "Claude"] {
+            let file = root.appendingPathComponent("attachments-" + provider + ".jsonl")
+            let content: [[String: Any]] = provider == "Claude"
+                ? [["type": "image", "source": ["type": "base64", "media_type": "image/png", "data": bytes.base64EncodedString()]]]
+                : [["type": "input_image", "image_url": "data:image/png;base64," + bytes.base64EncodedString()]]
+            let record: [String: Any] = provider == "Claude"
+                ? ["uuid": "attachment-only", "type": "user", "message": ["content": content]]
+                : ["type": "response_item", "payload": ["type": "message", "id": "attachment-only", "role": "user", "content": content]]
+            var wire = try JSONSerialization.data(withJSONObject: record)
+            wire.append(0x0a)
+            try wire.write(to: file)
+            let session = CampSession(id: "fixture", sessionID: "attachment-fixture", provider: provider, sourceID: "fixture",
+                sourceLabel: "Fixture", root: root.path, title: "Attachment fixture", cwd: root.path, updated: 1,
+                path: file.path, accountID: "", archived: false)
+            struct Input: Encodable { var session: CampSession }
+            let input = try JSONEncoder().encode(Input(session: session))
+            let transcript = try JSONDecoder().decode(Transcript.self, from: await Bridge.call("transcript", input: input))
+            precondition(transcript.total == 1 && transcript.messages.count == 1 && transcript.messages[0].text.isEmpty)
+            let message = transcript.messages[0]
+            let ref = message.attachments!.first!
+            precondition(ref.state == "embedded" && ref.size == bytes.count && ref.sha256 == PublishMessage.hash(bytes))
+            precondition(ref.label == "Image" && ref.availability == "Saved in transcript")
+            let read = try await TranscriptAttachmentReader.read(session: session, messageID: message.id, attachment: ref)
+            precondition(read == bytes, "The bundled helper did not return exact embedded bytes above the text-page limit")
+            precondition(message.contextMessage.attachments == nil, "Text-only provenance falsely claimed to include image bytes")
+            precondition(!HistorySourceSnapshot(messages: [message]).valid, "History publication would drop attachment bytes")
+            do { _ = try await Bridge.call("export-page", input: input); preconditionFailure("Text-only publication accepted an attachment") } catch {}
+            try Data().write(to: file)
+            do { _ = try await TranscriptAttachmentReader.read(session: session, messageID: message.id, attachment: ref); preconditionFailure("Read an attachment removed from its source") } catch {}
+        }
+        // Saved text-only histories remain decodable after adding optional metadata.
+        let legacy = try JSONDecoder().decode(Message.self, from: Data(#"{"id":"old","role":"user","text":"hello"}"#.utf8))
+        precondition(legacy.attachments == nil && HistorySourceSnapshot(messages: [legacy]).valid)
+    }
     @MainActor static func installation(root: URL, repository: URL, capture: TransferCapture) async throws {
         for provider in ["Codex","Claude"] {
             func id() -> String { UUID().uuidString.lowercased() }
@@ -61,6 +97,7 @@ import Foundation
             preconditionFailure("Bridge tests require an isolated support directory")
         }
         let root = URL(fileURLWithPath:path), id = UUID().uuidString.lowercased()
+        try await attachments(root: root)
         let key = String(repeating:"a",count:64)
         let file = root.appendingPathComponent("run-"+key+".lock")
         try Data(("capybara-transfer-v1:"+id+"\n").utf8).write(to:file)

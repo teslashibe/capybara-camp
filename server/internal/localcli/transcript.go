@@ -14,7 +14,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+
+	"github.com/teslashibe/capybara-camp/server/internal/attachments"
 )
+
+// Until attachment bodies are part of Camp publication, refuse a text-only
+// snapshot of a conversation containing attachments. Local viewing is supported.
+var ErrAttachmentPublication = errors.New("This session contains attachments; sharing and transfer require attachment byte synchronization, which is not available in this build")
 
 func validSession(s Session) error {
 	if (s.Provider != "Codex" && s.Provider != "Claude") || s.SessionID == "" || s.Root == "" {
@@ -24,6 +30,20 @@ func validSession(s Session) error {
 }
 
 func records(ctx context.Context, s Session, strict bool, visit func(Message) error) error {
+	return recordsContent(ctx, s, strict, func(m Message, content any) error {
+		var err error
+		m.Attachments, err = attachments.Inspect(content)
+		if err != nil {
+			return err
+		}
+		if m.Text == "" && len(m.Attachments) == 0 {
+			return nil
+		}
+		return visit(m)
+	})
+}
+
+func recordsContent(ctx context.Context, s Session, strict bool, visit func(Message, any) error) error {
 	if err := validSession(s); err != nil {
 		return err
 	}
@@ -46,6 +66,9 @@ func records(ctx context.Context, s Session, strict bool, visit func(Message) er
 				if err = rows.Scan(&id, &raw); err != nil {
 					return err
 				}
+				if len(raw) > maxRecord {
+					return errors.New("The Codex history contains a record larger than 32 MiB")
+				}
 				var item map[string]any
 				if err = json.Unmarshal([]byte(raw), &item); err != nil {
 					return errors.New("The Codex history contains an invalid record")
@@ -58,11 +81,9 @@ func records(ctx context.Context, s Session, strict bool, visit func(Message) er
 					m.Effort = observedEffort(item["effort"])
 					m.Speed = observedSpeed(item["service_tier"])
 				}
-				if m.Text != "" {
-					found = true
-					if err = visit(m); err != nil {
-						return err
-					}
+				found = true
+				if err = visit(m, item["content"]); err != nil {
+					return err
 				}
 			}
 			if err := rows.Err(); err != nil {
@@ -84,9 +105,6 @@ func records(ctx context.Context, s Session, strict bool, visit func(Message) er
 				return nil
 			}
 			text := textBlocks(p["content"])
-			if text == "" {
-				return nil
-			}
 			id := str(p["id"])
 			if id == "" {
 				id = strconv.Itoa(n)
@@ -95,7 +113,7 @@ func records(ctx context.Context, s Session, strict bool, visit func(Message) er
 			if role == "assistant" {
 				m.Model, m.Effort, m.Speed = settings.current.Model, settings.current.Effort, settings.current.Speed
 			}
-			return visit(m)
+			return visit(m, p["content"])
 		})
 	}
 	if s.Path == "" {
@@ -114,9 +132,6 @@ func records(ctx context.Context, s Session, strict bool, visit func(Message) er
 			return nil
 		}
 		text := textBlocks(message["content"])
-		if text == "" {
-			return nil
-		}
 		id := str(d["uuid"])
 		if id == "" {
 			id = strconv.Itoa(n)
@@ -126,7 +141,7 @@ func records(ctx context.Context, s Session, strict bool, visit func(Message) er
 			settings := claudeMessageSettings(d)
 			m.Model, m.Effort, m.Speed = settings.Model, settings.Effort, settings.Speed
 		}
-		return visit(m)
+		return visit(m, message["content"])
 	})
 }
 
@@ -198,18 +213,19 @@ func fingerprint(s Session) (string, error) {
 		values = append(values, []any{path, inode, info.Size(), info.ModTime().UnixNano()})
 	}
 	encoded, err := json.Marshal(values)
-	return hash(append([]byte("transcript-settings-v1\n"), encoded...)), err
+	return hash(append([]byte("transcript-attachments-v1\n"), encoded...)), err
 }
 
 type ExportMessage struct {
-	ID      string `json:"id"`
-	Ordinal int64  `json:"ordinal"`
-	Role    string `json:"role"`
-	Text    string `json:"text"`
-	Removed bool   `json:"removed"`
-	Model   string `json:"model,omitempty"`
-	Effort  string `json:"effort,omitempty"`
-	Speed   string `json:"speed,omitempty"`
+	Attachments []attachments.Reference `json:"attachments,omitempty"`
+	ID          string                  `json:"id"`
+	Ordinal     int64                   `json:"ordinal"`
+	Role        string                  `json:"role"`
+	Text        string                  `json:"text"`
+	Removed     bool                    `json:"removed"`
+	Model       string                  `json:"model,omitempty"`
+	Effort      string                  `json:"effort,omitempty"`
+	Speed       string                  `json:"speed,omitempty"`
 }
 type ExportPage struct {
 	Messages        []ExportMessage `json:"messages"`
@@ -304,6 +320,7 @@ CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY,ordinal INTEGER NOT NULL
 		if removed {
 			m.Removed = true
 			m.Text = ""
+			m.Attachments = nil
 		}
 		encoded, _ := json.Marshal(m)
 		if len(encoded) > 1<<20 {
@@ -345,6 +362,9 @@ func syncIndex(ctx context.Context, db *sql.DB, s Session, stamp string) error {
 		return err
 	}
 	err = records(ctx, s, true, func(m Message) error {
+		if len(m.Attachments) != 0 {
+			return ErrAttachmentPublication
+		}
 		if len(m.ID) > 256 {
 			m.ID = "m:" + hash([]byte(m.ID))
 		}
@@ -356,7 +376,7 @@ func syncIndex(ctx context.Context, db *sql.DB, s Session, stamp string) error {
 		} else if err != nil {
 			return err
 		}
-		body, err := json.Marshal(ExportMessage{ID: m.ID, Ordinal: position, Role: m.Role, Text: m.Text, Model: m.Model, Effort: m.Effort, Speed: m.Speed})
+		body, err := json.Marshal(ExportMessage{ID: m.ID, Ordinal: position, Role: m.Role, Text: m.Text, Model: m.Model, Effort: m.Effort, Speed: m.Speed, Attachments: m.Attachments})
 		if err != nil {
 			return err
 		}
@@ -421,6 +441,7 @@ func indexedContentRevision(ctx context.Context, conn *sql.Conn) (string, error)
 		if removed {
 			message.Removed = true
 			message.Text = ""
+			message.Attachments = nil
 		}
 		data, err := json.Marshal(message)
 		if err != nil || len(data) > 1<<20 {

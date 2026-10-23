@@ -84,6 +84,7 @@ struct Message: Codable, Identifiable, Equatable, Sendable {
     var model: String? = nil
     var effort: String? = nil
     var speed: String? = nil
+    var attachments: [TranscriptAttachment]? = nil
     // Context provenance covers exactly the text supplied to the model.
     var contextMessage: Message { Message(id: id, role: role, text: text) }
     var settingsDescription: String? {
@@ -151,7 +152,7 @@ enum Bridge {
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Capybara Camp")
     }()
     static func process(_ action: String) throws -> Process {
-        guard ["discover", "scan", "transcript", "export-page", "add-source", "children", "child-history-catalog", "child-export-page", "activity", "permissions", "execution-context", "codex-activity-watch", "conversation", "transfer-source", "transfer-fences", "transfer-resolve", "transfer-changes", "transfer-capture", "transfer-review", "transfer-stage", "transfer-install", "transfer-checkout"].contains(action) else {
+        guard ["discover", "scan", "transcript", "transcript-attachment", "export-page", "add-source", "children", "child-history-catalog", "child-export-page", "activity", "permissions", "execution-context", "codex-activity-watch", "conversation", "transfer-source", "transfer-fences", "transfer-resolve", "transfer-changes", "transfer-capture", "transfer-review", "transfer-stage", "transfer-install", "transfer-checkout"].contains(action) else {
             throw CampError.message("Unsupported local session action")
         }
         let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/camp-local")
@@ -2053,6 +2054,9 @@ struct MessageView: View {
             }.font(.system(size: 11)).foregroundStyle(message.role == "user" ? campMuted : campGreen)
             Text((try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text)).font(.system(size: fontSize)).lineSpacing(4).textSelection(.enabled)
                 .lineLimit(nil).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+            if let attachments = message.attachments, !attachments.isEmpty {
+                TranscriptAttachmentList(attachments: attachments)
+            }
         }.padding(message.role == "user" ? 15 : 0).background(message.role == "user" ? Color.white.opacity(0.7) : .clear).clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }

@@ -6,7 +6,7 @@ struct HistorySourceSnapshot: Codable, Equatable, Sendable {
     var bytes: Int { messages.reduce(0) { $0 + $1.text.utf8.count } }
     var valid: Bool {
         messages.count <= 2000 && bytes <= 8 << 20 && Set(messages.map(\.id)).count == messages.count && messages.allSatisfy {
-            !$0.id.isEmpty && $0.id.utf8.count <= 256 && ["user", "assistant", "system", "tool"].contains($0.role) &&
+            ($0.attachments ?? []).isEmpty && !$0.id.isEmpty && $0.id.utf8.count <= 256 && ["user", "assistant", "system", "tool"].contains($0.role) &&
             $0.text.utf8.count <= 1 << 20 && ($0.model?.utf8.count ?? 0) <= 200 && ($0.effort?.utf8.count ?? 0) <= 32 && ($0.speed?.utf8.count ?? 0) <= 32 &&
             ((try? CampWire.encoder().encode($0).count) ?? Int.max) <= (2 << 20) - 4096
         }

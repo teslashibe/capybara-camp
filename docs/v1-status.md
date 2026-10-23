@@ -22,7 +22,10 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: finish attachments, then shared skills and Git publication. Native
+Next: finish attachment byte synchronization and transfer, then shared skills
+and Git publication. Local attachment inspection and verified embedded-byte reads
+are implemented; cloud attachment storage and destination installation remain
+unfinished. See [the attachment contract](attachments.md). Native
 Local-to-Cloud ancestor selection, cloud-source commit capture and Mac restoration
 are implemented; live-provider transfer acceptance remains open. The native
 return review/adoption screen and duplicate-card
@@ -1381,3 +1384,35 @@ Live provider transfers, the full native design/pointer audit, performance/soak,
 security and two complete clean reviews remain release gates. Hetzner provisioning
 still happens with the owner after local acceptance. No cloud deployment or V1
 release occurred; memory/Cortex remains excluded.
+
+### Local attachment import checkpoint — October 22
+
+The shared Go attachment parser now preserves image, document and audio metadata
+in local Codex/Claude transcripts, including attachment-only messages and nested
+Claude tool results. The native message component displays type and availability.
+The bundled reader returns embedded bytes bound to the selected message, block,
+source digest, size and content hash. Amendments, removal, partial writes and
+source changes refuse stale reads. Empty Codex database items no longer fall back
+to older rollout attachments. Local paths, remote URLs and provider file IDs are
+represented without resolving them or exposing those locations in metadata.
+
+Publication currently refuses attachment-bearing histories so the app cannot
+claim a complete transfer while dropping bytes. The index fingerprint forces
+reinspection of old text-only caches, and a refused export rolls back its index
+changes. Native saved-history publication has the same restriction. This is
+unfinished implementation state, not a reduced V1 requirement: cloud encrypted
+byte storage, authorized sharing, both transfer directions, destination history
+installation, previews and live acceptance remain open.
+
+Focused Go race tests pass (`build/attachment-import-final-go.log`), covering
+provider formats, nested content, byte/count/depth limits, stale selections,
+amendments, subagent selection, index rollback and removed database attachments.
+The native bridge, sharing, child-history and plan-import suites pass
+(`build/attachment-import-native.log`). The bridge test reads exact bytes larger
+than 1 MiB from both synthetic provider formats and rejects a removed source.
+The current helper also passes that bridge suite after the final fallback fix
+(`build/attachment-import-final-bridge.log`). Vet and the Linux helper build pass.
+These are synthetic local tests; media rendering, cloud transfer and native visual
+acceptance are not established. Computer use remains unavailable while the Mac is
+locked. The sidebar/footer redesign remains a proposal. No release or deployment
+occurred, and memory/Cortex remains excluded.

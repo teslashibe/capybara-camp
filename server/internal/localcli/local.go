@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/teslashibe/capybara-camp/server/internal/attachments"
 	"github.com/teslashibe/capybara-camp/server/internal/config"
 )
 
@@ -64,12 +65,13 @@ type Session struct {
 }
 
 type Message struct {
-	ID     string `json:"id"`
-	Role   string `json:"role"`
-	Text   string `json:"text"`
-	Model  string `json:"model,omitempty"`
-	Effort string `json:"effort,omitempty"`
-	Speed  string `json:"speed,omitempty"`
+	Attachments []attachments.Reference `json:"attachments,omitempty"`
+	ID          string                  `json:"id"`
+	Role        string                  `json:"role"`
+	Text        string                  `json:"text"`
+	Model       string                  `json:"model,omitempty"`
+	Effort      string                  `json:"effort,omitempty"`
+	Speed       string                  `json:"speed,omitempty"`
 }
 
 type request struct {
@@ -86,6 +88,9 @@ func (a *App) Run(ctx context.Context, action string, input io.Reader) (any, err
 			return nil, errors.New("The UI audit requires an isolated development helper")
 		}
 		return map[string]string{"fixtureRoot": a.Config.FixtureRoot, "support": a.Config.Support}, nil
+	}
+	if action == "transcript-attachment" {
+		return a.readTranscriptAttachment(ctx, input)
 	}
 	if action == "child-history-catalog" || action == "child-export-page" {
 		return a.childHistoryRequest(ctx, action, input)
