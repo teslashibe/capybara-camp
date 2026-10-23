@@ -364,14 +364,43 @@ final class TranscriptWatch {
     var permissionCatalogReader: ((CampSession) async throws -> PermissionCatalog)?
     var cloudChildReader: ((CloudSession) async throws -> CloudChildHistoryList)?
     var selected: CampSession? { sessions.first { $0.id == selectedID } }
+    private var continuationMirrors: [String: String] = [:]
+    private var continuationSources: [String: CampSession] = [:]
+    func applyContinuationBindings(_ bindings: [LocalContinuationBinding]) {
+        var mirrors: [String: String] = [:]
+        var sources: [String: CampSession] = [:]
+        for binding in bindings {
+            guard let current = cloudSessions["camp:" + binding.session.id], binding.matches(current) else { continue }
+            sources["camp:" + current.id] = binding.nativeSession
+            guard let id = binding.providerSessionID else { continue }
+            mirrors[binding.target.provider + "\0" + binding.target.root + "\0" + id] = "camp:" + current.id
+        }
+        if mirrors != continuationMirrors || sources != continuationSources {
+            continuationMirrors = mirrors; continuationSources = sources; filterRevision += 1; objectWillChange.send()
+        }
+        if let current = selected, !current.isCloud,
+           let destination = mirrors[current.provider + "\0" + current.root + "\0" + current.sessionID],
+           let ticket = sessions.first(where: { $0.id == destination }) { open(ticket) }
+    }
+    private func matchesLocalShare(_ share: LocalShare, _ remote: CloudSession) -> Bool {
+        remote.provider == share.local.provider && remote.localSessionId == share.local.sessionID &&
+        remote.profileId == (share.profile?.id ?? share.remote?.profileId)
+    }
     var visibleSessions: [CampSession] {
         if cachedVisibleRevision == filterRevision { return cachedVisible }
-        let locals = Set(sharing.shares.filter { ($0.shared || $0.syncToCloud == true && cloudSessions["camp:" + $0.id]?.executionLocation == "cloud") && cloudSessions["camp:" + $0.id] != nil }.map { $0.local.id })
+        let locals = Set(sharing.shares.filter { share in
+            guard let remote = cloudSessions["camp:" + share.id] else { return false }
+            return share.shared || share.syncToCloud == true &&
+                (remote.executionLocation == "cloud" || !matchesLocalShare(share, remote))
+        }.map { $0.local.id })
         let localIDs = Set(sessions.filter { !$0.isCloud }.map(\.id))
-        let privateMirrors = Set(sharing.shares.filter { !$0.shared && !($0.syncToCloud == true && cloudSessions["camp:" + $0.id]?.executionLocation == "cloud") && localIDs.contains($0.local.id) }.map { "camp:" + $0.id })
+        let privateMirrors = Set(sharing.shares.filter { share in
+            !share.shared && localIDs.contains(share.local.id) && cloudSessions["camp:" + share.id].map { $0.executionLocation != "cloud" && matchesLocalShare(share, $0) } == true
+        }.map { "camp:" + $0.id })
         let implementations = Set(planning.tickets.compactMap(\.implementation).filter(\.providerSessionCreated).map { $0.executor.session.provider + "\0" + $0.context.profile + "\0" + $0.providerSessionID })
         cachedVisible = sessions.filter { s in
-            !locals.contains(s.id) && !privateMirrors.contains(s.id) && (s.isPlan || !implementations.contains(s.provider + "\0" + s.root + "\0" + s.sessionID))
+            !locals.contains(s.id) && !privateMirrors.contains(s.id) && (s.isPlan || !implementations.contains(s.provider + "\0" + s.root + "\0" + s.sessionID)) &&
+            (s.isCloud || continuationMirrors[s.provider + "\0" + s.root + "\0" + s.sessionID] == nil)
         }
         cachedVisibleRevision = filterRevision; return cachedVisible
     }
@@ -475,7 +504,10 @@ final class TranscriptWatch {
         }
         sharing.changed = { [weak self] in
             guard let self else { return }
-            let selection = Set(self.sharing.shares.map { $0.id + ":" + $0.local.id + ":" + String($0.shared) })
+            let selection = Set(self.sharing.shares.map {
+                [$0.id, $0.local.id, String($0.shared), String($0.syncToCloud == true),
+                 $0.profile?.id ?? "", $0.remote?.profileId ?? "", $0.remote?.localSessionId ?? ""].joined(separator: ":")
+            })
             if self.sharingSelection != selection {
                 self.sharingSelection = selection; self.filterRevision += 1; self.objectWillChange.send()
                 self.cloud.worker.scan()
@@ -535,6 +567,7 @@ final class TranscriptWatch {
             if scope == nil, let previous = self.notifications.scope { self.notifications.prune(scope: previous, allowed: []) }
             self.notifications.setScope(scope)
             self.applyCloud(sessions, projects: projects)
+            self.applyContinuationBindings(Array(self.cloud.localContinuations.values))
             if let result = self.sharedPlanResult,
                self.sharedPlanScope != scope || !result.referencedSessions.isSubset(of: Set(sessions.map(\.id))) {
                 self.sharedPlanResult = nil; self.view = "Board"
@@ -648,7 +681,7 @@ final class TranscriptWatch {
         }) { run.stop() }
         checkPlanningSources()
         if let selectedID, let binding = sharing.shares.first(where: { "camp:" + $0.id == selectedID && !$0.shared }),
-           let remote = cloudSessions[selectedID], !remote.shared, remote.executionLocation != "cloud", sessions.contains(where: { $0.id == binding.local.id }) {
+           let remote = cloudSessions[selectedID], !remote.shared, remote.executionLocation != "cloud", matchesLocalShare(binding, remote), sessions.contains(where: { $0.id == binding.local.id }) {
             self.selectedID = binding.local.id; readGeneration = UUID()
             if let run = conversations[binding.local.id] { messages = run.messages; banner = run.notice }
             else { messages = []; loadHistory() }
@@ -679,7 +712,7 @@ final class TranscriptWatch {
         if let remote = cloudSessions[s.id], cloud.live.sessionID == remote.id, let head = cloud.live.head, head.running {
             return ReportedModelSettings(model:head.model.isEmpty ? nil : head.model,effort:head.effort.isEmpty ? nil : head.effort,speed:head.speed.isEmpty ? nil : head.speed)
         }
-        let native = sharing.native(for: s.id) ?? s
+        let native = localSource(for: s.id) ?? s
         guard let live = activityFor(native), ["running", "waiting"].contains(live.state) else { return nil }
         return ReportedModelSettings(model: live.model.isEmpty ? nil : live.model, effort: live.effort, speed: live.speed)
     }
@@ -698,10 +731,22 @@ final class TranscriptWatch {
         return availableModels(s).first { $0.id == model } ?? ModelOption(id: model, label: model)
     }
     func availableModels(_ s: CampSession) -> [ModelOption] {
-        let source = sharing.native(for: s.id)?.sourceID ?? s.sourceID
+        let source = localSource(for: s.id)?.sourceID ?? s.sourceID
         return modelCatalogs[source] ?? []
     }
-    func shareSource(_ s: CampSession) -> CampSession? { s.isPlan ? nil : s.isCloud ? sharing.native(for: s.id) : s }
+    func shareSource(_ s: CampSession) -> CampSession? {
+        guard !s.isPlan else { return nil }
+        guard s.isCloud else { return s }
+        return publishedLocalSource(for: s.id)
+    }
+    func localSource(for id: String) -> CampSession? {
+        continuationSources[id] ?? publishedLocalSource(for: id)
+    }
+    private func publishedLocalSource(for id: String) -> CampSession? {
+        guard let share = sharing.shares.first(where: { "camp:" + $0.id == id }), let remote = cloudSessions[id],
+              matchesLocalShare(share, remote) else { return nil }
+        return sharing.native(for: id)
+    }
     private func checkPlanningSources() {
         planning.sourcesChanged { references in
             references.allSatisfy { ref in
@@ -782,7 +827,7 @@ final class TranscriptWatch {
             do {
                 let values = try JSONSerialization.jsonObject(with: JSONEncoder().encode(homes))
                 let selectedExecution = selected.flatMap { planning.ticket($0.id)?.implementation }
-                let focus = selectedExecution.map { $0.executor.session.sourceID + ":" + $0.providerSessionID } ?? selectedID.flatMap { sharing.native(for: $0)?.id } ?? selectedID ?? ""
+                let focus = selectedExecution.map { $0.executor.session.sourceID + ":" + $0.providerSessionID } ?? selectedID.flatMap { localSource(for: $0)?.id } ?? selectedID ?? ""
                 let input = try JSONSerialization.data(withJSONObject: ["sources": values, "selectedID": focus])
                 let result = try decoder.decode(ActivityResult.self, from: await Bridge.call("activity", input: input))
                 applyActivity(result)
@@ -842,7 +887,7 @@ final class TranscriptWatch {
             }
             else { indexes[item.id] = sessions.count; sessions.append(item) }
         }
-        if let selected = selected,!selected.isCloud, let live = activityFor(sharing.native(for: selected.id) ?? selected) { children = live.children }
+        if let selected = selected,!selected.isCloud, let live = activityFor(localSource(for: selected.id) ?? selected) { children = live.children }
         if previousActivity != next { sharing.localChanged() }
         if Set(previousActivity.keys) != Set(next.keys) { cloud.worker.scan() }
         planning.drain()

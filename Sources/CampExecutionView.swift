@@ -1,6 +1,11 @@
 import SwiftUI
 
 extension CampStore {
+    func executionLocationLabel(_ session: CampSession) -> String {
+        guard let remote = executionSession(session) else { return "This Mac" }
+        if remote.executionLocation == "cloud" { return "Cloud" }
+        return remote.ownerDeviceId == cloud.credential?.actor.deviceId ? "This Mac" : "Owner’s Mac"
+    }
     func executionSession(_ session: CampSession) -> CloudSession? {
         if let value = cloudSessions[session.id] { return value }
         guard let binding = sharing.binding(for: session) else { return nil }
@@ -12,7 +17,7 @@ struct ExecutionLocationButton: View {
     @ObservedObject var store: CampStore
     let session: CampSession
     var remote: CloudSession? { store.executionSession(session) }
-    var location: String { remote?.executionLocation == "cloud" ? "Cloud" : "This Mac" }
+    var location: String { store.executionLocationLabel(session) }
     var body: some View {
         if ["Codex", "Claude"].contains(session.provider) {
             Button { store.executionSheet = session } label: {
@@ -41,7 +46,6 @@ struct RunLocationView: View {
     @State private var ref = ""
     @State private var implementation = false
     @State private var review = false
-    @State private var reviewLocal = false
     @State private var approved = false
     @State private var copying = false
     @State private var localError = ""
@@ -57,7 +61,7 @@ struct RunLocationView: View {
         transfers = store.cloud.transfers
     }
     var remote: CloudSession? { store.executionSession(session) }
-    var currentLocation: String { remote?.executionLocation == "cloud" ? "Cloud" : "This Mac" }
+    var currentLocation: String { store.executionLocationLabel(session) }
     var candidates: [CloudProviderAccount] { accounts.accounts.filter { $0.provider == session.provider && $0.state == "connected" } }
     var project: CloudProject? { cloud.projects.first { $0.id == (remote?.projectId ?? projectID) } }
     var repositories: [CloudGitRepository] {
@@ -115,7 +119,7 @@ struct RunLocationView: View {
                         }
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
-            }.frame(maxHeight: 480)
+            }.frame(height: 360)
         }.padding(24).frame(width: 540).background(campCream).foregroundStyle(campInk).tint(campGreen)
             .onAppear {
                 location = requestedLocation ?? (currentLocation == "Cloud" ? "Cloud" : "Local")
@@ -134,26 +138,21 @@ struct RunLocationView: View {
                 }
             }
             .onChange(of: candidates.map(\.id)) { _, _ in chooseAccount() }
-            .onChange(of: location) { _, _ in review = false; reviewLocal=false; approved = false; localError = "" }
+            .onChange(of: location) { _, _ in review = false; approved = false; localError = "" }
             .sheet(isPresented: $manageAccounts) { VStack(alignment: .leading) { ScrollView { CampProviderAccountsView(cloud: cloud) }; HStack { Spacer(); Button("Done") { manageAccounts = false } } }.padding(24).frame(width: 600, height: 600).background(campCream) }
             .sheet(isPresented: $manageGit) { VStack(alignment: .leading) { ScrollView { CampGitConnectionsView(cloud: cloud) }; HStack { Spacer(); Button("Done") { manageGit = false } } }.padding(24).frame(width: 600, height: 600).background(campCream) }
             .sheet(isPresented: $connectCamp) { CampConnectionView(cloud: cloud) }
     }
     var localForm: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Uses this Mac and its selected \(session.provider) profile").font(.system(size: 12))
-            if currentLocation == "Cloud", let remote {
-                Text("Review the cloud history before returning. Implementation files need a separate reviewed transfer.").font(.caption).foregroundStyle(campMuted)
-                if execution.target?.requiresTransfer == true {
-                    Text("This session has cloud history or project changes to transfer before moving back").font(.caption).foregroundStyle(campMuted)
-                } else if reviewLocal {
-                    Text("Future prompts will use the original provider session on this Mac").font(.caption)
-                    Button("Use This Mac") { Task { await execution.assign(remote, workspace:nil,permissions:PermissionSettings(),approved:false) } }
-                        .disabled(busy || execution.working || execution.pending)
-                } else { Button("Review move") { reviewLocal=true }
-                    .disabled(busy || execution.working || execution.pending || remote.ownerDeviceId != cloud.credential?.actor.deviceId)
-                }
+            if let remote, currentLocation == "Cloud" || cloud.returnTransfers.sessionID == remote.id {
+                ReturnTransferView(store:store,transfer:cloud.returnTransfers,session:remote,busy:busy)
+            } else if let remote, remote.ownerDeviceId != cloud.credential?.actor.deviceId {
+                Text("This session runs on its owner’s Mac").font(.caption).foregroundStyle(campMuted)
+            } else {
+                Text("Uses this Mac and its selected \(session.provider) profile").font(.system(size: 12))
             }
+
         }
     }
     var importForm: some View {

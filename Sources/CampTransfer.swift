@@ -39,6 +39,20 @@ struct TransferReviewJob: Codable, Sendable {
     var resumePhase: String?; var failure: String?
 }
 
+extension TransferCapture {
+    static func preview(_ path:String, payload:Data) throws -> String {
+        struct Snapshot:Decodable {struct File:Decodable {var path:String;var data:Data?;var deleted:Bool?};var files:[File]}
+        guard let file=try JSONDecoder().decode(Snapshot.self,from:payload).files.first(where:{$0.path==path}) else{throw CampCloudError.invalidResponse}
+        if file.deleted==true{return "This file will be deleted"}
+        let bytes=file.data ?? Data()
+        guard !bytes.contains(0),String(data:bytes,encoding:.utf8) != nil else{return "Binary file · \(bytes.count) bytes"}
+        var prefix=Data(bytes.prefix(65536))
+        while !prefix.isEmpty,String(data:prefix,encoding:.utf8)==nil {prefix.removeLast()}
+        let text=String(decoding:prefix,as:UTF8.self)
+        return text+(bytes.count>65536 ? "\n\nPreview limited to 64 KB" : "")
+    }
+}
+
 @MainActor final class CampTransfer: ObservableObject {
     private struct Connection { var scope: CloudScope; var credential: CloudCredential; var transport: any CampAccountTransport; var generation = UUID(); var epoch: Int64? }
     @Published private(set) var job: TransferReviewJob?
@@ -156,17 +170,7 @@ struct TransferReviewJob: Codable, Sendable {
     func preview(_ path:String) async throws -> String {
         guard let c=connection,let j=job,j.capture.files.contains(where:{$0.path==path}),let data=try await cache?.metadata("transfer-payload:"+c.scope.key+":"+j.id) else{throw CampCloudError.invalidResponse}
         try await authority(c)
-        let text=try await Task.detached {
-            struct Snapshot:Decodable {struct File:Decodable {var path:String;var data:Data?;var deleted:Bool?};var files:[File]}
-            guard let file=try JSONDecoder().decode(Snapshot.self,from:data).files.first(where:{$0.path==path}) else{throw CampCloudError.invalidResponse}
-            if file.deleted==true{return "This file will be deleted"}
-            let bytes=file.data ?? Data()
-            guard !bytes.contains(0),String(data:bytes,encoding:.utf8) != nil else{return "Binary file · \(bytes.count) bytes"}
-            var prefix=Data(bytes.prefix(65536))
-            while !prefix.isEmpty,String(data:prefix,encoding:.utf8)==nil {prefix.removeLast()}
-            let text=String(decoding:prefix,as:UTF8.self)
-            return text+(bytes.count>65536 ? "\n\nPreview limited to 64 KB" : "")
-        }.value
+        let text=try await Task.detached { try TransferCapture.preview(path, payload:data) }.value
         try await authority(c);return text
     }
     func prepare() async {await mutate {j,c in guard j.phase=="review" else{throw CampCloudError.invalidResponse};var j=j;j.phase="uploading";try await self.save(j,c)}}

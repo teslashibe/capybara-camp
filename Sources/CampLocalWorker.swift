@@ -9,6 +9,7 @@ import SwiftUI
     var acceptHandoffSession: ((CloudSession, CloudScope, Int64) async throws -> Void)?
     var execute: ((CampSession, CloudRequest, String, [Message], [SessionContext], @escaping (ConversationResult) -> Void) -> LocalConversation?)?
     var makeContinuationProcess: () throws -> Process = { try Bridge.process("conversation") }
+    var continuationChanged: ((String, CloudScope, Int64) async -> Void)?
     var requestUpdated: ((CloudRequest) -> Void)?
     var readHistory: (CampSession) async throws -> [Message] = { local in
         let body = try CampWire.body(["session": JSONSerialization.jsonObject(with: JSONEncoder().encode(local)), "limit": 120])
@@ -310,6 +311,8 @@ import SwiftUI
                         guard let self else { throw CancellationError() }
                         try self.check(c)
                         try await cache.bindContinuation(sessionID: remote.id, executionEpoch: remote.executionEpoch!, requestID: running.id, providerSessionID: id, scope: c.scope, expectedEpoch: epoch)
+                        await self.continuationChanged?(remote.id, c.scope, epoch)
+                        try self.check(c)
                     }
                 }
                 let stream = CampLocalImplementationStream(request: attempt.request, scope: c.scope, epoch: epoch, cache: cache, transport: c.transport)

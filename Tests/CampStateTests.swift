@@ -189,6 +189,33 @@ private struct NoPromotionWork: CampPublishingTransport {
         precondition(store.sessions.contains { $0.id == localPlanID })
         let linkScope = CloudScope(origin: "https://camp.example", userId: visible.ownerUserId, campId: visible.campId)
         let linkActor = CloudActor(userId: visible.ownerUserId, deviceId: visible.ownerDeviceId, email: "fixture@example.com", name: "Fixture")
+        let board = CampStore(stateDirectory: root.appendingPathComponent("returned-board"))
+        var linked = visible; linked.localSessionId = a.sessionID
+        let share = LocalShare(id: linked.id, local: a, projectId: linked.projectId, shared: false, allowRequests: false,
+            profile: CloudProfile(id: linked.profileId, ownerUserId: linkActor.userId, ownerDeviceId: linkActor.deviceId,
+                provider: a.provider, localId: "fixture", label: "Fixture"), remote: linked, syncToCloud: true)
+        try await board.cloud.cache!.saveShare(share, scope: linkScope, expectedEpoch: 0)
+        board.sessions = [a]
+        board.sharing.attach(scope: linkScope, actor: linkActor, transport: nil)
+        for _ in 0..<100 where !board.sharing.ready { try await Task.sleep(for: .milliseconds(10)) }
+        precondition(board.sharing.ready)
+        board.applyCloud([linked], projects: [])
+        precondition(board.visibleSessions.map(\.id) == [a.id], "A private local copy must keep one original card")
+        linked.executionLocation = "cloud"
+        board.applyCloud([linked], projects: [])
+        precondition(board.visibleSessions.map(\.id) == ["camp:" + linked.id], "The cloud ticket must replace the source card")
+        board.selectedID = "camp:" + linked.id
+        linked.executionLocation = "local"; linked.executionEpoch = 3
+        linked.profileId = UUID().uuidString; linked.localSessionId = UUID().uuidString
+        board.applyCloud([linked], projects: [])
+        precondition(board.visibleSessions.map(\.id) == ["camp:" + linked.id], "Returning must not resurrect the old source card")
+        precondition(board.selectedID == "camp:" + linked.id, "Returning switched to stale source history")
+        precondition(board.shareSource(board.selected!) == nil, "Returned history resolved to the original provider conversation")
+        precondition(board.sessions.contains(a), "Hiding the old source must preserve it locally")
+        precondition(board.executionLocationLabel(board.selected!) == "Owner’s Mac", "A foreign execution device was labelled This Mac")
+        board.applyCloud([], projects: [])
+        precondition(board.visibleSessions.map(\.id) == [a.id], "Disconnect must restore the retained local source")
+        board.sharing.attach(scope: nil, actor: nil, transport: nil)
         let savedLink = PlanPromotionLink(planId: UUID().uuidString, localUpdated: localPlan.updated, fingerprint: try LocalPlanImport.fingerprint(localPlan))
         try await store.cloud.cache!.savePlanPromotion(JSONEncoder().encode(PlanPromotionState(links: [localPlanID: savedLink])), scope: linkScope, expectedEpoch: 0)
         store.planPromotion.attach(scope: linkScope, actor: linkActor, transport: NoPromotionWork(), sessions: [])

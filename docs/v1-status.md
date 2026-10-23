@@ -17,16 +17,15 @@ remain in scope. The historical goal text is superseded by this explicit change.
 | Shared Camps | Go/PostgreSQL auth, membership, sessions, events, requests, native cache/outbox and owner-Mac worker | Real independent users on two Macs, remaining permission/recovery cases, production deployment |
 | Onboarding | Automatic profile discovery before full import, optional Camp sign-in, owner-only cloud account setup, GitHub connections, projects, execution defaults, notifications, skip/resume | Final onboarding validation after remaining services land |
 | Go migration | All native runtime actions use bundled Go; Python source, native fixtures and build/test/CI requirements removed | Final live-provider and release acceptance gates below |
-| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments and new-plan defaults, native Run on controls, reviewed Local-to-Cloud file capture and private transcript copy, multi-ticket per-account scheduling, native steering/queue/stop controls, durable approval/control delivery, a shared request queue, provider subprocess consumption, event streaming and credential revision fencing, mandatory Linux child-process isolation | Native plan-import acceptance, remaining signed-in recovery states, target-runtime isolation validation, complete history/attachment and reverse transfers, complete reported runtime settings and usage states, live sandbox/network/login/control validation and disconnected-Mac execution |
+| Cloud execution | Owner-only accounts/installations, native account forms, scoped grants, sign-in recovery, credential encryption, Kubernetes provisioning, explicit Local/Cloud assignments and new-plan defaults, native Run on controls, reviewed Local-to-Cloud file capture and private transcript copy, multi-ticket per-account scheduling, native steering/queue/stop controls, durable approval/control delivery, a shared request queue, provider subprocess consumption, event streaming and credential revision fencing, mandatory Linux child-process isolation | Native plan-import acceptance, remaining signed-in recovery states, target-runtime isolation validation, remaining attachment and missing-commit transfer cases, complete reported runtime settings and usage states, live sandbox/network/login/control validation and disconnected-Mac execution |
 | Git | Project repository links, local CLI project execution, owner-bound GitHub App authorization, native repository browsing, encrypted tokens, signed revocation, exact-commit and scoped read-token adapters, workspace records, exclusive claims and isolated runner checkouts with restart/cancellation recovery | Execution grants, Git actor attribution in execution, branch/push/PR recovery and live two-user GitHub validation |
 | Shared skills | Existing provider profiles and shared-state contracts | Unified Markdown editing, immutable revisions, rollout and live permission tests |
 | Hosting and release | Public Kubernetes/K3s base, optional runner overlay, pinned provider image, local development builds and resumable notarization/packaging tooling | Hetzner provisioning with the owner, backup restore, two clean reviews, soak tests, actual Developer ID/notarization acceptance, universal V1 release and recorded website demo |
 
-Next: connect the native review/adoption screen to the checkout, installation and
-return-handoff coordinators, suppress duplicate local cards for adopted provider
-conversations, then finish
-attachments and the remaining transfer cases,
-shared skills and Git publication. Continue executor-setup acceptance and the
+Next: finish attachments and missing remote commits, then shared skills and Git
+publication. The native return review/adoption screen and duplicate-card
+suppression are implemented; the latest acceptance evidence is recorded below.
+Continue executor-setup acceptance and the
 native design audit as those surfaces are implemented. Validate the full workflow locally before the owner provisions
 the Hetzner box with us. Cloud sign-in and
 the two-Mac acceptance run follow that deployment. Hardware has not been bought
@@ -1203,3 +1202,39 @@ independent planning on adopted sessions (`build/continuation-worker-recovery.lo
 The worker does not repeat provider work when the API has committed completion but
 the response is lost. Planning leaves the continuation's first-request reservation
 and physical provider ID unchanged.
+
+### Native return review checkpoint — October 22
+
+Run on → Local now connects file selection and preview, full pinned history,
+discovered profile selection, checkout preparation and explicit continuation/tool
+approval to the durable return coordinators. Cancelling after an error or during
+installation works; closing/reopening never supplies approval. An adopted result
+can retry delivery to the board without repeating the ownership move.
+
+Returned tickets retain one card. The old linked source and duplicate physical
+provider log are hidden while their files remain intact. Unrelated profiles stay
+visible. Settings and planning resolve the destination profile, and another
+execution device is labelled Owner’s Mac. A single-binding refresh avoids scanning
+all cached continuations for each provider identity update.
+
+Nine native suites pass in `build/return-screen-final-native.log`, including
+screen recovery, worker, sharing, state, cloud, transfer and planning regressions.
+Both real local API/PostgreSQL journeys pass in
+`build/return-screen-final-api.log`: inspection, selected files, explicit approval,
+independent destination device, retained 260 parent plus 250 child messages,
+owner-only controls, resumed conversation identity and lost-response recovery.
+Provider subprocesses and destination filesystem receipts are synthetic.
+
+Computer use exercised the native return component with isolated fixtures. It
+caught a collapsed scroll area below the Run on header; the content now has an
+explicit height. File preview, two-profile selection, implementation permissions,
+separate approvals, cancellation, Start over and read-only completion passed
+through accessibility. Screenshots are recorded in `docs/ui-audit.md`. The
+reference browser is available again, but native coordinate clicks still report
+no available window. Pointer-edge and complete final design acceptance remain
+open. This is component-level visual evidence, not a full live provider transfer.
+
+Next: attachments and missing remote commits, shared skills, Git publication and
+the remaining live-provider, UI, performance and review acceptance. Joint Hetzner
+provisioning and the signed V1 release/website demo follow those checks. No cloud
+deployment or V1 release occurred; memory/Cortex remains excluded.

@@ -69,7 +69,7 @@ struct SharedExecutionSetupView: View {
                                 Label(target.location == "cloud" ? "Cloud" : source.ownerDeviceId == cloud.credential?.actor.deviceId ? "This Mac" : "Owner’s Mac",
                                     systemImage: target.location == "cloud" ? "cloud" : "desktopcomputer").font(.system(size: 11)).foregroundStyle(campMuted)
                                 Spacer()
-                                if source.ownerUserId == cloud.scope?.userId, let native = store.sharing.native(for: "camp:" + source.id) ?? store.sessions.first(where: { $0.id == "camp:" + source.id }) {
+                                if source.ownerUserId == cloud.scope?.userId, let native = store.localSource(for: "camp:" + source.id) ?? store.sessions.first(where: { $0.id == "camp:" + source.id }) {
                                     Button("Run on") { store.executionSheet = native }.disabled(pending)
                                 }
                             }
@@ -95,7 +95,7 @@ struct SharedExecutionSetupView: View {
             await review.loadTarget(source)
             if let target = review.target, target.location == "cloud", let value = PermissionSettings(wireValues: target.permissions) { permissions = value }
             if let source, source.ownerUserId == cloud.scope?.userId, source.ownerDeviceId == cloud.credential?.actor.deviceId,
-               let native = store.sharing.native(for: "camp:" + source.id) {
+               let native = store.localSource(for: "camp:" + source.id) {
                 do { let value = try await store.permissionCatalog(native); if !Task.isCancelled { catalog = value } }
                 catch { if !Task.isCancelled { self.error = error.localizedDescription } }
             }
@@ -122,7 +122,7 @@ struct SharedExecutionSetupView: View {
             tune: { effort, speed in if let effort { tuning.effort = effort }; if let speed { tuning.speed = speed } })
     }
     private func models(_ source: CloudSession) -> [ModelOption] {
-        (store.sharing.native(for: "camp:" + source.id) ?? store.sessions.first { $0.id == "camp:" + source.id }).map(store.availableModels) ?? []
+        (store.localSource(for: "camp:" + source.id) ?? store.sessions.first { $0.id == "camp:" + source.id }).map(store.availableModels) ?? []
     }
     private func ownerName(_ id: String) -> String { id == cloud.scope?.userId ? "You" : cloud.members.first { $0.userId == id }?.name ?? "Teammate" }
     private func approvalPanel(_ value: SharedExecutionApproval) -> some View {
@@ -142,7 +142,7 @@ struct SharedExecutionSetupView: View {
     private func inspect(_ value: SharedExecutionApproval) async throws -> String {
         guard let remote = cloud.sessions.first(where: { $0.id == value.sessionId }), remote.profileId == value.profileId,
               remote.ownerDeviceId == value.ownerDeviceId, remote.permissionRevision == value.permissionRevision,
-              let local = store.sharing.native(for: "camp:" + remote.id), local.sessionID == remote.localSessionId,
+              let local = store.localSource(for: "camp:" + remote.id), local.sessionID == remote.localSessionId,
               local.provider == value.provider, let settings = value.settings else { throw CampError.message("Import this executor profile on its owning Mac before approval") }
         let context = try await store.inspectExecution(local, permissions: settings)
         guard context.provider == local.provider,

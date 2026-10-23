@@ -785,3 +785,33 @@ Computer use still reports a locked Mac. The added review line, disabled/ready
 states, changed-history error and full transfer click-through have not received
 visual acceptance. These development signatures do not satisfy the public
 Developer ID/notarization release gate.
+
+## Return-to-Mac review — October 22
+
+`tools/return-transfer-ui-audit.sh` builds the production return component inside
+an isolated native Run on window, using discovered-profile fixtures and synthetic
+file/install/handoff responses. It never starts a provider or reads personal
+profiles. The complete native RunLocationView/real-service journey remains part
+of final acceptance.
+
+The first screenshot exposed a zero-height scroll area: the accessible controls
+existed but were invisible below the header. RunLocationView and the audit now
+reserve 360 points for the scroll content. The rebuilt 540-point window shows
+file review, profile selection, permissions and actions without clipping.
+
+Computer use passed file-preview open/close, switching between two profiles,
+implementation selection, the shared Claude permission menu, separate context
+and tool approvals, cancellation before commit, Start over, and read-only move
+completion. Context consent alone leaves the implementation Move action disabled.
+The completion view retains the same ticket/history wording. Captures:
+`build/ui-audit/return-confirm-oct22.png` and
+`build/ui-audit/return-complete-oct22.png`. The fixture's static outer header still
+says Currently Cloud after completion; the production header reads the updated
+session. This harness does not prove that final integrated header transition.
+
+The approved mock's Run on and Move to cloud dialogs are accessible again and
+were inspected during this pass. Native pointer coordinates still return
+`noWindowsAvailable`; accessibility clicks and screenshots work. Pointer-edge,
+full keyboard, long-file-list, integrated sheet and final matching-size design
+checks remain open. The review count also needs singular/plural wording in the
+final UI pass (one change currently says “1 reviewed project changes”).

@@ -932,8 +932,9 @@ Returned runs count against local execution capacity and use the existing lease,
 stop, ordered stream and owner-control paths. Missing/stale bindings cannot
 launch. An unknown first submission or reserved process-creation failure remains
 fenced against replacement. Normal snapshot publication must not overwrite the
-retained history. The transfer review/adoption screen and suppression of the
-physical provider log's duplicate local card still require integration.
+retained history. The native return screen adopts the binding and keeps the Camp
+ticket visible while hiding its duplicate physical provider log. The original
+source copy stays on disk and returns to the local list after disconnecting.
 
 ## Local continuation streams
 
@@ -969,9 +970,9 @@ provider conversation cannot be separately published as a second ticket.
 
 Downgrade from schema 37 refuses to discard retained provider IDs, continuation
 streams or active/uncertain continuation requests. Empty rollback remains
-supported. The native worker consumes this stream contract. The transfer
-review/adoption UI, remaining payload cases and live-provider acceptance are
-still required before the whole transfer flow is complete.
+supported. The native worker and return review consume this stream contract.
+Attachments, missing remote commits and live-provider acceptance remain required
+before the whole transfer flow is complete.
 
 ## Local destination receipts
 
@@ -1077,3 +1078,35 @@ Persistent-marker tests cover helper exit, hold expiry, same-handoff retries,
 wrong-handoff resolution, malformed markers and symlinks. Native tests exercise
 the real helper's final-verification command and a cancelled confirmation across
 coordinator restart.
+
+## Native return review
+
+**Run on → Local** reviews cloud project changes, previews selected captured
+files, downloads the pinned main and child history, and offers discovered local
+profiles for the same provider. Preparation creates an isolated checkout and
+installs the reviewed files/history. It never starts a model turn.
+
+The source hold must be acknowledged before the user can confirm imported-context
+continuation. Implementation separately requires project-tool approval and the
+shared permission selector. Closing the sheet preserves the journal; reopening
+resumes preparation but never supplies consent. Cancellation remains available
+during installation and after an earlier error. A completed handoff is adopted
+once; a failed board refresh can retry without repeating the move.
+
+The board resolves the adopted profile and actual provider conversation through
+its private binding. It hides the old linked source and the new physical log
+behind the existing Camp ticket, while preserving both local files. Unrelated
+profiles with the same provider ID remain visible. Model catalogs and planning
+setup use the destination profile, and stale source mappings cannot redirect
+history or permissions. Local execution on a different device is labelled
+**Owner’s Mac**.
+
+Reproduce the screen recovery suite with `./test.sh CampReturnTransferTests`.
+`tools/return-transfer-ui-audit.sh` builds an isolated native review with synthetic
+accounts, files and handoff responses. It makes no provider calls. The real API
+journey uses disposable PostgreSQL and synthetic provider/filesystem adapters:
+
+```sh
+CAMP_NATIVE_FIXTURE_HISTORY=1 CAMP_NATIVE_FIXTURE_RETURN=1 \
+  tools/test-native-api.sh NativeReturnHandoffAPITests
+```

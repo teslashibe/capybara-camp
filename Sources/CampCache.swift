@@ -233,6 +233,24 @@ actor CampCache {
         guard binding.key == key else { throw CampCloudError.invalidResponse }
         return binding
     }
+    func localContinuations(sessions: [CloudSession], deviceID: String, scope: CloudScope, expectedEpoch: Int64) throws -> [String: LocalContinuationBinding] {
+        try checkEpoch(scope, expectedEpoch)
+        let visible = Dictionary(uniqueKeysWithValues: sessions.filter {
+            $0.ownerUserId == scope.userId && $0.ownerDeviceId == deviceID && $0.executionLocation == "local" && !$0.isHistoryOnly
+        }.map { ($0.id, $0) })
+        guard !visible.isEmpty else { return [:] }
+        let prefix = "local-continuation:" + scope.key + ":"
+        let values: [LocalContinuationBinding?] = try rows("SELECT key,value FROM metadata WHERE key LIKE ?", [.text(prefix + "%")]) { row in
+            let key = text(row, 0), raw = blob(row, 1)
+            guard raw.count <= 128 << 10 else { throw CampCloudError.invalidResponse }
+            let binding = try JSONDecoder().decode(LocalContinuationBinding.self, from: raw)
+            try binding.validate(scope: scope)
+            guard binding.key == key else { throw CampCloudError.invalidResponse }
+            guard let current = visible[binding.session.id], binding.matches(current) else { return nil }
+            return binding
+        }
+        return Dictionary(uniqueKeysWithValues: values.compactMap { $0 }.map { ($0.session.id, $0) })
+    }
     // Persist the binding and clear only this completed transfer's scratch data
     // in one transaction. Installed files and the ticket transcript stay intact.
     func adoptReturnHandoff(_ expected: ReturnHandoffJournal, scope: CloudScope, expectedEpoch: Int64) throws -> LocalContinuationBinding {

@@ -81,17 +81,33 @@ private actor LostContinuationEvent: CampPublishingTransport {
             let transport=LostReturnResponses(api),runner=runners[session.provider]!
             let files=try CampWorkspaceExport(cache:cache,scope:scope,credential:auth,transport:transport,epoch:epoch)
             let history=try CampTransferHistory(cache:cache,scope:scope,credential:auth,transport:transport,epoch:epoch)
-            try await files.begin(session:session,kind:"capture",paths:["notes.txt"])
-            let exported=try await files.advance()!.export!
-            let claim=UUID().uuidString.lowercased(),exportBase="/v1/runner/exports/"+exported.id
-            let claimed=try CampWire.decoder().decode(ClaimedExport.self,from:await api.data("POST",path:exportBase+"/claim",body:CampWire.body(["claim_id":claim]),token:runner))
-            let content=Data("Reviewed cloud notes\n".utf8)
-            let payload=try CampWire.body(["version":1,"base_commit":claimed.workspace.baseCommit,"branch":claimed.workspace.branch,
-                "files":[["path":"notes.txt","sha256":PublishMessage.hash(content),"data":content.base64EncodedString()]],"excluded":[]])
-            _=try await api.data("POST",path:exportBase+"/result",body:CampWire.body(["claim_id":claim,"sha256":PublishMessage.hash(payload),"bytes":payload.count]),token:runner)
-            _=try await api.data("PUT",path:exportBase+"/chunks/0",body:CampWire.body(["claim_id":claim,"sha256":PublishMessage.hash(payload),"data":payload.base64EncodedString()]),token:runner)
-            _=try await api.data("POST",path:exportBase+"/complete",body:CampWire.body(["claim_id":claim]),token:runner)
-            _=try await files.advance()
+            let screen = CampReturnTransfer(cache:cache,automatic:false)
+            screen.attach(scope:scope,credential:auth,transport:transport)
+            await screen.inspect(session);await screen.advance()
+            precondition(screen.phase == "inspecting" && screen.error.isEmpty,screen.error)
+            func completeExport(_ exported:CloudWorkspaceExport, inspection:Bool) async throws -> Data {
+                let claim=UUID().uuidString.lowercased(),exportBase="/v1/runner/exports/"+exported.id
+                let claimed=try CampWire.decoder().decode(ClaimedExport.self,from:await api.data("POST",path:exportBase+"/claim",body:CampWire.body(["claim_id":claim]),token:runner))
+                let content=Data("Reviewed cloud notes\n".utf8)
+                let payload:Data
+                if inspection {
+                    payload = try JSONEncoder().encode(TransferChanges(baseCommit:claimed.workspace.baseCommit,branch:claimed.workspace.branch,files:[TransferChange(path:"notes.txt",kind:"modified")]))
+                } else {
+                    payload=try CampWire.body(["version":1,"base_commit":claimed.workspace.baseCommit,"branch":claimed.workspace.branch,
+                        "files":[["path":"notes.txt","sha256":PublishMessage.hash(content),"data":content.base64EncodedString()]],"excluded":[]])
+                }
+                _=try await api.data("POST",path:exportBase+"/result",body:CampWire.body(["claim_id":claim,"sha256":PublishMessage.hash(payload),"bytes":payload.count]),token:runner)
+                _=try await api.data("PUT",path:exportBase+"/chunks/0",body:CampWire.body(["claim_id":claim,"sha256":PublishMessage.hash(payload),"data":payload.base64EncodedString()]),token:runner)
+                _=try await api.data("POST",path:exportBase+"/complete",body:CampWire.body(["claim_id":claim]),token:runner)
+                return payload
+            }
+            _ = try await completeExport(screen.export!.export!,inspection:true)
+            await screen.advance();precondition(screen.phase == "select",screen.error)
+            precondition(screen.changes?.files.map(\.path) == ["notes.txt"])
+            await screen.capture(paths:["notes.txt"])
+            let exported = try await files.advance()!.export!
+            let payload = try await completeExport(exported,inspection:false)
+            _ = try await files.advance()
             try await history.begin(session:session)
             for _ in 0..<12 {if try await history.current()?.complete==true{break};try await history.advance()}
             let archive=try await history.archive()!
@@ -104,18 +120,22 @@ private actor LostContinuationEvent: CampPublishingTransport {
             try process.run();try input.fileHandleForWriting.write(contentsOf:payload);try input.fileHandleForWriting.close()
             let reviewed=output.fileHandleForReading.readDataToEndOfFile();process.waitUntilExit();precondition(process.terminationStatus==0)
             let review=try CampWire.decoder().decode(TransferCapture.self,from:reviewed),bridge=DestinationBridgeFixture(review)
-            let profile=try CampWire.decoder().decode(Profile.self,from:await api.data("POST",path:"/v1/profiles",body:CampWire.body([
-                "local_id":PublishMessage.hash(Data(("return-"+session.provider).utf8)),"provider":session.provider,"label":"Return test profile"]),key:UUID().uuidString,token:token))
-            let target=TransferInstallationTarget(profileID:profile.id,sourceID:"fixture-source",provider:session.provider,root:"/fixture/profile",sessionID:UUID().uuidString.lowercased(),purpose:"implementation")
-            let local=try CampLocalDestination(cache:cache,scope:scope,credential:auth,transport:transport,epoch:epoch,callLocal:{try await bridge.call($0,$1)})
-            try await local.begin(target:target,reviewedSHA256:review.reviewSha256)
-            _=try await local.advance();_=try await local.advance()
+            screen.callLocal = { try await bridge.call($0,$1) }
+            await screen.restore();await screen.advance()
+            precondition(screen.phase == "review",screen.error)
+            let preview = try await screen.preview("notes.txt")
+            precondition(preview == "Reviewed cloud notes\n")
+            let source = CampSource(id:"fixture-source-"+session.provider,provider:session.provider,root:"/fixture/profile",label:"Return test profile",count:0)
+            await screen.prepare(source:source,purpose:"implementation")
+            precondition(screen.phase == "checkout",screen.error)
+            let target = screen.destination!.target
+            let profile = Profile(id:target.profileID)
+            await screen.advance();await screen.advance();await screen.advance()
             func handoff()throws->CampReturnHandoff {try CampReturnHandoff(cache:cache,scope:scope,credential:auth,transport:transport,epoch:epoch,callLocal:{try await bridge.call($0,$1)})}
-            try await handoff().begin()
             let base="/v1/camps/\(scope.campId)/sessions/\(session.id)",stopClaim=UUID().uuidString.lowercased()
             for _ in 0..<24 {
                 if try await handoff().current()?.phase=="confirm"{break}
-                do{_=try await handoff().advance()}catch is URLError{}
+                await screen.advance()
                 if let held=try await handoff().current()?.handoff,held.state=="pending" {
                     let runnerBase="/v1/runner/handoffs/"+held.id
                     _=try await api.data("POST",path:runnerBase+"/claim",body:CampWire.body(["claim_id":stopClaim]),token:runner)
@@ -129,8 +149,8 @@ private actor LostContinuationEvent: CampPublishingTransport {
             let approval=try CampWire.body(["expected_handoff_revision":held.revision,"context_continuation_approved":true,"execution_approved":true,"permissions":session.provider=="Codex" ? ["sandbox":"workspace-write","approval":"on-request","reviewer":"user"] : ["claudeMode":"manual"]])
             await denied("Other device confirmed destination"){_=try await api.data("POST",path:commitPath,body:approval,key:UUID().uuidString,token:driver.token)}
             await denied("Teammate confirmed private move"){_=try await api.data("POST",path:commitPath,body:approval,key:UUID().uuidString,token:teammate.token)}
-            try await handoff().confirm(contextContinuationApproved:true,executionApproved:true,permissions:permissions)
-            await rejects("Expected lost commit response"){_=try await handoff().advance()}
+            await screen.confirm(contextApproved:true,executionApproved:true,permissions:permissions)
+            await screen.advance();precondition(!screen.error.isEmpty,"Missing lost commit response")
             let committed=try await api.get(CloudHandoff.self,path:base+"/handoffs/"+held.id,token:token)
             precondition(committed.commitNonce != nil)
             // The real runner's fresh stop verification is tested in Go. This
@@ -147,7 +167,9 @@ private actor LostContinuationEvent: CampPublishingTransport {
             let child=try await api.get(CloudChildHistoryList.self,path:base+"/children",token:token)
             precondition(child.children.count==1)
             await rejects("Completed move retained access to source export"){_=try await files.payload()}
-            let binding = try await handoff().adoptCompleted()!
+            await screen.advance()
+            precondition(screen.phase == "complete",screen.error)
+            let binding = screen.completed!
             precondition(binding.session == finished.session && binding.installation == finished.destination.installation)
             let adopted = try await cache.localContinuation(sessionID:session.id,executionEpoch:binding.session.executionEpoch!,scope:scope,expectedEpoch:epoch)
             precondition(adopted == binding)
@@ -190,6 +212,28 @@ private actor LostContinuationEvent: CampPublishingTransport {
                     precondition(live.head?.localContinuation == true && live.approvals.first?.id == approvalID && live.messages.last?.text == "Synthetic continuation answer 0")
                     let saved = try await cache.localContinuation(sessionID:session.id,executionEpoch:current.executionEpoch!,scope:scope,expectedEpoch:epoch)
                     precondition(saved?.providerSessionID == providerID && saved?.firstRequestID == queued.id)
+                    let bindings = try await cache.localContinuations(sessions:[current],deviceID:actor.deviceId,scope:scope,expectedEpoch:epoch)
+                    precondition(bindings[session.id] == saved)
+                    let foreign = try await cache.localContinuations(sessions:[current],deviceID:sourceActor.deviceId,scope:scope,expectedEpoch:epoch)
+                    precondition(foreign.isEmpty,"Another Mac received this continuation projection")
+                    var reassigned = current; reassigned.executionEpoch! += 1
+                    let stale = try await cache.localContinuations(sessions:[reassigned],deviceID:actor.deviceId,scope:scope,expectedEpoch:epoch)
+                    precondition(stale.isEmpty,"Old execution binding hid another epoch's session")
+                    let board = CampStore(stateDirectory:root.appendingPathComponent("mirror-"+session.provider))
+                    board.applyCloud([current],projects:[])
+                    let native = saved!.nativeSession
+                    let other = CampSession(id:"other-profile",sessionID:providerID,provider:native.provider,sourceID:"other",sourceLabel:"Other",root:"/other-profile",title:"Unrelated session",cwd:native.cwd,updated:0,path:"",accountID:"",archived:false)
+                    board.sessions.append(contentsOf:[native,other]);board.selectedID = native.id
+                    board.applyContinuationBindings(Array(bindings.values))
+                    board.modelCatalogs[native.sourceID] = [ModelOption(id:"fixture-model",label:"Fixture model")]
+                    precondition(board.localSource(for:"camp:"+session.id)?.root == native.root)
+                    precondition(board.availableModels(board.selected!).map(\.id) == ["fixture-model"],"Returned ticket lost the selected profile's model catalog")
+                    precondition(board.shareSource(board.selected!) == nil,"Returned ticket offered duplicate publication")
+                    precondition(!board.visibleSessions.contains(where:{$0.id == native.id}) && board.visibleSessions.contains(where:{$0.id == other.id}))
+                    precondition(board.selectedID == "camp:"+session.id,"Selection stayed on a duplicate provider log")
+                    board.applyContinuationBindings([])
+                    precondition(board.localSource(for:"camp:"+session.id) == nil,"Detached account retained its local execution binding")
+                    precondition(board.visibleSessions.contains(where:{$0.id == native.id}),"Signing out hid the independent local history")
                     let waiting = try await api.get(CloudRequest.self,path:requestBase+"/"+queued.id,token:token)
                     precondition(waiting.providerSessionId == providerID)
                     let control = try CampWire.body(["id":UUID().uuidString.lowercased(),"approval_seq":waiting.streamSeq!,"control":["type":"approval","id":approvalID,"allow":true]])
@@ -230,7 +274,7 @@ private actor LostContinuationEvent: CampPublishingTransport {
             precondition(Array(retained.prefix(260)) == original)
             live.acknowledge(retained)
             precondition(live.messages.isEmpty && live.approvals.isEmpty)
-            live.stop()
+            live.stop();screen.attach(scope:nil,credential:nil,transport:nil)
             try await cache.clear(scope)
             print("PASS: real API return for \(session.provider), independent destination device, 510 history messages, lost-response recovery and retained permissions")
         }

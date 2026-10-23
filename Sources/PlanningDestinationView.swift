@@ -72,7 +72,7 @@ struct PlanningDestinationView: View {
     private var original: CloudSession? { cloud.sessions.first { $0.id == request.original.sessionId } }
     private var native: CampSession? {
         guard let source = selected ?? original, source.ownerUserId == request.scope.userId else { return nil }
-        return store.sharing.native(for: "camp:" + source.id) ?? store.sessions.first { $0.id == "camp:" + source.id }
+        return store.localSource(for: "camp:" + source.id) ?? store.sessions.first { $0.id == "camp:" + source.id }
     }
     private var queryKey: String { "\(cloud.scope?.key ?? ""): \(location):\(accountID):\(reload)" }
     var body: some View {

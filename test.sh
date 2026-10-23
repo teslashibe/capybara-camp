@@ -14,7 +14,7 @@ swiftc -parse-as-library -emit-library -emit-module -enable-testing -D CAMP_TEST
   -o build/test-support/libCampTestSupport.dylib
 WORK="$(mktemp -d "$ROOT/build/.camp-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-SUITES=(CampStateTests CampCloudTests CampSharingTests CampChildHistoryTests LocalConversationTests CampWorkerTests CampHandoffTests CampTransferTests CampWorkspaceExportTests CampTransferHistoryTests NativeTransferHistoryAPITests NativeReturnHandoffAPITests BridgeIntegrationTests SessionMentionsTests LocalPlanningTests LocalPlanImportTests CampPlanPromotionTests ExecutionApprovalTests ImplementationFlowTests CampNotificationTests CampPlanningTests CampPlanningStreamTests ImportedPlanningTests ImportedImplementationTests SharedImplementationTests SharedExecutionReviewTests SharedImplementationFollowupTests NativeImplementationAPITests CodexActivityTests CampProjectsTests PermissionSettingsTests CampOnboardingTests CampProviderAccountTests CampGitConnectionTests CampExecutionTests ExecutionDefaultsTests)
+SUITES=(CampStateTests CampCloudTests CampSharingTests CampChildHistoryTests LocalConversationTests CampWorkerTests CampHandoffTests CampTransferTests CampWorkspaceExportTests CampReturnTransferTests CampTransferHistoryTests NativeTransferHistoryAPITests NativeReturnHandoffAPITests BridgeIntegrationTests SessionMentionsTests LocalPlanningTests LocalPlanImportTests CampPlanPromotionTests ExecutionApprovalTests ImplementationFlowTests CampNotificationTests CampPlanningTests CampPlanningStreamTests ImportedPlanningTests ImportedImplementationTests SharedImplementationTests SharedExecutionReviewTests SharedImplementationFollowupTests NativeImplementationAPITests CodexActivityTests CampProjectsTests PermissionSettingsTests CampOnboardingTests CampProviderAccountTests CampGitConnectionTests CampExecutionTests ExecutionDefaultsTests)
 if [ "$#" -gt 0 ]; then
   for requested in "$@"; do
     found=false
@@ -27,7 +27,9 @@ for suite in "${SUITES[@]}"; do
   printf '%s\n' '@testable import CampTestSupport' > "$WORK/$suite.swift"
   cat Tests/FixtureProcess.swift >> "$WORK/$suite.swift"
   if [ "$suite" = CampTransferTests ]; then cat Tests/TransferFixture.swift >> "$WORK/$suite.swift"; fi
-  if [[ "$suite" = CampWorkspaceExportTests || "$suite" = NativeReturnHandoffAPITests ]]; then cat Tests/DestinationBridgeFixture.swift >> "$WORK/$suite.swift"; fi
+  if [[ "$suite" = CampWorkspaceExportTests || "$suite" = CampReturnTransferTests || "$suite" = NativeReturnHandoffAPITests ]]; then cat Tests/DestinationBridgeFixture.swift >> "$WORK/$suite.swift"; fi
+  if [[ "$suite" = CampWorkspaceExportTests || "$suite" = CampReturnTransferTests ]]; then cat Tests/WorkspaceExportFixture.swift >> "$WORK/$suite.swift"; fi
+  if [ "$suite" = CampReturnTransferTests ]; then cat Tests/ReturnScreenFixture.swift >> "$WORK/$suite.swift"; fi
   cat "Tests/$suite.swift" >> "$WORK/$suite.swift"
   swiftc -parse-as-library -swift-version 5 -I build/test-support -L build/test-support \
     -lCampTestSupport -framework SwiftUI -framework AppKit -framework Security -lsqlite3 \

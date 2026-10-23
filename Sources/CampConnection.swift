@@ -19,6 +19,7 @@ import SwiftUI
     var controlsChanged: (() -> Void)?
     @Published var selectedCampId = ""
     @Published var signedIn = false
+    private(set) var localContinuations: [String: LocalContinuationBinding] = [:]
 
     var sessionsChanged: (([CloudSession], [CloudProject], CloudScope?) -> Void)?
     var transcriptChanged: ((String) -> Void)?
@@ -38,12 +39,24 @@ import SwiftUI
             guard let self else { throw CancellationError() }
             try await self.acceptHandoffSession(session,scope:scope,epoch:epoch)
         }
+        value.continuationChanged = { [weak self] id, scope, epoch in
+            await self?.refreshContinuation(id, scope: scope, epoch: epoch)
+        }
         return value
     }()
     lazy var providerAccounts = CampProviderAccounts(cache: cache)
     lazy var gitConnections = CampGitConnections(cache: cache)
     lazy var execution = CampExecution(cache: cache)
     lazy var transfers = CampTransfer(cache: cache)
+    lazy var returnTransfers: CampReturnTransfer = {
+        let value = CampReturnTransfer(cache: cache)
+        value.adopted = { [weak self] binding, scope, epoch in
+            guard let self else { throw CancellationError() }
+            try await self.acceptHandoffSession(binding.session, scope: scope, epoch: epoch)
+            self.worker.scan()
+        }
+        return value
+    }()
     private let vault: any CampCredentialStore
     private let allowLoopback: Bool
     private var generation = UUID()
@@ -154,6 +167,7 @@ import SwiftUI
     private func loadCached(scope: CloudScope) async {
         execution.attach(scope:scope,credential:credential,transport:client)
         transfers.attach(scope:scope,credential:credential,transport:client)
+        returnTransfers.attach(scope:scope,credential:credential,transport:client)
         guard let cache else { return }
         do {
             let token = generation
@@ -166,6 +180,9 @@ import SwiftUI
             sessions = cachedSessions; requests = cachedRequests
             sessionIndex = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
             requestIndex = Dictionary(uniqueKeysWithValues: requests.map { ($0.id, $0) })
+            let bindings = try await cache.localContinuations(sessions: cachedSessions, deviceID: credential?.actor.deviceId ?? "", scope: scope, expectedEpoch: epoch)
+            guard self.scope == scope, generation == token else { return }
+            localContinuations = bindings
             pending = cachedPending
             if let data, let snapshot = try? CampWire.decoder().decode(CloudSnapshot.self, from: data) {
                 projects = snapshot.projects; members = snapshot.members
@@ -306,7 +323,20 @@ import SwiftUI
         if accepts(value) { sessionIndex[value.id] = value }
         guard let current = sessionIndex[value.id], let currentEpoch = current.executionEpoch,
               let valueEpoch = value.executionEpoch, currentEpoch >= valueEpoch else { throw CampCloudError.invalidResponse }
+        await refreshContinuation(value.id, scope: expectedScope, epoch: epoch)
         publishVisible()
+    }
+    func refreshContinuation(_ id: String, scope expectedScope: CloudScope, epoch: Int64) async {
+        guard scope == expectedScope, epoch == cacheEpoch, let cache, let actor = credential?.actor else { return }
+        let token = generation
+        do {
+            let snapshot = sessionIndex[id].map { [$0] } ?? []
+            guard let initial = snapshot.first, let executionEpoch = initial.executionEpoch else { return }
+            let binding = try await cache.localContinuation(sessionID:id,executionEpoch:executionEpoch,scope:expectedScope,expectedEpoch:epoch)
+            guard generation == token, scope == expectedScope, let current = sessionIndex[id] else { return }
+            localContinuations[id] = current.ownerDeviceId == actor.deviceId && binding?.matches(current) == true ? binding : nil
+            schedulePublish(generation: token)
+        } catch { if generation == token { self.error = error.localizedDescription } }
     }
     private func recordRequest(_ value: CloudRequest, notify: Bool = true) {
         let merged = value.merging(requestIndex[value.id])
@@ -333,6 +363,7 @@ import SwiftUI
         }
     }
     private func publishVisible() {
+        localContinuations = localContinuations.filter { id, binding in sessionIndex[id].map(binding.matches) == true }
         sessions = sessionIndex.values.sorted { $0.updatedAt > $1.updatedAt }
         requests = requestIndex.values.sorted { $0.createdAt > $1.createdAt }
         sessionsChanged?(sessions,projects,scope)
@@ -342,9 +373,10 @@ import SwiftUI
         controlTask?.cancel(); controlTask = nil; controlsDirty = false; controlSending = []
         execution.attach(scope:nil,credential:nil,transport:nil)
         transfers.attach(scope:nil,credential:nil,transport:nil)
+        returnTransfers.attach(scope:nil,credential:nil,transport:nil)
         live.stop()
         sessions = []; projects = []; members = []; requests = []; pending = []
-        sessionIndex = [:]; requestIndex = [:]; sessionsChanged?([], [], nil)
+        sessionIndex = [:]; requestIndex = [:]; localContinuations = [:]; sessionsChanged?([], [], nil)
     }
     private func overlayNotificationActions(_ values: [CloudNotification], scope: CloudScope) async throws -> [CloudNotification] {
         guard let cache else { throw CampCloudError.cacheUnavailable }
