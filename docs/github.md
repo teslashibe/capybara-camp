@@ -88,6 +88,10 @@ broad GitHub token stays in the service. The scoped token is encrypted with the
 workspace, owner, claim, grant and Git epoch bound to it; it appears only in the
 private token response. Public workspace records and events omit it.
 
+A workspace pins its project's repository links and archived state, not its
+name: renaming a project keeps its workspaces, while changing the links or
+archiving the project fails them.
+
 The issuance fence is committed before the external token call. Repeated token
 requests return the saved token to the same active claim. An uncertain issuance
 fails that preparation rather than minting a second token. Cancellation or an
