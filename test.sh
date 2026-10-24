@@ -14,6 +14,17 @@ swiftc -parse-as-library -whole-module-optimization -Onone -emit-library -emit-m
   -o build/test-support/libCampTestSupport.dylib
 WORK="$(mktemp -d "$ROOT/build/.camp-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
+# Suites run on a one-thread Swift concurrency pool, so blocking work on it hangs
+# here as it does on three-CPU CI runners. A suite deadline names a stalled suite
+# instead of a silent job timeout; testCase(_:) names the stalled case sooner.
+SUITE_TIMEOUT="${CAMP_SUITE_TIMEOUT:-300}"
+run_suite() {
+  local status=0 started=$SECONDS
+  LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 perl -e 'alarm shift; exec @ARGV or die "exec failed: $!\n"' "$SUITE_TIMEOUT" "$@" || status=$?
+  if [ "$status" = 142 ]; then echo "FAIL: $suite did not finish within ${SUITE_TIMEOUT}s" >&2; fi
+  echo "$suite: $((SECONDS - started))s"
+  return "$status"
+}
 SUITES=(CampTransferAttachmentTests AttachmentPreviewTests CampStateTests CampAttachmentReadTests CampCloudTests CampSharingTests CampChildHistoryTests LocalConversationTests CampWorkerTests CampHandoffTests CampTransferTests CampWorkspaceExportTests CampReturnTransferTests CampTransferHistoryTests NativeTransferHistoryAPITests NativeAttachmentAPITests NativeReturnHandoffAPITests BridgeIntegrationTests SessionMentionsTests LocalPlanningTests LocalPlanImportTests CampPlanPromotionTests ExecutionApprovalTests ImplementationFlowTests CampNotificationTests CampPlanningTests CampPlanningStreamTests ImportedPlanningTests ImportedImplementationTests SharedImplementationTests SharedExecutionReviewTests SharedImplementationFollowupTests NativeImplementationAPITests CodexActivityTests CampProjectsTests PermissionSettingsTests CampOnboardingTests CampProviderAccountTests CampGitConnectionTests CampExecutionTests ExecutionDefaultsTests)
 if [ "$#" -gt 0 ]; then
   for requested in "$@"; do
@@ -46,8 +57,8 @@ for suite in "${SUITES[@]}"; do
     plutil -insert CFBundleExecutable -string "$suite" "$BUNDLE/Contents/Info.plist"
     plutil -insert CFBundleIdentifier -string com.capybaracamp.bridge-tests "$BUNDLE/Contents/Info.plist"
     plutil -insert CFBundlePackageType -string APPL "$BUNDLE/Contents/Info.plist"
-    CAPY_SUPPORT="$WORK/bridge-support" "$BUNDLE/Contents/MacOS/$suite"
+    CAPY_SUPPORT="$WORK/bridge-support" run_suite "$BUNDLE/Contents/MacOS/$suite"
   else
-    "build/$suite"
+    run_suite "build/$suite"
   fi
 done

@@ -169,12 +169,15 @@ enum Bridge {
         try await Task.detached(priority: .userInitiated) {
             let p = try process(action), out = Pipe(), err = Pipe(), stdin = Pipe()
             p.standardOutput = out; p.standardError = err; p.standardInput = stdin
-            try p.run()
-            let errors = Task.detached { err.fileHandleForReading.readDataToEndOfFile() }
-            stdin.fileHandleForWriting.write(input); try? stdin.fileHandleForWriting.close()
-            let data = out.fileHandleForReading.readDataToEndOfFile()
-            p.waitUntilExit()
-            let errorData = await errors.value
+            async let errors = blockingIO { err.fileHandleForReading.readDataToEndOfFile() }
+            // Launched here, off the main thread, so the same call must wait for it.
+            let data = try await blockingIO {
+                do { try p.run() } catch { try? err.fileHandleForWriting.close(); throw error }
+                stdin.fileHandleForWriting.write(input); try? stdin.fileHandleForWriting.close()
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit(); return data
+            }
+            let errorData = await errors
             guard p.terminationStatus == 0 else {
                 let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                 throw CampError.message(raw?["message"] as? String ?? String(data: errorData.suffix(4000), encoding: .utf8) ?? "Could not read the local session store")
