@@ -148,6 +148,10 @@ it, every client behind the proxy shares one sign-in limit.
 Device tokens are hashed in PostgreSQL, last 30 days and can renew within an
 absolute 90-day lifetime; expired/revoked devices sign in again.
 
+`CAMP_ALLOWED_EMAILS` (comma-separated) limits sign-in to those addresses.
+Other addresses get the usual response but no code, cannot verify, and their
+existing device tokens stop authenticating. Unset, any address can sign in.
+
 ## Validation
 
 From the repository root, run `./tools/test-server.sh`. It creates a disposable

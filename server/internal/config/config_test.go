@@ -37,3 +37,16 @@ func TestProviderKeyIsSeparateAndOptional(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestAllowedEmailsAreNormalized(t *testing.T) {
+	t.Setenv("CAMP_DATABASE_URL", "postgres://example/camp")
+	t.Setenv("CAMP_ALLOWED_EMAILS", " Brendan@Example.com, ,cate@example.com ")
+	c, err := Load(true)
+	if err != nil || strings.Join(c.AllowedEmails, ",") != "brendan@example.com,cate@example.com" {
+		t.Fatalf("allowed emails %v: %v", c.AllowedEmails, err)
+	}
+	t.Setenv("CAMP_ALLOWED_EMAILS", "Brendan <brendan@example.com>")
+	if _, err = Load(true); err == nil {
+		t.Fatal("accepted a display-name address")
+	}
+}

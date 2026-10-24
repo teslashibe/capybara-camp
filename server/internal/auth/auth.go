@@ -38,6 +38,8 @@ type Service struct {
 	pool   *pgxpool.Pool
 	secret []byte
 	login  *magiclink.Service
+	// Nil admits any address; otherwise only these normalized addresses.
+	allowed map[string]bool
 }
 
 func New(pool *pgxpool.Pool, secret, publicURL string, sender magiclink.EmailSender) *Service {
@@ -45,6 +47,20 @@ func New(pool *pgxpool.Pool, secret, publicURL string, sender magiclink.EmailSen
 	s.login = magiclink.New(magiclink.Config{JWTSecret: secret, AppURL: publicURL, AppName: "Capybara Camp"}, s, s, sender, codeEmail{})
 	return s
 }
+
+// RestrictTo limits sign-in to normalized addresses. Codes are not sent to
+// other addresses, and existing device tokens for them stop authenticating.
+func (s *Service) RestrictTo(emails []string) {
+	if len(emails) == 0 {
+		return
+	}
+	s.allowed = make(map[string]bool, len(emails))
+	for _, email := range emails {
+		s.allowed[email] = true
+	}
+}
+
+func (s *Service) admits(email string) bool { return s.allowed == nil || s.allowed[email] }
 
 func NormalizeEmail(value string) (string, error) {
 	value = strings.ToLower(strings.TrimSpace(value))
@@ -72,12 +88,20 @@ func (s *Service) Limit(ctx context.Context, scope string, maximum int) error {
 	return nil
 }
 
-func (s *Service) Send(ctx context.Context, email string) error { return s.login.Send(ctx, email) }
+func (s *Service) Send(ctx context.Context, email string) error {
+	if !s.admits(email) {
+		return ErrUnauthorized
+	}
+	return s.login.Send(ctx, email)
+}
 
 func (s *Service) Verify(ctx context.Context, email, code, deviceName string) (Login, error) {
 	deviceName = strings.TrimSpace(deviceName)
 	if len(deviceName) == 0 || len(deviceName) > 80 {
 		return Login{}, errors.New("device name must be 1 to 80 characters")
+	}
+	if !s.admits(email) {
+		return Login{}, ErrUnauthorized
 	}
 	result, err := s.login.VerifyCode(ctx, email, code)
 	if err != nil {
@@ -99,7 +123,7 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Actor, error)
 	}
 	var a Actor
 	err := s.pool.QueryRow(ctx, `SELECT u.id,d.id,u.email,u.display_name FROM devices d JOIN users u ON u.id=d.user_id WHERE d.token_hash=$1 AND d.revoked_at IS NULL AND d.expires_at>now()`, HashToken(token)).Scan(&a.UserID, &a.DeviceID, &a.Email, &a.Name)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && !s.admits(a.Email) {
 		return Actor{}, ErrUnauthorized
 	}
 	return a, err

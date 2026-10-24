@@ -149,3 +149,39 @@ func TestCodeFailuresAccumulateAcrossResends(t *testing.T) {
 		t.Fatal("a fresh code reset the daily guess limit", err)
 	}
 }
+
+func TestRestrictedSignInRefusesOtherAddresses(t *testing.T) {
+	pool := testdb.Open(t)
+	ctx := context.Background()
+	mail := &mailbox{}
+	s := New(pool, strings.Repeat("test", 10), "https://camp.example", mail)
+	// A device created before the restriction stops working once it applies.
+	if err := s.Send(ctx, "outsider@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	earlier, err := s.Verify(ctx, "outsider@example.com", mail.code, "Old Mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.RestrictTo([]string{"member@example.com"})
+	if _, err = s.Authenticate(ctx, earlier.Token); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("outsider device authenticated: %v", err)
+	}
+	mail.code = ""
+	if err = s.Send(ctx, "other@example.com"); !errors.Is(err, ErrUnauthorized) || mail.code != "" {
+		t.Fatalf("code sent to outsider: %v %q", err, mail.code)
+	}
+	if _, err = s.Verify(ctx, "other@example.com", "000000", "Mac"); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("outsider verified: %v", err)
+	}
+	if err = s.Send(ctx, "member@example.com"); err != nil || mail.code == "" {
+		t.Fatalf("member code: %v", err)
+	}
+	login, err := s.Verify(ctx, "member@example.com", mail.code, "Mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Authenticate(ctx, login.Token); err != nil {
+		t.Fatal(err)
+	}
+}

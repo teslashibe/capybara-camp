@@ -18,6 +18,8 @@ type Config struct {
 	GitHub                                                            GitHub
 	// Proxies whose X-Forwarded-For hop is trusted for per-client limits.
 	TrustedProxies []netip.Prefix
+	// Addresses allowed to sign in; empty admits any address.
+	AllowedEmails []string
 }
 
 func Load(migrateOnly bool) (Config, error) {
@@ -38,6 +40,15 @@ func Load(migrateOnly bool) (Config, error) {
 			return c, errors.New("CAMP_TRUSTED_PROXIES must be a comma-separated list of CIDR ranges")
 		}
 		c.TrustedProxies = append(c.TrustedProxies, prefix.Masked())
+	}
+	for _, value := range strings.Split(os.Getenv("CAMP_ALLOWED_EMAILS"), ",") {
+		if value = strings.ToLower(strings.TrimSpace(value)); value == "" {
+			continue
+		}
+		if address, err := mail.ParseAddress(value); err != nil || address.Address != value {
+			return c, errors.New("CAMP_ALLOWED_EMAILS must be a comma-separated list of email addresses")
+		}
+		c.AllowedEmails = append(c.AllowedEmails, value)
 	}
 	c.PublicURL = strings.TrimRight(c.PublicURL, "/")
 	return c, c.Validate(migrateOnly)
