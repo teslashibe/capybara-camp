@@ -6,6 +6,9 @@ import Combine
 // acts. Swift's cooperative pool has one thread per CPU (three on CI runners) and
 // does not grow when they block, so a few idle providers stopped every task,
 // including Task.sleep and MainActor wakeups. This queue adds threads instead.
+// Launch a process on the main thread or in the blockingIO call that waits for
+// it: waitUntilExit never returns on a worker thread that launched the process
+// in an earlier work item.
 private let blockingQueue = DispatchQueue(label: "com.capybaracamp.blocking-io", qos: .userInitiated, attributes: .concurrent)
 
 func blockingIO<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {

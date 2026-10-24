@@ -169,9 +169,10 @@ enum Bridge {
         try await Task.detached(priority: .userInitiated) {
             let p = try process(action), out = Pipe(), err = Pipe(), stdin = Pipe()
             p.standardOutput = out; p.standardError = err; p.standardInput = stdin
-            try p.run()
             async let errors = blockingIO { err.fileHandleForReading.readDataToEndOfFile() }
-            let data = await blockingIO {
+            // Launched here, off the main thread, so the same call must wait for it.
+            let data = try await blockingIO {
+                do { try p.run() } catch { try? err.fileHandleForWriting.close(); throw error }
                 stdin.fileHandleForWriting.write(input); try? stdin.fileHandleForWriting.close()
                 let data = out.fileHandleForReading.readDataToEndOfFile()
                 p.waitUntilExit(); return data
