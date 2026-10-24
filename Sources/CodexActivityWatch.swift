@@ -1,5 +1,4 @@
 import Foundation
-import Darwin
 
 struct CodexActivityUpdate: Codable {
     var activity: [LiveState]
@@ -39,19 +38,14 @@ struct CodexActivityUpdate: Codable {
             task = Task.detached { [weak self] in
                 var buffer = Data(), failed = false
                 do {
-                    try input.fileHandleForWriting.write(contentsOf: payload)
-                    try input.fileHandleForWriting.close()
-                    var bytes = [UInt8](repeating: 0, count: 16384)
+                    try await blockingIO {
+                        try input.fileHandleForWriting.write(contentsOf: payload)
+                        try input.fileHandleForWriting.close()
+                    }
                     while !Task.isCancelled {
-                        // FileHandle.read(upToCount:) can wait for a full buffer
-                        // on a pipe. POSIX read delivers each available event.
-                        let count = Darwin.read(output.fileHandleForReading.fileDescriptor, &bytes, bytes.count)
-                        if count == 0 { break }
-                        if count < 0 {
-                            if errno == EINTR { continue }
-                            throw CampError.message("Could not read Codex activity")
-                        }
-                        buffer.append(contentsOf: bytes[..<count])
+                        let chunk = try await conversationChunk(output.fileHandleForReading, limit: 16384)
+                        if chunk.isEmpty { break }
+                        buffer.append(chunk)
                         while let end = buffer.firstIndex(of: 10) {
                             guard end <= 2 * 1024 * 1024 else { throw CampError.message("Codex activity exceeded its size limit") }
                             let line = Data(buffer[..<end]); buffer.removeSubrange(...end)
@@ -66,7 +60,7 @@ struct CodexActivityUpdate: Codable {
                 } catch { failed = true }
                 try? input.fileHandleForWriting.close()
                 if p.isRunning { p.terminate() }
-                p.waitUntilExit(); try? output.fileHandleForReading.close()
+                await blockingIO { p.waitUntilExit() }; try? output.fileHandleForReading.close()
                 await self?.ended(token, failed: failed || p.terminationStatus != 0)
             }
         } catch {

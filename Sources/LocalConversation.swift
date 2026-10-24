@@ -2,12 +2,32 @@ import Foundation
 import Darwin
 import Combine
 
-func conversationChunk(_ handle: FileHandle, limit: Int) throws -> Data {
-    var buffer = [UInt8](repeating: 0, count: limit)
-    while true {
-        let count = Darwin.read(handle.fileDescriptor, &buffer, buffer.count)
-        if count >= 0 { return Data(buffer.prefix(count)) }
-        if errno != EINTR { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+// Pipe reads, pipe writes and process waits hold a thread until another process
+// acts. Swift's cooperative pool has one thread per CPU (three on CI runners) and
+// does not grow when they block, so a few idle providers stopped every task,
+// including Task.sleep and MainActor wakeups. This queue adds threads instead.
+private let blockingQueue = DispatchQueue(label: "com.capybaracamp.blocking-io", qos: .userInitiated, attributes: .concurrent)
+
+func blockingIO<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+        blockingQueue.async { continuation.resume(with: Result(catching: work)) }
+    }
+}
+
+func blockingIO<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+    await withCheckedContinuation { continuation in blockingQueue.async { continuation.resume(returning: work()) } }
+}
+
+// FileHandle.read(upToCount:) can wait for a full buffer on a pipe. POSIX read
+// delivers each available event.
+func conversationChunk(_ handle: FileHandle, limit: Int) async throws -> Data {
+    try await blockingIO {
+        var buffer = [UInt8](repeating: 0, count: limit)
+        while true {
+            let count = Darwin.read(handle.fileDescriptor, &buffer, buffer.count)
+            if count >= 0 { return Data(buffer.prefix(count)) }
+            if errno != EINTR { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        }
     }
 }
 
@@ -100,18 +120,18 @@ struct ConversationResult: Sendable {
         Task.detached { [weak self] in
             let diagnostics = Task.detached { () -> Data in
                 var tail = Data()
-                while let chunk = try? conversationChunk(err.fileHandleForReading, limit: 4096), !chunk.isEmpty {
+                while let chunk = try? await conversationChunk(err.fileHandleForReading, limit: 4096), !chunk.isEmpty {
                     tail.append(chunk)
                     if tail.count > 32768 { tail = Data(tail.suffix(32768)) }
                 }
                 try? err.fileHandleForReading.close(); return tail
             }
             let writeTask = Task.detached { () -> Bool in
-                do { try writer.write(initial); return true } catch { return false }
+                do { try await writer.write(initial); return true } catch { return false }
             }
             var buffer = Data(), protocolError = ""
             do {
-                while case let chunk = try conversationChunk(out.fileHandleForReading, limit: 16384), !chunk.isEmpty {
+                while case let chunk = try await conversationChunk(out.fileHandleForReading, limit: 16384), !chunk.isEmpty {
                     buffer.append(chunk)
                     while let end = buffer.firstIndex(of: 10) {
                         guard end <= limit else { throw CampError.message("The CLI response exceeded the event size limit") }
@@ -145,7 +165,7 @@ struct ConversationResult: Sendable {
                 }
                 if !buffer.isEmpty { throw CampError.message("The CLI closed during an event") }
             } catch { protocolError = error.localizedDescription; p.terminate() }
-            p.waitUntilExit()
+            await blockingIO { p.waitUntilExit() }
             writer.close(); try? out.fileHandleForReading.close()
             let wrote = await writeTask.value, errors = await diagnostics.value
             await self?.finish(code: p.terminationStatus, error: protocolError.isEmpty ? (wrote ? String(data: errors.suffix(4000), encoding: .utf8) ?? "" : "The prompt could not be written to the CLI") : protocolError)
@@ -157,7 +177,7 @@ struct ConversationResult: Sendable {
     func deliverSharedControl(_ value: CloudControlEnvelope.Input) async throws {
         guard mode == .implementation, ready, !stopped, !finished, let input else { throw CampError.message("The implementation is no longer accepting input") }
         let data = try JSONEncoder().encode(value) + Data([10])
-        try await Task.detached { try input.write(data) }.value
+        try await input.write(data)
     }
 
     nonisolated private static func tokenCount(_ value: Any?) -> Int64? {
@@ -246,7 +266,7 @@ struct ConversationResult: Sendable {
             answering.insert(id); changed?()
             let payload = data
             Task.detached { [weak self] in
-                do { try input.write(payload) }
+                do { try await input.write(payload) }
                 catch { await self?.receive("approvalRejected", text: "The answer could not be delivered. Check the running session before retrying.", requestID: id) }
             }
         } catch { notice = error.localizedDescription; changed?() }
@@ -285,7 +305,7 @@ struct ConversationResult: Sendable {
         guard !finished, !stopped else { return }; stopped = true
         approvals = []; answering = []; changed?()
         let writer = input
-        Task.detached { try? writer?.write(Data("{\"type\":\"stop\"}\n".utf8)) }
+        Task.detached { try? await writer?.write(Data("{\"type\":\"stop\"}\n".utf8)) }
         // The bridge owns and reaps its provider process group on SIGTERM too.
         stopTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
@@ -302,7 +322,7 @@ struct ConversationResult: Sendable {
         pendingSteer = (id, value); steering = true; changed?()
         let payload = data
         Task.detached { [weak self] in
-            do { try input.write(payload) }
+            do { try await input.write(payload) }
             catch { await self?.receive("steerRejected", text: "The steering message could not be delivered. Check the transcript before retrying.", requestID: id) }
         }
     }
@@ -317,10 +337,12 @@ final class ConversationInput: @unchecked Sendable {
     private let lock = NSLock()
     private var handle: FileHandle?
     init(_ handle: FileHandle) { _ = Self.ignoreBrokenPipe; self.handle = handle }
-    func write(_ data: Data) throws {
-        lock.lock(); defer { lock.unlock() }
-        guard let handle else { throw CampError.message("The CLI input is closed") }
-        try handle.write(contentsOf: data)
+    func write(_ data: Data) async throws {
+        try await blockingIO { [self] in
+            lock.lock(); defer { lock.unlock() }
+            guard let handle else { throw CampError.message("The CLI input is closed") }
+            try handle.write(contentsOf: data)
+        }
     }
     func close() { lock.lock(); defer { lock.unlock() }; try? handle?.close(); handle = nil }
 }

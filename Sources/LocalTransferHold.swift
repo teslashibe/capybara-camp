@@ -55,7 +55,7 @@ struct SourceVerification: Decodable, Equatable, Sendable {
                     else {
                         guard active, let input else { throw CampError.message("Source verification stopped") }
                         Task.detached { [weak self] in
-                            do { try input.write(Data("{\"type\":\"\(kind)\"}\n".utf8)) }
+                            do { try await input.write(Data("{\"type\":\"\(kind)\"}\n".utf8)) }
                             catch { await self?.fail("Source verification stopped") }
                         }
                     }
@@ -86,15 +86,15 @@ struct SourceVerification: Decodable, Equatable, Sendable {
         let request = initial, processID = id
         Task.detached { [weak self] in
             let drain = Task.detached {
-                while let part = try? conversationChunk(errors.fileHandleForReading, limit: 4096), !part.isEmpty {}
+                while let part = try? await conversationChunk(errors.fileHandleForReading, limit: 4096), !part.isEmpty {}
                 try? errors.fileHandleForReading.close()
             }
             let write = Task.detached { [weak self] in
-                do { try writer.write(request) } catch { await self?.fail("Could not send the source review") }
+                do { try await writer.write(request) } catch { await self?.fail("Could not send the source review") }
             }
             var buffer = Data(), failure = "Source verification stopped"
             do {
-                while case let part = try conversationChunk(output.fileHandleForReading, limit: 4096), !part.isEmpty {
+                while case let part = try await conversationChunk(output.fileHandleForReading, limit: 4096), !part.isEmpty {
                     buffer.append(part)
                     guard buffer.count <= 8192 else { throw CampCloudError.responseTooLarge }
                     while let end = buffer.firstIndex(of: 10) {
@@ -110,7 +110,7 @@ struct SourceVerification: Decodable, Equatable, Sendable {
                     }
                 }
             } catch { failure = error.localizedDescription; if p.isRunning { p.terminate() } }
-            p.waitUntilExit(); writer.close(); try? output.fileHandleForReading.close()
+            await blockingIO { p.waitUntilExit() }; writer.close(); try? output.fileHandleForReading.close()
             await write.value; await drain.value
             await MainActor.run { _ = Bridge.activeProcesses.removeValue(forKey: processID) }
             await self?.ended(failure)

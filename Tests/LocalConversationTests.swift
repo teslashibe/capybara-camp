@@ -9,6 +9,7 @@ import Foundation
         CampSession(id: id, sessionID: id, provider: provider, sourceID: id, sourceLabel: id, root: root, title: id, cwd: root, updated: 1, path: "", accountID: "", archived: false)
     }
     @MainActor static func main() async throws {
+        testCase("background navigation and queues")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -46,6 +47,7 @@ import Foundation
         precondition(!store.isBusy(a) && !store.isBusy(b))
         precondition(Bridge.activeProcesses.isEmpty)
 
+        testCase("reported settings")
         let reported = LocalConversation(session: a, history: [], prompt: "settings")
         try reported.start(prompt: "settings", model: "requested-model", tuning: ModelTuning(effort: "low", speed: "standard"), makeProcess: { fixtureProcess("reported-settings") })
         try await until { reported.ready }
@@ -54,6 +56,7 @@ import Foundation
         try await until { Bridge.activeProcesses.isEmpty }
 
         var result: ConversationResult?
+        testCase("message settings")
         let metadata = LocalConversation(session: a, history: [], prompt: "metadata")
         metadata.completed = { result = $0 }
         try metadata.start(prompt: "metadata", model: "requested-model", tuning: ModelTuning(effort: "low", speed: "standard"), makeProcess: { fixtureProcess("message-settings") })
@@ -66,6 +69,7 @@ import Foundation
         let restoredMessage = try JSONDecoder().decode(Message.self, from: JSONEncoder().encode(responses[0]))
         precondition(restoredMessage == responses[0], "Saving implementation history must retain response metadata")
         result = nil
+        testCase("cancel")
         let cancel = LocalConversation(session: a, history: [], prompt: "cancel")
         cancel.completed = { result = $0 }
         try cancel.start(prompt: "cancel", model: "", tuning: ModelTuning(), makeProcess: {
@@ -77,6 +81,7 @@ import Foundation
         precondition(Bridge.activeProcesses.isEmpty)
 
         result = nil
+        testCase("oversized event")
         let oversized = LocalConversation(session: a, history: [], prompt: "limit")
         oversized.completed = { result = $0 }
         try oversized.start(prompt: "limit", model: "", tuning: ModelTuning(), makeProcess: {
@@ -87,6 +92,7 @@ import Foundation
         precondition(Bridge.activeProcesses.isEmpty)
 
         result = nil
+        testCase("bounded stderr")
         let stderr = LocalConversation(session: a, history: [], prompt: "bounded errors")
         stderr.completed = { result = $0 }
         try stderr.start(prompt: "bounded errors", model: "", tuning: ModelTuning(), makeProcess: {
@@ -97,6 +103,7 @@ import Foundation
         precondition(Bridge.activeProcesses.isEmpty)
 
         result = nil
+        testCase("late stop")
         let lateStop = LocalConversation(session: a, history: [], prompt: "late stop")
         lateStop.completed = { result = $0 }
         try lateStop.start(prompt: "late stop", model: "", tuning: ModelTuning(), makeProcess: {
@@ -109,6 +116,7 @@ import Foundation
         // A turn lost after the provider accepted the prompt is uncertain, not
         // failed: the provider may have finished work Camp never saw.
         result = nil
+        testCase("lost after start")
         let lost = LocalConversation(session: a, history: [], prompt: "Lost turn")
         lost.completed = { result = $0 }
         try lost.start(prompt: "Lost turn", model: "", tuning: ModelTuning(), makeProcess: { fixtureProcess("lost-after-start") })
@@ -117,6 +125,7 @@ import Foundation
 
         // A provider that stops reading stdin cannot block the UI's Stop action.
         result = nil
+        testCase("stalled input stop")
         let stalled = LocalConversation(session: a, history: [], prompt: String(repeating: "x", count: 65000))
         stalled.completed = { result = $0 }
         try stalled.start(prompt: String(repeating: "x", count: 65000), model: "", tuning: ModelTuning(), makeProcess: {
@@ -129,6 +138,7 @@ import Foundation
         precondition(result?.state == "uncertain")
         precondition(Bridge.activeProcesses.isEmpty)
         result = nil
+        testCase("isolated plan")
         let isolated = LocalConversation(session: a, history: [], prompt: "plan")
         isolated.completed = { result = $0 }
         try isolated.start(prompt: "plan", model: "fixture", tuning: ModelTuning(), mode: .planning, makeProcess: {
@@ -141,6 +151,7 @@ import Foundation
         precondition(result?.usage.inputTokens == 123 && result?.usage.outputTokens == nil)
 
         result = nil
+        testCase("overflow plan")
         let overflow = LocalConversation(session: a, history: [], prompt: "plan")
         overflow.completed = { result = $0 }
         try overflow.start(prompt: "plan", model: "fixture", tuning: ModelTuning(), mode: .planning, makeProcess: {
@@ -150,6 +161,7 @@ import Foundation
         precondition(result?.state == "failed" && result!.output.utf8.count <= 8192)
         precondition(Bridge.activeProcesses.isEmpty)
         result = nil
+        testCase("closed input")
         let closedInput = LocalConversation(session: a, history: [], prompt: String(repeating: "x", count: 65000))
         closedInput.completed = { result = $0 }
         try closedInput.start(prompt: String(repeating: "x", count: 65000), model: "", tuning: ModelTuning(), makeProcess: {
@@ -159,6 +171,7 @@ import Foundation
         precondition(result?.state == "uncertain", "A closed input pipe must report an uncertain result without terminating Camp")
         precondition(Bridge.activeProcesses.isEmpty)
         result = nil
+        testCase("restored history")
         let restored = LocalConversation(session: a, history: [], prompt: "Continue")
         var createdID: String?
         var persistedID: String?
@@ -180,6 +193,7 @@ import Foundation
         precondition(restored.session.sessionID == a.sessionID && Bridge.activeProcesses.isEmpty)
         result = nil
         createdID = nil
+        testCase("unexpected session id")
         let unexpected = LocalConversation(session: a, history: [], prompt: "Resume")
         unexpected.sessionCreated = { createdID = $0 }
         unexpected.completed = { result = $0 }
@@ -190,6 +204,7 @@ import Foundation
         for scenario in ["missing-session-id", "conflicting-session-id", "duplicate-session-id", "persistence-failed"] {
             result = nil
             var saves = 0, forwarded = 0
+            testCase(scenario)
             let identity = LocalConversation(session:a,history:[],prompt:"Continue")
             identity.persistSession = { _ in
                 if scenario == "persistence-failed" { throw CampCloudError.cacheUnavailable }

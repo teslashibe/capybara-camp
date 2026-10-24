@@ -408,6 +408,11 @@ findings through the process in [SECURITY.md](SECURITY.md).
 provider processes. Its bridge integration suite packages a disposable Mac app
 with the real Go helper and exercises recovery through the production command
 dispatcher. Its support directory is isolated from the user's sessions.
+Suites run on a one-thread Swift concurrency pool
+(`LIBDISPATCH_COOPERATIVE_POOL_STRICT=1`), so a pipe read or process wait left on
+that pool hangs on every Mac, as it did on three-CPU CI runners. Each suite has a
+deadline (`CAMP_SUITE_TIMEOUT`, 300 seconds by default), and `testCase(_:)` names
+the case that stalled.
 `tools/test-server.sh` requires Docker and starts disposable
 PostgreSQL for Go race tests and vet; it removes the container on exit. An explicit
 `CAMP_TEST_DATABASE_URL` uses isolated schemas in that test database instead.
