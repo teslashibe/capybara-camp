@@ -1,0 +1,282 @@
+import Foundation
+
+// Lose responses only after the real API has persisted each operation. The
+// journal must reuse its key when a newly constructed coordinator retries.
+private actor LostReturnResponses: CampAccountTransport {
+    let api: CampHTTP
+    var lost=Set<String>()
+    var keys: [String:Set<String>]=[:]
+    init(_ api:CampHTTP) { self.api=api }
+    func counts()->[String:Int] { keys.mapValues(\.count) }
+    func data(_ method:String,path:String,body:Data?,key:String?,token:String?)async throws->Data {
+        let result=try await api.data(method,path:path,body:body,key:key,token:token)
+        let operation = method=="POST" ? ["/transfers","/handoffs","/commit"].first(where:{path.hasSuffix($0)}) : nil
+        if let operation {
+            guard let key else{preconditionFailure("Missing durable operation key")}
+            keys[operation,default:[]].insert(key)
+            if lost.insert(operation).inserted { throw URLError(.networkConnectionLost) }
+        }
+        return result
+    }
+}
+
+private actor LostContinuationEvent: CampPublishingTransport {
+    let api: CampHTTP
+    let token: String
+    var lost = false
+    var lostFinish = false
+    init(api:CampHTTP,token:String) { self.api=api;self.token=token }
+    func perform(_ operation:CampPublication) async throws -> Data {
+        let data = try await api.data(operation.method,path:operation.path,body:operation.body,key:operation.key,token:token)
+        if operation.path.hasSuffix("/continuation-events") && !lost {
+            lost=true;throw URLError(.networkConnectionLost)
+        }
+        if operation.kind == "finish" && !lostFinish {
+            lostFinish=true;throw URLError(.networkConnectionLost)
+        }
+        return data
+    }
+}
+
+@main struct NativeReturnHandoffAPITests {
+    struct Fixture:Decodable {var url:String;var campId:String}
+    struct Driver:Decodable {var token:String}
+    struct Profile:Decodable {var id:String}
+    struct ClaimedExport:Decodable {var workspace:CloudWorkspace}
+    static func rejects(_ label:String,_ action:()async throws->Void)async {
+        do{try await action();preconditionFailure(label)}catch{}
+    }
+    static func denied(_ label:String,_ action:()async throws->Void)async {
+        do{try await action();preconditionFailure(label)}
+        catch CampCloudError.server(let status,let code){precondition(status==404 && code=="not_available",label)}
+        catch{preconditionFailure("Unexpected authorization failure: \(error)")}
+    }
+    @MainActor static func main()async throws {
+        guard let directory=ProcessInfo.processInfo.environment["CAMP_NATIVE_API_FIXTURE"],
+              ProcessInfo.processInfo.environment["CAMP_NATIVE_FIXTURE_RETURN"]=="1" else {
+            print("SKIP: run CAMP_NATIVE_FIXTURE_HISTORY=1 CAMP_NATIVE_FIXTURE_RETURN=1 tools/test-native-api.sh NativeReturnHandoffAPITests");return
+        }
+        let root=URL(fileURLWithPath:directory)
+        precondition(directory.hasPrefix("/") && FileManager.default.fileExists(atPath:root.appendingPathComponent(".capybara-api-fixture").path))
+        let fixture=try CampWire.decoder().decode(Fixture.self,from:Data(contentsOf:root.appendingPathComponent("fixture.json")))
+        precondition(fixture.url.hasPrefix("http://127.0.0.1:"))
+        let driver=try CampWire.decoder().decode(Driver.self,from:Data(contentsOf:root.appendingPathComponent("driver.json")))
+        let sessions=try CampWire.decoder().decode([CloudSession].self,from:Data(contentsOf:root.appendingPathComponent("history-sessions.json")))
+        let runners=try JSONDecoder().decode([String:String].self,from:Data(contentsOf:root.appendingPathComponent("return-runner-tokens.json")))
+        precondition(Set(sessions.map(\.provider))==Set(["Codex","Claude"]))
+        let api=CampHTTP(endpoint:try CampEndpoint(fixture.url,allowLoopback:true))
+        let sourceActor=try await api.get(CloudActor.self,path:"/v1/me",token:driver.token)
+        func login(_ email:String,_ name:String)async throws->CloudLogin {
+            _=try await api.data("POST",path:"/v1/auth/code",body:CampWire.body(["email":email]))
+            let code=try String(contentsOf:root.appendingPathComponent(name+"-code.txt"),encoding:.utf8)
+            return try CampWire.decoder().decode(CloudLogin.self,from:await api.data("POST",path:"/v1/auth/verify",body:CampWire.body(["email":email,"code":code,"device_name":"Return destination Mac"])))
+        }
+        let destinationLogin=try await login("owner@example.com","owner"),teammate=try await login("k@example.com","k")
+        let actor=destinationLogin.actor,token=destinationLogin.token
+        precondition(actor.userId==sourceActor.userId && actor.deviceId != sourceActor.deviceId && teammate.actor.userId != actor.userId)
+        for session in sessions {
+            let scope=CloudScope(origin:fixture.url,userId:actor.userId,campId:fixture.campId)
+            let cache=try CampCache(directory:root.appendingPathComponent("return-"+session.provider)),epoch=try await cache.epoch(scope)
+            let auth=CloudCredential(origin:fixture.url,actor:actor,token:token,expiresAt:Date().addingTimeInterval(3600))
+            let transport=LostReturnResponses(api),runner=runners[session.provider]!
+            let files=try CampWorkspaceExport(cache:cache,scope:scope,credential:auth,transport:transport,epoch:epoch)
+            let history=try CampTransferHistory(cache:cache,scope:scope,credential:auth,transport:transport,epoch:epoch)
+            let screen = CampReturnTransfer(cache:cache,automatic:false)
+            screen.attach(scope:scope,credential:auth,transport:transport)
+            await screen.inspect(session);await screen.advance()
+            precondition(screen.phase == "inspecting" && screen.error.isEmpty,screen.error)
+            func completeExport(_ exported:CloudWorkspaceExport, inspection:Bool) async throws -> Data {
+                let claim=UUID().uuidString.lowercased(),exportBase="/v1/runner/exports/"+exported.id
+                let claimed=try CampWire.decoder().decode(ClaimedExport.self,from:await api.data("POST",path:exportBase+"/claim",body:CampWire.body(["claim_id":claim]),token:runner))
+                let content=Data("Reviewed cloud notes\n".utf8)
+                let payload:Data
+                if inspection {
+                    payload = try JSONEncoder().encode(TransferChanges(baseCommit:claimed.workspace.baseCommit,branch:claimed.workspace.branch,files:[TransferChange(path:"notes.txt",kind:"modified")]))
+                } else {
+                    payload=try CampWire.body(["version":1,"base_commit":claimed.workspace.baseCommit,"branch":claimed.workspace.branch,
+                        "files":[["path":"notes.txt","sha256":PublishMessage.hash(content),"data":content.base64EncodedString()]],"excluded":[]])
+                }
+                _=try await api.data("POST",path:exportBase+"/result",body:CampWire.body(["claim_id":claim,"sha256":PublishMessage.hash(payload),"bytes":payload.count]),token:runner)
+                _=try await api.data("PUT",path:exportBase+"/chunks/0",body:CampWire.body(["claim_id":claim,"sha256":PublishMessage.hash(payload),"data":payload.base64EncodedString()]),token:runner)
+                _=try await api.data("POST",path:exportBase+"/complete",body:CampWire.body(["claim_id":claim]),token:runner)
+                return payload
+            }
+            _ = try await completeExport(screen.export!.export!,inspection:true)
+            await screen.advance();precondition(screen.phase == "select",screen.error)
+            precondition(screen.changes?.files.map(\.path) == ["notes.txt"])
+            await screen.capture(paths:["notes.txt"])
+            let exported = try await files.advance()!.export!
+            let payload = try await completeExport(exported,inspection:false)
+            _ = try await files.advance()
+            try await history.begin(session:session)
+            for _ in 0..<12 {if try await history.current()?.complete==true{break};try await history.advance()}
+            let archive=try await history.archive()!
+            precondition(archive.conversations.count==2 && archive.conversations[0].messages.count==260 && archive.conversations[1].messages.count==250)
+            // Use the production Go manifest reviewer. Only filesystem checkout
+            // and installation receipts are synthetic in this API contract test.
+            let process=Process(),input=Pipe(),output=Pipe()
+            process.executableURL=URL(fileURLWithPath:FileManager.default.currentDirectoryPath).appendingPathComponent("build/camp-local")
+            process.arguments=["transfer-review"];process.standardInput=input;process.standardOutput=output
+            try process.run();try input.fileHandleForWriting.write(contentsOf:payload);try input.fileHandleForWriting.close()
+            let reviewed=output.fileHandleForReading.readDataToEndOfFile();process.waitUntilExit();precondition(process.terminationStatus==0)
+            let review=try CampWire.decoder().decode(TransferCapture.self,from:reviewed),bridge=DestinationBridgeFixture(review)
+            screen.callLocal = { try await bridge.call($0,$1) }
+            await screen.restore();await screen.advance()
+            precondition(screen.phase == "review",screen.error)
+            let preview = try await screen.preview("notes.txt")
+            precondition(preview == "Reviewed cloud notes\n")
+            let source = CampSource(id:"fixture-source-"+session.provider,provider:session.provider,root:"/fixture/profile",label:"Return test profile",count:0)
+            await screen.prepare(source:source,purpose:"implementation")
+            precondition(screen.phase == "checkout",screen.error)
+            let target = screen.destination!.target
+            let profile = Profile(id:target.profileID)
+            await screen.advance();await screen.advance();await screen.advance()
+            func handoff()throws->CampReturnHandoff {try CampReturnHandoff(cache:cache,scope:scope,credential:auth,transport:transport,epoch:epoch,callLocal:{try await bridge.call($0,$1)})}
+            let base="/v1/camps/\(scope.campId)/sessions/\(session.id)",stopClaim=UUID().uuidString.lowercased()
+            for _ in 0..<24 {
+                if try await handoff().current()?.phase=="confirm"{break}
+                await screen.advance()
+                if let held=try await handoff().current()?.handoff,held.state=="pending" {
+                    let runnerBase="/v1/runner/handoffs/"+held.id
+                    _=try await api.data("POST",path:runnerBase+"/claim",body:CampWire.body(["claim_id":stopClaim]),token:runner)
+                    _=try await api.data("POST",path:runnerBase+"/ack",body:CampWire.body(["claim_id":stopClaim,"stopped":true,"payload_sha256":review.payloadSha256,"review_sha256":review.reviewSha256]),token:runner)
+                }
+            }
+            let ready=try await handoff().current()!
+            precondition(ready.phase=="confirm")
+            let permissions=session.provider=="Codex" ? PermissionSettings(sandbox:"workspace-write",approval:"on-request",reviewer:"user") : PermissionSettings(claudeMode:"manual")
+            let held=ready.handoff!,commitPath=base+"/handoffs/"+held.id+"/commit"
+            let approval=try CampWire.body(["expected_handoff_revision":held.revision,"context_continuation_approved":true,"execution_approved":true,"permissions":session.provider=="Codex" ? ["sandbox":"workspace-write","approval":"on-request","reviewer":"user"] : ["claudeMode":"manual"]])
+            await denied("Other device confirmed destination"){_=try await api.data("POST",path:commitPath,body:approval,key:UUID().uuidString,token:driver.token)}
+            await denied("Teammate confirmed private move"){_=try await api.data("POST",path:commitPath,body:approval,key:UUID().uuidString,token:teammate.token)}
+            await screen.confirm(contextApproved:true,executionApproved:true,permissions:permissions)
+            await screen.advance();precondition(!screen.error.isEmpty,"Missing lost commit response")
+            let committed=try await api.get(CloudHandoff.self,path:base+"/handoffs/"+held.id,token:token)
+            precondition(committed.commitNonce != nil)
+            // The real runner's fresh stop verification is tested in Go. This
+            // fixture submits the proof to exercise the actual server commit.
+            _=try await api.data("POST",path:"/v1/runner/handoffs/"+held.id+"/finish",body:CampWire.body([
+                "claim_id":stopClaim,"stopped":true,"payload_sha256":review.payloadSha256,"review_sha256":review.reviewSha256,"commit_nonce":committed.commitNonce!]),token:runner)
+            _=try await handoff().advance()
+            let finished=try await handoff().current()!,counts=await transport.counts()
+            precondition(finished.phase=="complete" && finished.session?.id==session.id && finished.session?.profileId==profile.id)
+            precondition(finished.session?.ownerDeviceId==actor.deviceId && finished.session?.executionEpoch==session.executionEpoch!+1 && finished.session?.transcriptRevision==session.transcriptRevision)
+            precondition(counts==["/transfers":1,"/handoffs":1,"/commit":1])
+            let execution=try await api.get(CloudExecutionTarget.self,path:base+"/execution",token:token)
+            precondition(execution.location=="local" && execution.mode=="implementation" && execution.permissions==finished.permissions)
+            let child=try await api.get(CloudChildHistoryList.self,path:base+"/children",token:token)
+            precondition(child.children.count==1)
+            await rejects("Completed move retained access to source export"){_=try await files.payload()}
+            await screen.advance()
+            precondition(screen.phase == "complete",screen.error)
+            let binding = screen.completed!
+            precondition(binding.session == finished.session && binding.installation == finished.destination.installation)
+            let adopted = try await cache.localContinuation(sessionID:session.id,executionEpoch:binding.session.executionEpoch!,scope:scope,expectedEpoch:epoch)
+            precondition(adopted == binding)
+            let transient = try await handoff().current(); precondition(transient == nil)
+            let replay = try await cache.adoptReturnHandoff(finished,scope:scope,expectedEpoch:epoch)
+            precondition(replay == binding)
+            let providerID = UUID().uuidString.lowercased()
+            let live = CloudLiveConversation()
+            for turn in 0..<2 {
+                let queued = try CampWire.decoder().decode(CloudRequest.self,from:await api.data("POST",path:base+"/requests",
+                    body:CampWire.body(["prompt":"Synthetic continuation admission", "model":"", "effort":"high", "speed":"standard", "sources":[]]),key:UUID().uuidString,token:token))
+                let requestBase="/v1/camps/\(scope.campId)/requests"
+                let current = try await api.get(CloudSession.self,path:base,token:token)
+                let record = root.appendingPathComponent("worker-\(session.provider)-\(turn).jsonl")
+                let worker = CampLocalWorker(readFences: { [] }, cache:cache,automatic:false)
+                var launches = 0
+                worker.nativeSession = { _ in nil } // No ordinary imported session exists on the destination Mac
+                worker.available = { local in
+                    precondition(local.root == binding.target.root && local.cwd == binding.installation.receipt.destination)
+                    return true
+                }
+                worker.readHistory = { _ in preconditionFailure("Continuation used a bounded native transcript instead of its archive") }
+                worker.execute = { _,_,_,_,_,_ in preconditionFailure("Continuation used the ordinary launch path") }
+                worker.inspectExecution = { local, permissions in
+                    precondition(permissions.valid(for:session.provider))
+                    return ExecutionContext(fingerprint:String(repeating:"a",count:64),cwd:local.cwd,profile:local.root,provider:local.provider,permissionSummary:"Synthetic permission review")
+                }
+                worker.makeContinuationProcess = {
+                    launches += 1
+                    return fixtureProcess("continuation-worker",[providerID,String(turn),record.path])
+                }
+                worker.attach(scope:scope,actor:actor,transport:LostContinuationEvent(api:api,token:token),sessions:[current])
+                await worker.poll()
+                precondition(launches == 1,worker.status)
+                live.watch(session:current,scope:scope,client:api,credential:auth)
+                if turn == 0 {
+                    // This isolated reader has no CampConnection SSE subscriber.
+                    for _ in 0..<500 { if live.approvals.count == 1 { break }; live.invalidate(session.id); try await Task.sleep(for:.milliseconds(10)) }
+                    let approvalID="e8a1e25a-2b71-4fb9-8122-9ad03a842993"
+                    precondition(live.head?.localContinuation == true && live.approvals.first?.id == approvalID && live.messages.last?.text == "Synthetic continuation answer 0")
+                    let saved = try await cache.localContinuation(sessionID:session.id,executionEpoch:current.executionEpoch!,scope:scope,expectedEpoch:epoch)
+                    precondition(saved?.providerSessionID == providerID && saved?.firstRequestID == queued.id)
+                    let bindings = try await cache.localContinuations(sessions:[current],deviceID:actor.deviceId,scope:scope,expectedEpoch:epoch)
+                    precondition(bindings[session.id] == saved)
+                    let foreign = try await cache.localContinuations(sessions:[current],deviceID:sourceActor.deviceId,scope:scope,expectedEpoch:epoch)
+                    precondition(foreign.isEmpty,"Another Mac received this continuation projection")
+                    var reassigned = current; reassigned.executionEpoch! += 1
+                    let stale = try await cache.localContinuations(sessions:[reassigned],deviceID:actor.deviceId,scope:scope,expectedEpoch:epoch)
+                    precondition(stale.isEmpty,"Old execution binding hid another epoch's session")
+                    let board = CampStore(stateDirectory:root.appendingPathComponent("mirror-"+session.provider))
+                    board.applyCloud([current],projects:[])
+                    let native = saved!.nativeSession
+                    let other = CampSession(id:"other-profile",sessionID:providerID,provider:native.provider,sourceID:"other",sourceLabel:"Other",root:"/other-profile",title:"Unrelated session",cwd:native.cwd,updated:0,path:"",accountID:"",archived:false)
+                    board.sessions.append(contentsOf:[native,other]);board.selectedID = native.id
+                    board.applyContinuationBindings(Array(bindings.values))
+                    board.modelCatalogs[native.sourceID] = [ModelOption(id:"fixture-model",label:"Fixture model")]
+                    precondition(board.localSource(for:"camp:"+session.id)?.root == native.root)
+                    precondition(board.availableModels(board.selected!).map(\.id) == ["fixture-model"],"Returned ticket lost the selected profile's model catalog")
+                    precondition(board.shareSource(board.selected!) == nil,"Returned ticket offered duplicate publication")
+                    precondition(!board.visibleSessions.contains(where:{$0.id == native.id}) && board.visibleSessions.contains(where:{$0.id == other.id}))
+                    precondition(board.selectedID == "camp:"+session.id,"Selection stayed on a duplicate provider log")
+                    board.applyContinuationBindings([])
+                    precondition(board.localSource(for:"camp:"+session.id) == nil,"Detached account retained its local execution binding")
+                    precondition(board.visibleSessions.contains(where:{$0.id == native.id}),"Signing out hid the independent local history")
+                    let waiting = try await api.get(CloudRequest.self,path:requestBase+"/"+queued.id,token:token)
+                    precondition(waiting.providerSessionId == providerID)
+                    let control = try CampWire.body(["id":UUID().uuidString.lowercased(),"approval_seq":waiting.streamSeq!,"control":["type":"approval","id":approvalID,"allow":true]])
+                    await denied("Teammate approved owner continuation") { _ = try await api.data("POST",path:requestBase+"/\(queued.id)/controls",body:control,token:teammate.token) }
+                    _ = try await api.data("POST",path:requestBase+"/\(queued.id)/controls",body:control,token:token)
+                }
+                for _ in 0..<500 {
+                    await worker.poll()
+                    if try await cache.attempts(scope).isEmpty { break }
+                    try await Task.sleep(for:.milliseconds(10))
+                }
+                let done = try await api.get(CloudRequest.self,path:requestBase+"/"+queued.id,token:token)
+                precondition(done.state == "completed" && done.providerSessionId == providerID,worker.status)
+                let attempts = try await cache.attempts(scope)
+                precondition(attempts.isEmpty)
+                await worker.poll();precondition(launches == 1,"Worker repeated a provider turn")
+                let inputs = try String(contentsOf:record,encoding:.utf8).split(separator:"\n")
+                precondition(inputs.count == 1)
+                let input = try JSONSerialization.jsonObject(with:Data(inputs[0].utf8)) as! [String:Any]
+                precondition(input["newSession"] as? Bool == (turn == 0))
+                let restored = input["restoredHistory"] as! [String:String]
+                precondition(restored == ["scope":binding.history.scope,"transferID":binding.history.transferID,"receiptSHA256":binding.history.receiptSHA256])
+                let native = input["session"] as! [String:Any]
+                precondition(native["sessionID"] as? String == (turn == 0 ? binding.target.sessionID : providerID))
+                precondition(native["cwd"] as? String == binding.installation.receipt.destination)
+                worker.attach(scope:nil,actor:nil,transport:nil,sessions:[])
+
+            }
+            var retained:[CloudMessage]=[],before:Int64=0
+            for _ in 0..<4 {
+                let page=try await api.get(CloudTranscript.self,path:base+"/transcript?limit=200&before=\(before)",token:token)
+                retained=page.messages+retained
+                if !page.hasMore { break };before=page.before
+            }
+            precondition(retained.count == 264 && Set(retained.map(\.id)).count == 264)
+            precondition(retained.suffix(4).map(\.text) == ["Synthetic continuation admission","Synthetic continuation answer 0","Synthetic continuation admission","Synthetic continuation answer 1"])
+            let original=archive.conversations[0].messages
+            precondition(Array(retained.prefix(260)) == original)
+            live.acknowledge(retained)
+            precondition(live.messages.isEmpty && live.approvals.isEmpty)
+            live.stop();screen.attach(scope:nil,credential:nil,transport:nil)
+            try await cache.clear(scope)
+            print("PASS: real API return for \(session.provider), independent destination device, 510 history messages, lost-response recovery and retained permissions")
+        }
+    }
+}

@@ -1,0 +1,68 @@
+import Foundation
+
+@main struct PermissionSettingsTests {
+    @MainActor static func until(_ condition: () -> Bool) async throws {
+        for _ in 0..<500 { if condition() { return }; try await Task.sleep(for: .milliseconds(10)) }
+        preconditionFailure("Permission settings test timed out")
+    }
+    @MainActor static func main() async throws {
+        precondition(!PermissionSettings(approval: "untrusted").valid(for: "Codex"))
+        precondition(!PermissionSettings(sandbox: "workspace-write", claudeMode: "auto").valid(for: "Codex"))
+        precondition(!PermissionSettings(approval: "never", reviewer: "auto_review").valid(for: "Codex"))
+        precondition(PermissionSettings(claudeMode: "dontAsk").valid(for: "Claude"))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = CampSession(id: "fixture:one", sessionID: UUID().uuidString, provider: "Codex", sourceID: "fixture", sourceLabel: "Fixture", root: root.path, title: "Permission fixture", cwd: root.path, updated: 1, path: "", accountID: "", archived: false)
+        await LocalSessionIndex.shared.save(ImportResult(sessions: [source], sources: [], errors: []), directory: root)
+        let requestID = UUID().uuidString, trace = root.appendingPathComponent("request.json")
+        let store = CampStore(stateDirectory: root, conversationProcess: {
+            fixtureProcess("permission-approval", [trace.path, requestID])
+        })
+        store.executionContextReader = { session in ExecutionContext(fingerprint: String(repeating: "a", count: 64), cwd: session.cwd, profile: session.root, provider: session.provider, permissionSummary: "Fixture") }
+        let initial = PermissionSettings(sandbox: "read-only", approval: "on-request", reviewer: "user")
+        try await store.applyPermissions(initial, session: source, preview: false)
+        precondition(store.sessionPermissions.grants[source.id] != nil)
+        precondition(store.start(source, prompt: "Test", model: "", tuning: ModelTuning()))
+        try await until { store.conversations[source.id]?.approvals.count == 1 }
+        let run = store.conversations[source.id]!
+        precondition(store.stage(source) == .attention && store.isBusy(source))
+        precondition(run.effectivePermissions == "read-only · on-request · user")
+        store.selectedID = source.id; store.draft = "Queued under original permissions"; store.enqueueDraft()
+        let queuedRevision = store.queuedPrompts.first!.permissionRevision
+        let next = PermissionSettings(sandbox: "workspace-write", approval: "on-request", reviewer: "user")
+        try await store.applyPermissions(next, session: source, preview: false)
+        precondition(store.permissionRevision(source) != queuedRevision)
+        precondition(run.effectivePermissions == "read-only · on-request · user", "Changing saved settings must not pretend the active turn changed")
+        run.answer(requestID, allow: true, decision: "unoffered")
+        precondition(run.answering.isEmpty)
+        run.answer(requestID, allow: true, decision: "acceptForSession")
+        try await until { store.conversations.isEmpty }
+        store.resumeQueue()
+        precondition(store.conversations.isEmpty && store.queuedPrompts.count == 1 && store.banner.contains("Permissions changed"))
+        let restored = CampStore(stateDirectory: root)
+        precondition(restored.permissionSettings(source) == next)
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("session-permissions.json").path)
+        precondition((attrs[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+        try await restored.applyPermissions(PermissionSettings(), session: source, preview: true)
+        precondition(restored.sessionPermissions.grants[source.id] == nil)
+        let request = try JSONSerialization.jsonObject(with: Data(contentsOf: trace)) as! [String: Any]
+        precondition(request["executionApproved"] as? Bool == true && request["newSession"] as? Bool == false)
+        // A teammate's shared chat request must not inherit this Mac's local grant.
+        let sharedRoot = root.appendingPathComponent("shared-request")
+        try FileManager.default.createDirectory(at: sharedRoot, withIntermediateDirectories: true)
+        await LocalSessionIndex.shared.save(ImportResult(sessions: [source], sources: [], errors: []), directory: sharedRoot)
+        let launches = sharedRoot.appendingPathComponent("launches.json")
+        let shared = CampStore(stateDirectory: sharedRoot, conversationProcess: { fixtureProcess("record-launch", [launches.path]) })
+        shared.executionContextReader = store.executionContextReader
+        try await shared.applyPermissions(next, session: source, preview: false)
+        precondition(shared.sessionPermissions.grants[source.id] != nil)
+        precondition(shared.start(source, prompt: "Teammate request", model: "", tuning: ModelTuning(), notifyCompletion: false, localTools: false))
+        try await until { shared.conversations.isEmpty }
+        let launch = try JSONSerialization.jsonObject(with: Data(contentsOf: launches)) as! [String: Any]
+        precondition(launch["mode"] as? String == "chat" && launch["executionApproved"] as? Bool != true && (launch["permissions"] == nil || launch["permissions"] is NSNull),
+                     "A teammate's request ran with the owner's local tool grant")
+        precondition(Bridge.activeProcesses.isEmpty)
+        print("PASS: persistent permission choices, active-turn boundaries, Needs you, offered decisions and stale queues")
+    }
+}

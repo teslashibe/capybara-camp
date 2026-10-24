@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import Darwin
 
-struct CampSession: Codable, Identifiable, Equatable {
+struct CampSession: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let sessionID: String
     let provider: String
@@ -16,7 +16,12 @@ struct CampSession: Codable, Identifiable, Equatable {
     let accountID: String
     let archived: Bool
     var model: String = ""
+    var effort: String? = nil
+    var speed: String? = nil
     var project: String { URL(fileURLWithPath: cwd).lastPathComponent }
+    var isSharedPlan: Bool { id.hasPrefix("camp-plan:") || id.hasPrefix("camp-plan-draft:") }
+    var isCloud: Bool { (id.hasPrefix("camp:") || isSharedPlan) && root.isEmpty }
+    var isPlan: Bool { id.hasPrefix("plan:") || isSharedPlan }
 }
 struct CampSource: Codable, Identifiable, Equatable {
     let id: String
@@ -45,8 +50,15 @@ struct LiveState: Codable, Equatable {
     let children: [ChildSession]
     let owner: String
     let pid: Int
+    var effort: String? = nil
+    var speed: String? = nil
 }
-struct ModelOption: Codable, Identifiable {
+struct ReportedModelSettings: Equatable {
+    var model: String? = nil
+    var effort: String? = nil
+    var speed: String? = nil
+}
+struct ModelOption: Codable, Identifiable, Equatable {
     let id: String
     let label: String
     var efforts: [String] = []
@@ -65,7 +77,29 @@ struct ActivityResult: Codable {
     let errors: [String: String]
 }
 struct ChildrenResult: Codable { let children: [ChildSession] }
-struct Message: Codable, Identifiable, Equatable { let id: String; let role: String; let text: String }
+struct Message: Codable, Identifiable, Equatable, Sendable {
+    let id: String
+    let role: String
+    let text: String
+    var model: String? = nil
+    var effort: String? = nil
+    var speed: String? = nil
+    var attachments: [TranscriptAttachment]? = nil
+    // Display name of a teammate who wrote this prompt; nil means it is yours.
+    // Not encoded: it never reaches the helper, the model or saved history.
+    var author: String? = nil
+    private enum CodingKeys: String, CodingKey { case id, role, text, model, effort, speed, attachments }
+    // Context provenance covers exactly the text supplied to the model.
+    var contextMessage: Message { Message(id: id, role: role, text: text) }
+    var settingsDescription: String? {
+        guard role == "assistant" else { return nil }
+        var parts: [String] = []
+        if let model, !model.isEmpty, model.utf8.count <= 200, !model.contains(where: { $0.isNewline || $0.asciiValue == 0 }) { parts.append(model) }
+        if let effort, ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].contains(effort) { parts.append(ModelMenu.effortName(effort) + " effort") }
+        if let speed, ["standard", "fast", "ultrafast"].contains(speed) { parts.append(ModelMenu.speedName(speed)) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
 struct QueuedPrompt: Codable, Identifiable {
     let id: String
     let sessionID: String
@@ -74,12 +108,33 @@ struct QueuedPrompt: Codable, Identifiable {
     let effort: String
     let speed: String
     var state = "waiting"
+    var sources: [SessionReference]? = nil
+    var permissionRevision: String? = nil
 }
 struct Transcript: Codable { let messages: [Message]; let total: Int }
 enum Stage: String, CaseIterable, Codable {
     case ready = "Ready", progress = "In progress", attention = "Needs you", done = "Done"
     var color: Color {
         switch self { case .ready: return Color(hex: 0x91856F); case .progress: return Color(hex: 0x62816B); case .attention: return Color(hex: 0xC18549); case .done: return Color(hex: 0x77969C) }
+    }
+}
+private struct SessionStateSnapshot {
+    let running: Set<String>
+    let waiting: Set<String>
+    let activity: [String: LiveState]
+    let remote: [String: CloudSession]
+    let requests: Set<String>
+    let stages: [String: Stage]
+    func busy(_ session: CampSession) -> Bool {
+        if running.contains(session.id) { return true }
+        if let shared = remote[session.id] { return shared.state == "running" || requests.contains(shared.id) }
+        return activity[session.id]?.state == "running"
+    }
+    func stage(_ session: CampSession) -> Stage {
+        if waiting.contains(session.id) || remote[session.id]?.state == "waiting" { return .attention }
+        if busy(session) { return .progress }
+        if let live = activity[session.id], ["waiting", "unknown"].contains(live.state) { return .attention }
+        return stages[session.id] ?? (session.archived ? .done : .ready)
     }
 }
 enum CampError: LocalizedError {
@@ -95,27 +150,19 @@ extension Color {
 }
 
 enum Bridge {
-    static var activeProcess: Process?
-    static let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Capybara Camp")
-    static let python: String = {
-        let candidates = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"] +
-            (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map { String($0) + "/python3" }
-        for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate) {
-            let probe = Process()
-            probe.executableURL = URL(fileURLWithPath: candidate)
-            probe.arguments = ["-c", "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)"]
-            probe.standardOutput = FileHandle.nullDevice; probe.standardError = FileHandle.nullDevice
-            do { try probe.run(); probe.waitUntilExit(); if probe.terminationStatus == 0 { return candidate } } catch { continue }
-        }
-        return ""
+    static var activeProcesses: [UUID: Process] = [:]
+    static let support: URL = {
+        if let path = ProcessInfo.processInfo.environment["CAPY_SUPPORT"], path.hasPrefix("/") { return URL(fileURLWithPath: path) }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Capybara Camp")
     }()
     static func process(_ action: String) throws -> Process {
+        guard ["discover", "scan", "transcript", "transcript-attachment", "export-page", "add-source", "children", "child-history-catalog", "child-export-page", "child-transcript-attachment", "activity", "permissions", "execution-context", "codex-activity-watch", "conversation", "transfer-source", "transfer-fences", "transfer-resolve", "transfer-changes", "transfer-capture", "transfer-review", "transfer-stage", "transfer-install", "transfer-checkout"].contains(action) else {
+            throw CampError.message("Unsupported local session action")
+        }
+        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/camp-local")
+        guard FileManager.default.isExecutableFile(atPath: helper.path) else { throw CampError.message("The bundled Go session helper is missing. Rebuild the app.") }
         let p = Process()
-        guard let script = Bundle.main.url(forResource: "bridge", withExtension: "py") else { throw CampError.message("The local session adapter is missing. Rebuild the app.") }
-        guard FileManager.default.isExecutableFile(atPath: python) else { throw CampError.message("Install Python 3.11 or newer to read local sessions") }
-        p.executableURL = URL(fileURLWithPath: python)
-        p.arguments = [script.path, action]
-        p.environment = ProcessInfo.processInfo.environment.merging(["PYTHONUNBUFFERED": "1", "PYTHONDONTWRITEBYTECODE": "1"]) { _, new in new }
+        p.executableURL = helper; p.arguments = [action]
         return p
     }
     static func call(_ action: String, input: Data = Data()) async throws -> Data {
@@ -184,9 +231,43 @@ final class TranscriptWatch {
 }
 
 @MainActor final class CampStore: ObservableObject {
+    let onboarding: CampOnboarding
+    let executionDefaults: ExecutionDefaults
+    let cloud: CampConnection
+    let sharing: CampSharing
+    let mentions: SessionMentions
+    let planning: LocalPlanning
+    let notifications: CampNotifications
+    let sharedPlanning: CampPlanning
+    let planPromotion: CampPlanPromotion
+    @Published var notificationSheet = false
+    @Published var notificationPlanVersion: Int?
+    @Published var notificationMessageID: String?
+    @Published var sharedPlanResult: CloudPlanningResult?
+    var sharedPlanScope: CloudScope?
+    var openingNotification = false
+    var cloudRestoreFinished = false
+    var hasImportedSessions = false
+    private var externalRuns: [String: String] = [:]
+    private var backgroundPoll: Task<Void, Never>?
+    @Published var shareSheet: CampSession?
+    @Published var planPromotionSheet: CampSession?
+    @Published var executionSheet: CampSession?
+    @Published var contextInspection: ContextInspection?
+    @Published var reviewingPlan: String?
+    @Published var planNavigation: PlanNavigationRequest?
+    @Published var selectedChildID: String?
+    var selectedChild: ChildSession? { children.first { $0.id == selectedChildID } }
+    var implementationTranscriptReader: ((CampSession, Int) async throws -> Transcript)?
+    @Published var cloudSessions: [String: CloudSession] = [:] { didSet { filterRevision += 1 } }
+    @Published var recentType = "All types"
+    @Published var remoteHasMore = false
+    private var cloudHistory: [String: [CloudMessage]] = [:]
+    private var cloudHistoryBefore: [String: Int64] = [:]
+    private var cloudHistoryRevision: [String: Int64] = [:]
     @Published var sessions: [CampSession] = [] { didSet { filterRevision += 1 } }
     @Published var sources: [CampSource] = []
-    @Published var stages: [String: Stage] = [:]
+    @Published var stages: [String: Stage] = [:] { didSet { filterRevision += 1 } }
     @Published var selectedID: String?
     @Published var sourceFilter = "all"
     @Published var search = ""
@@ -196,38 +277,70 @@ final class TranscriptWatch {
     @Published var messages: [Message] = []
     @Published var historyTotal = 0
     @Published var draft = ""
-    @Published var liveText = ""
-    @Published var runningID: String? { didSet { filterRevision += 1 } }
+    @Published var preparingPrompts: Set<String> = []
+    @Published var conversations: [String: LocalConversation] = [:] { didSet { filterRevision += 1 } }
+    var liveText: String {
+        if selected?.isCloud == true { return cloud.live.messages.last?.text ?? "" }
+        return selected.flatMap { conversation($0)?.text } ?? ""
+    }
+    var runningID: String? { selected.flatMap { conversation($0) == nil ? nil : $0.id } }
     @Published var queuedPrompts: [QueuedPrompt] = []
-    @Published var queuePaused = true
-    @Published var readyToSteer = false
-    @Published var steering = false
+    @Published private var enabledQueues: Set<String> = []
+    var queuePaused: Bool {
+        get { selectedID.map { !enabledQueues.contains($0) } ?? true }
+        set { guard let selectedID else { return }; pauseQueue(selectedID, newValue) }
+    }
+    func controlsCloudTurn(_ session: CampSession) -> Bool {
+        guard let remote = cloudSessions[session.id], (remote.executionLocation == "cloud" || cloud.live.head?.localContinuation == true),
+              remote.ownerUserId == cloud.credential?.actor.userId, cloud.live.sessionID == remote.id else { return false }
+        return cloud.live.head?.running == true
+    }
+    func chatRunning(_ session: CampSession) -> Bool { conversation(session) != nil || controlsCloudTurn(session) }
+    var readyToSteer: Bool {
+        guard let selected else { return false }
+        if controlsCloudTurn(selected), let head = cloud.live.head {
+            return head.state == "started" && cloud.requests.first(where:{$0.id == head.id})?.isPlanning != true
+        }
+        return conversation(selected)?.ready ?? false
+    }
+    var steering: Bool {
+        guard let selected else { return false }
+        if controlsCloudTurn(selected), let head = cloud.live.head { return cloud.pendingControl(requestID:head.id,kind:"steer") }
+        return conversation(selected)?.steering ?? false
+    }
     @Published var banner = ""
     @Published var sourceSheet = false
+    @Published var sourceTab = "Local"
+    @Published var executionDefaultsMessage = ""
+    @Published var creatingPlan = false
+    @Published var sourceError = ""
+    @Published var projectSheet = false
+    @Published var permissionSheet: CampSession?
+    let sessionPermissions: LocalPermissions
+    @Published var projectFilter = "all" { didSet { filterRevision += 1 } }
+    let projects: LocalProjects
+    private(set) var cloudProjectIndex: [String:CampProject] = [:]
     @Published var activity: [String: LiveState] = [:] { didSet { filterRevision += 1 } }
     @Published var modelCatalogs: [String: [ModelOption]] = [:]
     @Published var modelChoices: [String: String] = [:]
     @Published var modelTuning: [String: [String: ModelTuning]] = [:]
     @Published var activityError = ""
     @Published var importError = ""
-    @Published var showSubagents = false
     @Published var subagentsParent: CampSession?
     @Published var children: [ChildSession] = []
     @Published var childrenLoading = false
+    private var childrenRequestID = UUID()
+    private var childrenTask:Task<Void,Never>?
     private var observing = false
+    private let codexWatch = CodexActivityWatch()
+    private var polledActivity = ActivityResult(activity: [], sessions: [], models: [:], errors: [:])
+    private var codexActivity = CodexActivityUpdate(activity: [], sessions: [], errors: [:])
     private var scanning = false
     private var refreshPending = false
     private var nextImportCheck = Date.distantPast
     private var historyRequestID: String?
     private let transcriptWatch = TranscriptWatch()
     private var historyDirty = false
-    private var process: Process?
-    private var controlInput: FileHandle?
-    private var pendingSteer: (id: String, text: String)?
-    private var activeQueueID: String?
-    private var runSucceeded = false
-    private var pendingLiveText: String?
-    private var liveFlushTask: Task<Void, Never>?
     private var historyLimit = 120
     private var readGeneration = UUID()
     private var drafts: [String: String] = [:]
@@ -236,38 +349,381 @@ final class TranscriptWatch {
     private var cachedFilterSearch = ""
     private var cachedFilterSource = ""
     private var cachedFiltered: [CampSession] = []
+    private var cachedVisibleRevision = -1
+    private var cachedVisible: [CampSession] = []
+    private var cachedCountRevision = -1
+    private var cachedCounts: [String: Int] = [:]
+    private var sharingSelection: Set<String> = []
+    private var activeRequestSessions: Set<String> = []
+    private var cachedBoardRevision = -1
+    private var cachedBoardSearch = ""
+    private var cachedBoardSource = ""
+    private var cachedBoard: [Stage: [CampSession]] = [:]
+    private var cachedRecentRevision = -1
+    private var cachedRecentType = ""
+    private var cachedRecent: [CampSession] = []
     private let stateDirectory: URL
+    private let conversationProcess: () throws -> Process
     private let decoder = JSONDecoder()
+    var executionContextReader: ((CampSession) async throws -> ExecutionContext)?
+    var permissionCatalogReader: ((CampSession) async throws -> PermissionCatalog)?
+    var cloudChildReader: ((CloudSession) async throws -> CloudChildHistoryList)?
     var selected: CampSession? { sessions.first { $0.id == selectedID } }
+    private var continuationMirrors: [String: String] = [:]
+    private var continuationSources: [String: CampSession] = [:]
+    func applyContinuationBindings(_ bindings: [LocalContinuationBinding]) {
+        var mirrors: [String: String] = [:]
+        var sources: [String: CampSession] = [:]
+        for binding in bindings {
+            guard let current = cloudSessions["camp:" + binding.session.id], binding.matches(current) else { continue }
+            sources["camp:" + current.id] = binding.nativeSession
+            guard let id = binding.providerSessionID else { continue }
+            mirrors[binding.target.provider + "\0" + binding.target.root + "\0" + id] = "camp:" + current.id
+        }
+        if mirrors != continuationMirrors || sources != continuationSources {
+            continuationMirrors = mirrors; continuationSources = sources; filterRevision += 1; objectWillChange.send()
+        }
+        if let current = selected, !current.isCloud,
+           let destination = mirrors[current.provider + "\0" + current.root + "\0" + current.sessionID],
+           let ticket = sessions.first(where: { $0.id == destination }) { open(ticket) }
+    }
+    private func matchesLocalShare(_ share: LocalShare, _ remote: CloudSession) -> Bool {
+        remote.provider == share.local.provider && remote.localSessionId == share.local.sessionID &&
+        remote.profileId == (share.profile?.id ?? share.remote?.profileId)
+    }
+    var visibleSessions: [CampSession] {
+        if cachedVisibleRevision == filterRevision { return cachedVisible }
+        let locals = Set(sharing.shares.filter { share in
+            guard let remote = cloudSessions["camp:" + share.id] else { return false }
+            return share.shared || share.syncToCloud == true &&
+                (remote.executionLocation == "cloud" || !matchesLocalShare(share, remote))
+        }.map { $0.local.id })
+        let localIDs = Set(sessions.filter { !$0.isCloud }.map(\.id))
+        let privateMirrors = Set(sharing.shares.filter { share in
+            !share.shared && localIDs.contains(share.local.id) && cloudSessions["camp:" + share.id].map { $0.executionLocation != "cloud" && matchesLocalShare(share, $0) } == true
+        }.map { "camp:" + $0.id })
+        let implementations = Set(planning.tickets.compactMap(\.implementation).filter(\.providerSessionCreated).map { $0.executor.session.provider + "\0" + $0.context.profile + "\0" + $0.providerSessionID })
+        cachedVisible = sessions.filter { s in
+            !locals.contains(s.id) && !privateMirrors.contains(s.id) && (s.isPlan || !implementations.contains(s.provider + "\0" + s.root + "\0" + s.sessionID)) &&
+            (s.isCloud || continuationMirrors[s.provider + "\0" + s.root + "\0" + s.sessionID] == nil)
+        }
+        cachedVisibleRevision = filterRevision; return cachedVisible
+    }
+    func sessionCount(_ kind: String) -> Int {
+        if cachedCountRevision != filterRevision {
+            let state = stateSnapshot(), visible = visibleSessions
+            var counts = ["all": visible.count, "active": 0, "Codex": 0, "Claude": 0]
+            for session in visible {
+                counts[session.provider, default: 0] += 1
+                if state.busy(session) { counts["active", default: 0] += 1 }
+            }
+            cachedCounts = counts; cachedCountRevision = filterRevision
+        }
+        return cachedCounts[kind, default: 0]
+    }
     var filtered: [CampSession] {
         if cachedFilterRevision == filterRevision && cachedFilterSearch == search && cachedFilterSource == sourceFilter { return cachedFiltered }
-        cachedFiltered = sessions.filter { s in
-            (sourceFilter == "all" || (sourceFilter == "active" && isBusy(s)) || s.sourceID == sourceFilter || s.provider == sourceFilter) &&
-            (search.isEmpty || (s.title + " " + s.cwd + " " + s.sourceLabel).localizedCaseInsensitiveContains(search))
+        let state = stateSnapshot()
+        cachedFiltered = visibleSessions.filter { s in
+            (sourceFilter == "all" || (sourceFilter == "active" && state.busy(s)) || s.sourceID == sourceFilter || s.provider == sourceFilter) &&
+            projectMatches(s) && (search.isEmpty || (s.title + " " + s.cwd + " " + s.sourceLabel + " " + projectLabel(s)).localizedCaseInsensitiveContains(search))
         }
         cachedFilterRevision = filterRevision; cachedFilterSearch = search; cachedFilterSource = sourceFilter
         return cachedFiltered
     }
-    init(stateDirectory: URL = Bridge.support) {
+    private func stateSnapshot() -> SessionStateSnapshot {
+        var running = Set(conversations.keys)
+        var waiting = Set(conversations.filter { !$0.value.approvals.isEmpty }.keys)
+        running.formUnion(planning.tickets.filter { $0.stage == .progress }.map(\.id))
+        running.formUnion(sharedPlanning.tickets.filter { $0.stage == .progress }.map { "camp-plan:" + $0.id })
+        var observed = activity
+        for plan in planning.tickets { if let state = activityFor(plan.session) { observed[plan.id] = state } }
+        for share in sharing.shares where running.contains(share.local.id) { running.insert("camp:" + share.id) }
+        for share in sharing.shares where waiting.contains(share.local.id) { waiting.insert("camp:" + share.id) }
+        return SessionStateSnapshot(running: running, waiting: waiting, activity: observed, remote: cloudSessions,
+            requests: Set(cloud.requests.filter { !$0.isIsolatedWork && ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId)), stages: stages)
+    }
+    func boardSessions(_ stage: Stage) -> [CampSession] {
+        if cachedBoardRevision != filterRevision || cachedBoardSearch != search || cachedBoardSource != sourceFilter {
+            let state = stateSnapshot()
+            var grouped: [Stage: [CampSession]] = [:]
+            for session in filtered { grouped[state.stage(session), default: []].append(session) }
+            cachedBoard = grouped; cachedBoardRevision = filterRevision; cachedBoardSearch = search; cachedBoardSource = sourceFilter
+        }
+        return cachedBoard[stage] ?? []
+    }
+    init(stateDirectory: URL = Bridge.support, conversationProcess: @escaping () throws -> Process = { try Bridge.process("conversation") }) {
+        Task.detached(priority: .utility) { AttachmentTemporaryFiles.removeAbandoned() }
+        onboarding = CampOnboarding(directory: stateDirectory)
+        executionDefaults = ExecutionDefaults(directory: stateDirectory)
         self.stateDirectory = stateDirectory
+        self.mentions = SessionMentions(directory: stateDirectory)
+        self.planning = LocalPlanning(directory: stateDirectory, makeProcess: conversationProcess)
+        self.notifications = CampNotifications(directory: stateDirectory)
+        self.sessionPermissions = LocalPermissions(directory: stateDirectory)
+        self.conversationProcess = conversationProcess
+        #if CAMP_DEVELOPMENT
+        cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"), vault: ProcessInfo.processInfo.environment["CAMP_DEV_EPHEMERAL_CREDENTIALS"] == "1" ? MemoryCampCredentials() : CampKeychain(), allowLoopback: true)
+        #elseif CAMP_TESTING
+        cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"), vault: MemoryCampCredentials(), allowLoopback: true)
+        #else
+        cloud = CampConnection(directory: stateDirectory.appendingPathComponent("cloud"))
+        #endif
+        projects = LocalProjects(cache: cloud.cache)
+        sharing = CampSharing(cache: cloud.cache)
+        sharedPlanning = CampPlanning(cache: cloud.cache)
+        planPromotion = CampPlanPromotion(cache: cloud.cache, sharing: sharing)
+        planPromotion.upload.installed = { [weak sharedPlanning] result in try await sharedPlanning?.install(result) }
+        planPromotion.changed = { [weak self] in self?.syncPlans() }
+        planPromotion.completed = { [weak self] localID, remoteID in
+            guard let self else { return }
+            if self.selectedID == localID, let local = self.planning.ticket(localID), !self.isBusy(local.session) { self.openSharedPlan(remoteID) }
+            self.banner = "Saved to Camp"
+        }
+        sharing.localChildren = { [weak self] session in self?.activityFor(session)?.children ?? [] }
+        projects.changed = { [weak self] in self?.projectsChanged() }
+        sharedPlanning.changed = { [weak self] in self?.syncSharedPlans() }
+        sharedPlanning.created = { [weak self] draft, id in
+            guard let self, self.selectedID == "camp-plan-draft:" + draft else { return }
+            self.openSharedPlan(id)
+        }
+        notifications.seedPlans(planning.tickets)
+        notifications.openRequested = { [weak self] in Task { await self?.openPendingNotification() } }
         try? FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        if let index = LocalSessionIndex.read(directory: stateDirectory) {
+            sessions = index.sessions; sources = index.sources; selectedID = sessions.first?.id
+        }
         if let data = try? Data(contentsOf: stateDirectory.appendingPathComponent("model-tuning.json")), let saved = try? decoder.decode([String: [String: ModelTuning]].self, from: data) { modelTuning = saved }
         if let data = try? Data(contentsOf: stateDirectory.appendingPathComponent("models.json")), let saved = try? decoder.decode([String: String].self, from: data) { modelChoices = saved }
         if let data = try? Data(contentsOf: stateDirectory.appendingPathComponent("board.json")), let saved = try? decoder.decode([String: Stage].self, from: data) { stages = saved }
+        if let data = try? Data(contentsOf: stateDirectory.appendingPathComponent("recent-filter.json")), let saved = try? decoder.decode(String.self, from: data), ["All types", "Planning", "Codex", "Claude"].contains(saved) { recentType = saved }
         if let data = try? Data(contentsOf: stateDirectory.appendingPathComponent("queued-prompts.json")), let saved = try? decoder.decode([QueuedPrompt].self, from: data) {
-            queuedPrompts = saved.map { item in var item = item; if item.state == "sending" { item.state = "needsReview" }; return item }
+            queuedPrompts = saved.map { item in var item = item; if ["sending", "running"].contains(item.state) { item.state = "needsReview" }; return item }
             saveQueue()
         }
+        sharing.localSession = { [weak self] id in self?.sessions.first { $0.id == id && !$0.isCloud } }
+        sharing.localStatus = { [weak self] local in
+            guard let self else { return LocalShareStatus(model: local.model, state: "unknown", stage: "Ready", externalOwner: false) }
+            let live = self.activity[local.id]
+            let run = self.conversations[local.id]
+            return LocalShareStatus(model: self.effectiveModel(local), state: run != nil ? (run!.approvals.isEmpty ? "running" : "waiting") : live?.state ?? "idle", stage: self.stage(local).rawValue, externalOwner: live != nil)
+        }
+        sharing.changed = { [weak self] in
+            guard let self else { return }
+            let selection = Set(self.sharing.shares.map {
+                [$0.id, $0.local.id, String($0.shared), String($0.syncToCloud == true),
+                 $0.profile?.id ?? "", $0.remote?.profileId ?? "", $0.remote?.localSessionId ?? ""].joined(separator: ":")
+            })
+            if self.sharingSelection != selection {
+                self.sharingSelection = selection; self.filterRevision += 1; self.objectWillChange.send()
+                self.cloud.worker.scan()
+            }
+        }
+        sharing.published = { [weak cloud] value, scope, epoch in await cloud?.acceptPublishedSession(value, scope: scope, epoch: epoch) }
+        cloud.worker.nativeSession = { [weak sharing] remote in sharing?.native(for: "camp:" + remote.id) }
+        cloud.worker.makeContinuationProcess = conversationProcess
+        cloud.worker.available = { [weak self] local in
+            guard let self else { return false }
+            return self.activity[local.id] == nil && self.conversations.count + self.planning.activeCount + self.cloud.worker.activePlanningCount < 4 && !self.planning.uses(local.provider) && !self.conversations.values.contains { $0.session.provider == local.provider && $0.session.root == local.root }
+        }
+        cloud.worker.execute = { [weak self] local, request, prompt, history, contexts, completed in
+            guard let self else { return nil }
+            if request.isImplementation {
+                let run = LocalConversation(session: local, history: [], prompt: prompt, promptID: request.id)
+                run.completed = completed
+                do {
+                    try run.start(prompt: prompt, model: request.model, tuning: ModelTuning(effort: request.effort, speed: request.speed), contexts: contexts, mode: .implementation, executionApproved: true, newSession: (request.providerSessionId ?? "").isEmpty, executionContext: request.executionContext ?? "", permissions: request.permissionSettings, makeProcess: self.conversationProcess)
+                    return run
+                } catch { return nil }
+            }
+            if request.isPlanning {
+                let run = LocalConversation(session: local, history: [], prompt: prompt)
+                run.completed = completed
+                do {
+                    try run.start(prompt: prompt, model: request.model, tuning: ModelTuning(effort: request.effort, speed: request.speed), contexts: contexts, mode: .planning, makeProcess: self.conversationProcess)
+                    return run
+                } catch { return nil }
+            }
+            let references = request.sources.map { SessionReference(id: "camp:" + $0.sessionId, scope: self.cloud.scope?.key, cloud: $0) }
+            guard self.start(local, prompt: prompt, model: request.model, tuning: ModelTuning(effort: request.effort, speed: request.speed), history: history, contexts: contexts, references: references, notifyCompletion: false, localTools: request.requesterUserId == request.ownerUserId, completion: completed) else { return nil }
+            return self.conversations[local.id]
+        }
+        cloud.worker.requestUpdated = { [weak cloud] value in Task { await cloud?.acceptWorkerRequest(value) } }
+        sharedPlanning.implementationDispatched = { [weak cloud] value in
+            Task { await cloud?.acceptWorkerRequest(value); cloud?.worker.scan() }
+        }
+        codexWatch.changed = { [weak self] value in
+            self?.applyCodexActivity(value)
+        }
+        cloud.requestChanged = { [weak self] value in
+            self?.cloud.worker.changed(value)
+            if value.isIsolatedWork { self?.sharedPlanning.refresh() }
+        }
+        cloud.notificationsChanged = { [weak self] values, scope, live in self?.notifications.applyCloud(values, scope: scope, live: live) }
+        cloud.planningChanged = { [weak self] id in
+            self?.cloud.worker.scan()
+            self?.sharedPlanning.refresh()
+        }
+        notifications.cloudAction = { [weak cloud] scope, ids, action in
+            guard let cloud else { throw CampCloudError.cacheUnavailable }
+            try await cloud.queueNotificationAction(scope: scope, ids: ids, action: action)
+        }
+        cloud.sessionsChanged = { [weak self] sessions, projects, scope in
+            guard let self else { return }
+            if scope == nil, let previous = self.notifications.scope { self.notifications.prune(scope: previous, allowed: []) }
+            self.notifications.setScope(scope)
+            self.applyCloud(sessions, projects: projects)
+            self.applyContinuationBindings(Array(self.cloud.localContinuations.values))
+            if let result = self.sharedPlanResult,
+               self.sharedPlanScope != scope || !result.referencedSessions.isSubset(of: Set(sessions.map(\.id))) {
+                self.sharedPlanResult = nil; self.view = "Board"
+            }
+            if let scope {
+                let plans = self.notifications.entries.filter { $0.scope == scope && $0.cloudPlanID != nil }.map(\.sessionID)
+                self.notifications.prune(scope: scope, allowed: Set(sessions.map { "camp:" + $0.id } + plans))
+            }
+            if let scope, let actor = self.cloud.credential?.actor, let client = self.cloud.client, let token = self.cloud.credential?.token {
+                let transport = AuthenticatedCampPublisher(client: client, token: token)
+                self.sharing.attach(scope: scope, actor: actor, transport: transport)
+                self.cloud.worker.attach(scope: scope, actor: actor, transport: transport, sessions: sessions)
+                self.sharedPlanning.attach(scope: scope, actor: actor, transport: transport, sessions: sessions)
+                self.planPromotion.attach(scope: scope, actor: actor, transport: transport, sessions: sessions)
+            } else {
+                self.sharing.attach(scope: nil, actor: nil, transport: nil)
+                self.cloud.worker.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+                self.sharedPlanning.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+                self.planPromotion.attach(scope: nil, actor: nil, transport: nil, sessions: [])
+            }
+        }
+        cloud.transcriptChanged = { [weak self] id in
+            guard let self, self.selectedID == "camp:" + id else { return }
+            self.loadHistory(silent: true)
+        }
+        cloud.childrenChanged = { [weak self] id in
+            if self?.contextInspection?.sourceID=="camp:"+id,self?.contextInspection?.childID != nil {self?.contextInspection=nil}
+            guard let self,let session=self.selected,session.id=="camp:"+id else{return}
+            self.loadChildren(session)
+        }
+        cloud.execution.changed = { [weak self] id in Task {
+            guard let self else{return}
+            await self.cloud.refreshSession(id)
+            guard self.view == "Chat",let local=self.sharing.shares.first(where:{$0.id==id})?.local,
+                  self.selectedID==local.id || self.selectedID=="camp:"+id else{return}
+            if let remote=self.sessions.first(where:{$0.id=="camp:"+id}),self.cloudSessions[remote.id]?.executionLocation=="cloud" {self.open(remote)}
+        } }
+        cloud.transfers.changed = cloud.execution.changed
+        cloud.live.changed = { [weak self] in
+            guard let self, self.selectedID == self.cloud.live.sessionID.map({ "camp:" + $0 }) else { return }
+            self.objectWillChange.send()
+        }
+        cloud.controlsChanged = { [weak self] in self?.objectWillChange.send() }
+        planning.available = { [weak self] planner in
+            guard let self else { return false }
+            return !self.cloud.worker.usesPlanningProvider(planner.session.provider) && self.conversations.count + self.planning.activeCount + self.cloud.worker.activePlanningCount < 4 &&
+                !self.conversations.values.contains { $0.session.provider == planner.session.provider && $0.session.root == planner.session.root }
+        }
+        planning.prepare = { [weak self] planner, references in
+            guard let self, let current = self.sessions.first(where: { $0.id == planner.session.id }),
+                  current.root == planner.session.root, current.sourceID == planner.session.sourceID else {
+                throw CampError.message("This planner profile is no longer imported")
+            }
+            let caps = self.availableModels(current).first { $0.id == planner.model }
+            if let caps {
+                guard (planner.tuning.effort.isEmpty || caps.efforts.contains(planner.tuning.effort)), caps.speeds.contains(planner.tuning.speed) else {
+                    throw CampError.message("The selected planner settings are no longer supported")
+                }
+            } else if !planner.tuning.effort.isEmpty || planner.tuning.speed != "standard" {
+                throw CampError.message("Refresh the planner model's available settings before starting")
+            }
+            try self.mentions.record(references)
+            return try await self.resolveContexts(references, destination: current)
+        }
+        planning.changed = { [weak self] structural in
+            guard let self else { return }
+            if structural { self.syncPlans() }
+            if structural { self.notifications.observePlans(self.planning.tickets) }
+        }
+        syncPlans()
     }
-    func isBusy(_ s: CampSession) -> Bool { runningID == s.id || activity[s.id]?.state == "running" }
+    private func syncPlans() {
+        guard !planning.tickets.isEmpty else { return }
+        let current = stateSnapshot()
+        let plans = planning.tickets.filter { !planPromotion.replaces($0) || current.busy($0.session) }.map(\.session)
+        sessions = (plans + sessions.filter { !$0.isPlan || $0.isSharedPlan }).sorted { $0.updated > $1.updated }
+        for plan in planning.tickets { stages[plan.id] = plan.stage }
+    }
+    func projectsChanged() { filterRevision += 1; objectWillChange.send() }
+    var recentSessions: [CampSession] {
+        if cachedRecentRevision == filterRevision && cachedRecentType == recentType { return cachedRecent }
+        let type = recentType
+        cachedRecent = Array(visibleSessions.lazy.filter { type == "All types" || $0.provider == type }.sorted { $0.updated > $1.updated }.prefix(10))
+        cachedRecentRevision = filterRevision; cachedRecentType = recentType
+        return cachedRecent
+    }
+    func setRecentType(_ value: String) {
+        guard ["All types", "Planning", "Codex", "Claude"].contains(value) else { return }
+        recentType = value
+        if let data = try? JSONEncoder().encode(value) { try? data.write(to: stateDirectory.appendingPathComponent("recent-filter.json"), options: .atomic) }
+    }
+    func applyCloud(_ values: [CloudSession], projects: [CloudProject]) {
+        let newProjects=Dictionary(uniqueKeysWithValues:projects.map { ($0.id,$0) })
+        if cloudProjectIndex != newProjects { cloudProjectIndex=newProjects; projectsChanged() }
+        let previous = cloudSessions
+        let next = Dictionary(uniqueKeysWithValues: values.map { ("camp:" + $0.id, $0) })
+        if let inspection=contextInspection, !inspection.remainsVisible(scope:cloud.scope?.key,permissionRevision:next[inspection.sourceID]?.permissionRevision, availablePermissions:next.mapValues(\.permissionRevision)) { contextInspection=nil }
+        if cloudSessions != next { cloudSessions = next }
+        let active = Set(cloud.requests.filter { !$0.isIsolatedWork && ["claimed", "started", "cancel_requested"].contains($0.state) }.map(\.sessionId))
+        if activeRequestSessions != active { activeRequestSessions = active; filterRevision += 1; objectWillChange.send() }
+        let names = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.name) })
+        let imported = values.filter { !$0.isHistoryOnly }.map { value in
+            CampSession(id: "camp:" + value.id, sessionID: value.localSessionId, provider: value.provider, sourceID: "camp-profile:" + value.profileId, sourceLabel: value.profileLabel, root: "", title: value.title, cwd: names[value.projectId] ?? "Shared project", updated: value.updatedAt.timeIntervalSince1970, path: "", accountID: value.ownerUserId, archived: value.stage == "Done", model: value.model)
+        }
+        for (id, value) in cloudSessions where previous[id]?.stage != value.stage || value.revision > (previous[id]?.revision ?? 0) { stages[id] = Stage(rawValue: value.stage) ?? .ready }
+        let updatedSessions = (sessions.filter { !$0.isCloud || $0.isSharedPlan } + imported).sorted { $0.updated > $1.updated }
+        if sessions != updatedSessions { sessions = updatedSessions }
+        for run in conversations.values where run.references.contains(where: { reference in
+            guard let source = reference.cloud else { return false }
+            return reference.scope != cloud.scope?.key || next[reference.id]?.permissionRevision != source.permissionRevision
+        }) { run.stop() }
+        checkPlanningSources()
+        if let selectedID, let binding = sharing.shares.first(where: { "camp:" + $0.id == selectedID && !$0.shared }),
+           let remote = cloudSessions[selectedID], !remote.shared, remote.executionLocation != "cloud", matchesLocalShare(binding, remote), sessions.contains(where: { $0.id == binding.local.id }) {
+            self.selectedID = binding.local.id; readGeneration = UUID()
+            if let run = conversations[binding.local.id] { messages = run.messages; banner = run.notice }
+            else { messages = []; loadHistory() }
+        }
+        if let selectedID, selectedID.hasPrefix("camp:"), cloudSessions[selectedID] == nil {
+            self.selectedID = nil; messages = []; cloudHistory = [:]; readGeneration = UUID()
+            childrenTask?.cancel();childrenTask=nil
+            children=[];selectedChildID=nil;subagentsParent=nil;childrenRequestID=UUID();childrenLoading=false
+        }
+    }
+    func isBusy(_ s: CampSession) -> Bool {
+        stateSnapshot().busy(s)
+    }
+    func activityFor(_ s: CampSession) -> LiveState? {
+        if let direct = activity[s.id] { return direct }
+        guard s.isPlan, let execution = planning.ticket(s.id)?.implementation, execution.providerSessionCreated else { return nil }
+        return activity[execution.executor.session.sourceID + ":" + execution.providerSessionID]
+    }
     func stage(_ session: CampSession) -> Stage {
-        if isBusy(session) { return .progress }
-        if let live = activity[session.id], ["waiting", "unknown"].contains(live.state) { return .attention }
-        return stages[session.id] ?? (session.archived ? .done : .ready)
+        if stateSnapshot().waiting.contains(session.id) || cloudSessions[session.id]?.state == "waiting" { return .attention }
+        if stateSnapshot().busy(session) { return .progress }
+        if let plan = planning.ticket(session.id) { return plan.stage }
+        return stateSnapshot().stage(session)
     }
     func modelLabel(_ s: CampSession) -> String { modelChoices[s.id] ?? (s.model.isEmpty ? "Session default" : s.model) }
+    func reportedSettings(_ s: CampSession) -> ReportedModelSettings? {
+        if let run = conversation(s) { return run.reportedSettings }
+        if let remote = cloudSessions[s.id], cloud.live.sessionID == remote.id, let head = cloud.live.head, head.running {
+            return ReportedModelSettings(model:head.model.isEmpty ? nil : head.model,effort:head.effort.isEmpty ? nil : head.effort,speed:head.speed.isEmpty ? nil : head.speed)
+        }
+        let native = localSource(for: s.id) ?? s
+        guard let live = activityFor(native), ["running", "waiting"].contains(live.state) else { return nil }
+        return ReportedModelSettings(model: live.model.isEmpty ? nil : live.model, effort: live.effort, speed: live.speed)
+    }
     func selectModel(_ s: CampSession, _ model: String) {
-        guard runningID != s.id else { return }
+        guard conversation(s) == nil else { return }
         modelChoices[s.id] = model.isEmpty ? nil : model
         do {
             let url = stateDirectory.appendingPathComponent("models.json")
@@ -278,11 +734,40 @@ final class TranscriptWatch {
     func effectiveModel(_ s: CampSession) -> String { modelChoices[s.id] ?? s.model }
     func capabilities(_ s: CampSession) -> ModelOption {
         let model = effectiveModel(s)
-        return modelCatalogs[s.sourceID]?.first { $0.id == model } ?? ModelOption(id: model, label: model)
+        return availableModels(s).first { $0.id == model } ?? ModelOption(id: model, label: model)
+    }
+    func availableModels(_ s: CampSession) -> [ModelOption] {
+        let source = localSource(for: s.id)?.sourceID ?? s.sourceID
+        return modelCatalogs[source] ?? []
+    }
+    func shareSource(_ s: CampSession) -> CampSession? {
+        guard !s.isPlan else { return nil }
+        guard s.isCloud else { return s }
+        return publishedLocalSource(for: s.id)
+    }
+    func localSource(for id: String) -> CampSession? {
+        continuationSources[id] ?? publishedLocalSource(for: id)
+    }
+    private func publishedLocalSource(for id: String) -> CampSession? {
+        guard let share = sharing.shares.first(where: { "camp:" + $0.id == id }), let remote = cloudSessions[id],
+              matchesLocalShare(share, remote) else { return nil }
+        return sharing.native(for: id)
+    }
+    private func checkPlanningSources() {
+        planning.sourcesChanged { references in
+            references.allSatisfy { ref in
+                if let source = ref.cloud { return ref.scope == self.cloud.scope?.key && self.cloudSessions[ref.id]?.permissionRevision == source.permissionRevision }
+                return self.sessions.contains { $0.id == ref.id && !$0.isCloud }
+            }
+        }
+        for run in conversations.values where !run.references.allSatisfy({ reference in
+            if let source = reference.cloud { return reference.scope == cloud.scope?.key && cloudSessions[reference.id]?.permissionRevision == source.permissionRevision }
+            return sessions.contains { $0.id == reference.id && !$0.isCloud }
+        }) { run.stop() }
     }
     func tuning(_ s: CampSession) -> ModelTuning { modelTuning[s.id]?[effectiveModel(s)] ?? ModelTuning() }
     func tune(_ s: CampSession, effort: String? = nil, speed: String? = nil) {
-        guard runningID != s.id else { return }
+        guard conversation(s) == nil else { return }
         let caps = capabilities(s)
         if let effort, !effort.isEmpty, !caps.efforts.contains(effort) { return }
         if let speed, !caps.speeds.contains(speed) { return }
@@ -297,22 +782,37 @@ final class TranscriptWatch {
         } catch { banner = "Could not save model settings: " + error.localizedDescription }
     }
     func pollUpdates() {
+        codexWatch.observe(sources)
         pollActivity()
         observeHistory()
         if Date() >= nextImportCheck { refresh(background: true) }
     }
+    func stopRuntimeObservation() { backgroundPoll?.cancel(); backgroundPoll = nil; codexWatch.stop() }
+    func startBackgroundObservation() {
+        guard backgroundPoll == nil else { return }
+        Task { [weak self] in await self?.restoreCloudAndNotification() }
+        backgroundPoll = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                guard let self else { return }; self.pollUpdates()
+            }
+        }
+    }
+    deinit { backgroundPoll?.cancel();childrenTask?.cancel() }
     func observeHistory() {
         guard view == "Chat", let s = selected else { transcriptWatch.stop(); return }
+        guard !s.isCloud, !s.isSharedPlan, s.provider != "Planning" else { transcriptWatch.stop(); return }
+        let source = executionSource(s) ?? s
         var paths = Set<String>()
-        if !s.path.isEmpty {
-            paths.insert(s.path)
-            paths.insert(URL(fileURLWithPath: s.path).deletingLastPathComponent().path)
+        if !source.path.isEmpty {
+            paths.insert(source.path)
+            paths.insert(URL(fileURLWithPath: source.path).deletingLastPathComponent().path)
         }
-        if s.provider == "Codex" {
-            paths.insert(s.root)
+        if source.provider == "Codex" {
+            paths.insert(source.root)
             for name in ["thread_history_1.sqlite", "state_5.sqlite"] {
-                paths.insert(s.root + "/" + name)
-                paths.insert(s.root + "/" + name + "-wal")
+                paths.insert(source.root + "/" + name)
+                paths.insert(source.root + "/" + name + "-wal")
             }
         }
         transcriptWatch.observe(paths.sorted()) { [weak self] in
@@ -332,45 +832,121 @@ final class TranscriptWatch {
             defer { observing = false }
             do {
                 let values = try JSONSerialization.jsonObject(with: JSONEncoder().encode(homes))
-                let input = try JSONSerialization.data(withJSONObject: ["sources": values, "selectedID": (showSubagents ? subagentsParent?.id : selectedID) ?? ""])
+                let selectedExecution = selected.flatMap { planning.ticket($0.id)?.implementation }
+                let focus = selectedExecution.map { $0.executor.session.sourceID + ":" + $0.providerSessionID } ?? selectedID.flatMap { localSource(for: $0)?.id } ?? selectedID ?? ""
+                let input = try JSONSerialization.data(withJSONObject: ["sources": values, "selectedID": focus])
                 let result = try decoder.decode(ActivityResult.self, from: await Bridge.call("activity", input: input))
                 applyActivity(result)
             } catch {
-                activityError = "Live status unavailable: " + error.localizedDescription
-                for id in activity.keys { activity[id]?.state = "unknown" }
+                applyActivity(ActivityResult(activity: [], sessions: [], models: modelCatalogs,
+                    errors: Dictionary(uniqueKeysWithValues: sources.filter { $0.provider == "Claude" }.map { ($0.id, "Live status unavailable: " + error.localizedDescription) })))
             }
         }
     }
     func applyActivity(_ result: ActivityResult) {
+        polledActivity = result
+        applyCombinedActivity()
+    }
+    func applyCodexActivity(_ result: CodexActivityUpdate) {
+        codexActivity = result
+        applyCombinedActivity()
+    }
+    private func applyCombinedActivity() {
+        let allowed = Set(sources.map(\.id))
+        let result = ActivityResult(
+            activity: polledActivity.activity + codexActivity.activity.filter { allowed.contains($0.sourceID) },
+            sessions: polledActivity.sessions + codexActivity.sessions.filter { allowed.contains($0.sourceID) },
+            models: polledActivity.models,
+            errors: polledActivity.errors.merging(codexActivity.errors.filter { allowed.contains($0.key) }) { _, new in new })
         var next = Dictionary(result.activity.map { ($0.id, $0) }, uniquingKeysWith: { first, second in second.state == "running" ? second : first })
         for (id, var old) in activity where result.errors[old.sourceID] != nil { old.state = "unknown"; next[id] = old }
-        if let runningID { next.removeValue(forKey: runningID) }
+        for (id, run) in conversations {
+            next.removeValue(forKey: id)
+            if planning.ticket(id)?.implementation != nil {
+                next.removeValue(forKey: run.session.sourceID + ":" + (run.providerSessionID ?? run.session.sessionID))
+            }
+        }
         let previousActivity = activity
+        for (id, live) in next where live.state == "running" && previousActivity[id]?.state != "running" { externalRuns[id] = UUID().uuidString }
         if activity != next { activity = next }
-        for (id, previous) in previousActivity where previous.state == "running" && next[id]?.state == "idle" { move(id, .attention) }
-        modelCatalogs = result.models
-        activityError = result.errors.values.sorted().joined(separator: " · ")
+        for (id, previous) in previousActivity where previous.state == "running" && next[id]?.state != "running" {
+            let ticket = planning.tickets.first { plan in
+                guard let execution = plan.implementation else { return false }
+                return execution.executor.session.sourceID + ":" + execution.providerSessionID == id
+            }
+            move(ticket?.id ?? id, .attention)
+            if next[id]?.state == "idle", let run = externalRuns[id], let session = sessions.first(where: { $0.id == (ticket?.id ?? id) }) {
+                notifications.record(key: "external:" + run, sessionID: session.id, title: session.title, kind: "finished")
+            }
+        }
+        externalRuns = externalRuns.filter { next[$0.key]?.state == "running" }
+        if modelCatalogs != result.models { modelCatalogs = result.models }
+        let currentError = result.errors.values.sorted().joined(separator: " · ")
+        if activityError != currentError { activityError = currentError }
         var indexes = Dictionary(uniqueKeysWithValues: sessions.enumerated().map { ($0.element.id, $0.offset) })
         for item in result.sessions {
-            if let index = indexes[item.id] { sessions[index].title = item.title; sessions[index].model = item.model }
+            if let index = indexes[item.id] {
+                if sessions[index].title != item.title || sessions[index].model != item.model || sessions[index].effort != item.effort || sessions[index].speed != item.speed {
+                    sessions[index].title = item.title; sessions[index].model = item.model
+                    sessions[index].effort = item.effort; sessions[index].speed = item.speed
+                }
+            }
             else { indexes[item.id] = sessions.count; sessions.append(item) }
         }
-        if showSubagents, let parent = subagentsParent, let live = next[parent.id] { children = live.children }
-        if let selected = selected, let live = next[selected.id], !showSubagents { children = live.children }
+        if let selected = selected,!selected.isCloud, let live = activityFor(localSource(for: selected.id) ?? selected) { children = live.children }
+        if previousActivity != next { sharing.localChanged() }
+        if Set(previousActivity.keys) != Set(next.keys) { cloud.worker.scan() }
+        planning.drain()
     }
     func loadChildren(_ s: CampSession) {
-        subagentsParent = s; children = activity[s.id]?.children ?? []; showSubagents = true; childrenLoading = true
-        Task {
-            defer { childrenLoading = false }
+        childrenTask?.cancel();childrenTask=nil
+        let requestID=UUID();childrenRequestID=requestID
+        if subagentsParent?.id != s.id {children = activity[s.id]?.children ?? []}
+        subagentsParent = s; childrenLoading = true
+        if s.isCloud {
+            childrenTask=Task {
+                defer {if childrenRequestID==requestID{childrenLoading=false;childrenTask=nil}}
+                do {
+                    guard let remote=cloudSessions[s.id] else{throw CampCloudError.invalidResponse}
+                    let result:CloudChildHistoryList
+                    if let cloudChildReader {result=try await cloudChildReader(remote)} else {
+                        result=try await cloud.childHistories(session:remote,onCached:{[weak self] saved in
+                            guard let self,self.childrenRequestID==requestID,self.subagentsParent?.id==s.id else{return}
+                            self.children=saved.displayChildren
+                        })
+                    }
+                    guard childrenRequestID==requestID,subagentsParent?.id==s.id else{return}
+                    guard result.valid(parent:remote.id) else{throw CampCloudError.invalidResponse}
+                    children=result.displayChildren
+                    if result.cachedAt != nil {banner="Offline · Showing saved subagents"}
+                    else if banner=="Offline · Showing saved subagents" {banner=""}
+                } catch {if childrenRequestID==requestID{
+                    if !childHistoryTransportUnavailable(error) {children=[];selectedChildID=nil}
+                    banner=error.localizedDescription
+                }}
+            }
+            return
+        }
+        if s.provider == "Codex", let live = activityFor(s) {
+            children = live.children; childrenLoading = false; return
+        }
+        childrenTask=Task {
+            defer {if childrenRequestID==requestID{childrenLoading = false;childrenTask=nil}}
             do {
                 let input = try JSONSerialization.data(withJSONObject: ["session": object(s), "live": activity[s.id]?.state == "running"])
                 let result = try decoder.decode(ChildrenResult.self, from: await Bridge.call("children", input: input))
-                if subagentsParent?.id == s.id { children = result.children }
-            } catch { banner = error.localizedDescription }
+                if subagentsParent?.id == s.id,childrenRequestID==requestID { children = result.children }
+            } catch {if childrenRequestID==requestID{banner = error.localizedDescription}}
         }
     }
     func move(_ id: String, _ stage: Stage) {
         guard let session = sessions.first(where: { $0.id == id }), !isBusy(session) else { return }
+        if session.isPlan { planning.moveImplementation(id, stage: stage); return }
+        if let remote = cloudSessions[id] {
+            Task { do { try await cloud.queueStage(session: remote, stage: stage); stages[id] = stage }
+                catch { banner = error.localizedDescription } }
+            return
+        }
         stages[id] = stage
         if let data = try? JSONEncoder().encode(stages) {
             let url = stateDirectory.appendingPathComponent("board.json")
@@ -381,12 +957,14 @@ final class TranscriptWatch {
         }
     }
     func applyImport(_ result: ImportResult) {
+        hasImportedSessions = true
         let failedRoots = Set(result.failedRoots ?? [])
         let importedIDs = Set(result.sessions.map(\.id))
         // A temporary read failure must not remove chats or interrupt the open one.
-        let retained = sessions.filter { !importedIDs.contains($0.id) &&
-            (failedRoots.contains($0.root) || $0.id == selectedID || $0.id == runningID) }
-        let updated = (result.sessions + retained).sorted { $0.updated > $1.updated }
+        let retained = sessions.filter { !$0.isCloud && !importedIDs.contains($0.id) &&
+            ($0.isPlan || failedRoots.contains($0.root) || $0.id == selectedID || conversations[$0.id] != nil) }
+        let updated = (result.sessions + retained + sessions.filter(\.isCloud)).sorted { $0.updated > $1.updated }
+        let indexChanged = sessions != updated || sources != result.sources
         if sessions != updated { sessions = updated }
         var updatedSources = result.sources
         for old in sources where failedRoots.contains(old.root) {
@@ -394,9 +972,19 @@ final class TranscriptWatch {
             updatedSources.append(old)
         }
         if sources != updatedSources { sources = updatedSources }
+        notifications.prune(scope: nil, allowed: Set(updated.filter { !$0.isCloud }.map(\.id)))
+        if indexChanged { sharing.localChanged() }
+        if indexChanged {
+            let snapshot = ImportResult(sessions: updated.filter { !$0.isCloud && !$0.isPlan }, sources: updatedSources, errors: [])
+            let directory = stateDirectory
+            Task { await LocalSessionIndex.shared.save(snapshot, directory: directory) }
+        }
         importError = result.errors.joined(separator: " · ")
+        checkPlanningSources(); planning.drain()
+        codexWatch.observe(sources)
         if selectedID == nil { selectedID = sessions.first?.id }
         observeHistory()
+        if notifications.pendingOpen != nil { Task { await openPendingNotification() } }
     }
     func refresh(background: Bool = false) {
         guard !scanning else { if !background { refreshPending = true }; return }
@@ -409,6 +997,14 @@ final class TranscriptWatch {
                 if refreshPending { refreshPending = false; refresh() }
             }
             do {
+                if !hasImportedSessions {
+                    // Show automatically found profiles without waiting for a
+                    // large transcript library to finish its initial import.
+                    if let data = try? await Bridge.call("discover"),
+                       let discovery = try? decoder.decode(ProfileDiscovery.self, from: data) {
+                        applyProfileDiscovery(discovery.sources)
+                    }
+                }
                 // Large profile libraries are decoded off the UI thread.
                 let result = try await Task.detached {
                     try JSONDecoder().decode(ImportResult.self, from: await Bridge.call("scan"))
@@ -423,13 +1019,26 @@ final class TranscriptWatch {
         }
     }
     func open(_ session: CampSession) {
-        guard runningID == nil || runningID == session.id else { banner = "Stop or finish the current reply before opening another chat"; return }
+        if cloud.live.sessionID.map({ "camp:" + $0 }) != session.id { cloud.live.stop() }
+        sharedPlanResult = nil
+        reviewingPlan = nil
+        planNavigation = nil
+        selectedChildID = nil
+        childrenTask?.cancel();childrenTask=nil
+        childrenRequestID=UUID();childrenLoading=false;subagentsParent=nil
+        notificationPlanVersion = nil; notificationMessageID = nil
         if selectedID != session.id {
             if let previous = selectedID { drafts[previous] = draft }
             draft = drafts[session.id] ?? ""
             messages = []; historyTotal = 0; historyLimit = 120; banner = ""
         }
-        selectedID = session.id; children = activity[session.id]?.children ?? []; view = "Chat"; observeHistory(); loadHistory()
+        selectedID = session.id; children = activityFor(session)?.children ?? []; view = "Chat"
+        if session.isSharedPlan {
+            sharedPlanning.open(String(session.id.dropFirst(session.id.hasPrefix("camp-plan-draft:") ? 16 : 10)))
+            transcriptWatch.stop(); return
+        }
+        if let run = conversation(session) { messages = run.messages; banner = run.notice }
+        observeHistory(); loadHistory()
     }
     func applyHistory(_ result: Transcript, sessionID: String) {
         guard selectedID == sessionID, runningID == nil else { return }
@@ -437,7 +1046,35 @@ final class TranscriptWatch {
         if historyTotal != result.total { historyTotal = result.total }
     }
     func loadHistory(more: Bool = false, silent: Bool = false) {
-        guard let s = selected, runningID == nil else { return }
+        guard let s = selected, !s.isSharedPlan, s.provider != "Planning", runningID == nil else { return }
+        if let execution = planning.ticket(s.id)?.implementation {
+            if more { historyLimit += 120 }
+            if !silent { messages = Array(execution.messages.suffix(historyLimit)); historyTotal = execution.messages.count }
+            guard execution.providerSessionCreated, !silent || historyRequestID == nil, let source = executionSource(s) else { loading = false; return }
+            let generation = UUID(), limit = historyLimit
+            readGeneration = generation; historyRequestID = s.id
+            if !silent { loading = true }
+            Task {
+                defer {
+                    if readGeneration == generation {
+                        loading = false; historyRequestID = nil
+                        if historyDirty { historyDirty = false; historyChanged() }
+                    }
+                }
+                do {
+                    let result: Transcript
+                    if let implementationTranscriptReader { result = try await implementationTranscriptReader(source, limit) }
+                    else {
+                        let input = try JSONSerialization.data(withJSONObject: ["session": object(source), "limit": limit])
+                        result = try decoder.decode(Transcript.self, from: await Bridge.call("transcript", input: input))
+                    }
+                    guard readGeneration == generation, planning.ticket(s.id)?.implementation?.id == execution.id else { return }
+                    if !result.messages.isEmpty { applyHistory(result, sessionID: s.id) }
+                } catch { if readGeneration == generation && !silent { banner = error.localizedDescription } }
+            }
+            return
+        }
+        if let remote = cloudSessions[s.id] { loadCloudHistory(remote, more: more, silent: silent); return }
         guard !silent || historyRequestID == nil else { return }
         if more { historyLimit += 120 }
         let generation = UUID(); readGeneration = generation; historyRequestID = s.id
@@ -458,155 +1095,305 @@ final class TranscriptWatch {
             } catch { if readGeneration == generation && !silent { banner = error.localizedDescription } }
         }
     }
+    private func loadCloudHistory(_ session: CloudSession, more: Bool, silent: Bool) {
+        let id = "camp:" + session.id
+        if let scope = cloud.scope, let client = cloud.client, let credential = cloud.credential {
+            cloud.live.watch(session: session, scope: scope, client: client, credential: credential)
+        }
+        if silent && historyRequestID != nil { return }
+        let generation = UUID(); readGeneration = generation; historyRequestID = id
+        if !silent { loading = true }
+        Task {
+            defer { if readGeneration == generation { loading = false; historyRequestID = nil } }
+            if !more && messages.isEmpty {
+                let cached = await cloud.cachedTranscript(session: session)
+                if readGeneration == generation { messages = cached.map { $0.displayMessage(author: cloud.actorLabel) } }
+            }
+            do {
+                let page = try await cloud.transcript(session: session, before: more ? (cloudHistoryBefore[id] ?? 0) : 0, revision: more ? (cloudHistoryRevision[id] ?? 0) : 0)
+                guard readGeneration == generation, selectedID == id else { return }
+                let combined = more ? (cloudHistory[id] ?? []) + page.messages : page.messages
+                let unique = Dictionary(combined.map { ($0.id, $0) }, uniquingKeysWith: { a, b in a.revision > b.revision ? a : b })
+                let ordered = unique.values.filter { !$0.removed }.sorted { $0.ordinal < $1.ordinal }
+                cloudHistory[id] = ordered; cloudHistoryBefore[id] = page.before; cloudHistoryRevision[id] = page.revision
+                remoteHasMore = page.hasMore; messages = ordered.map { $0.displayMessage(author: cloud.actorLabel) }
+                cloud.live.acknowledge(ordered)
+                historyTotal = messages.count + (page.hasMore ? 1 : 0)
+            } catch { if readGeneration == generation && !silent { banner = error.localizedDescription } }
+        }
+    }
     func object(_ s: CampSession) -> [String: Any] { (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(s))) as? [String: Any] ?? [:] }
+    func attachmentAccess(session: CampSession, message: Message, child: ChildSession? = nil, revision: Int64? = nil) -> AttachmentAccess? {
+        if let remote = cloudSessions[session.id], let scope = cloud.scope {
+            let version = revision ?? cloudHistoryRevision[session.id] ?? 0
+            guard version > 0 else { return nil }
+            let identity = "\(scope.key):\(remote.id):\(remote.permissionRevision):\(child?.id ?? "main"):\(version)"
+            return AttachmentAccess(id: identity) { [weak self] attachment in
+                guard let self else { throw CancellationError() }
+                return try await self.cloud.attachmentBytes(CampAttachmentSelection(session: remote, childId: child?.id,
+                    revision: version, messageId: message.id, attachment: attachment))
+            }
+        }
+        guard !session.isCloud, let local = executionSource(session) else { return nil }
+        return AttachmentAccess(id: "\(local.id):\(local.root):\(child?.id ?? "main")") { attachment in
+            var source: LocalChildHistorySource?
+            if let child {
+                let catalog = try await ChildHistoryBridge.catalog(local)
+                guard let selected = catalog.sources.first(where: { $0.localID == child.id }) else { throw CampError.message("This subagent is no longer available") }
+                source = selected
+            }
+            return try await TranscriptAttachmentReader.read(session: local, child: source, messageID: message.id, attachment: attachment)
+        }
+    }
     func send() {
-        guard let s = selected, runningID == nil, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        guard activity[s.id] == nil else { banner = "This session is open in \(s.provider). Close it there before sending from Camp."; return }
+        guard let s = selected, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !preparingPrompts.contains(s.id) else { return }
+        let references: [SessionReference]
+        do { references = s.isPlan ? try implementationReferences(s, adding: mentions.references(for: s.id)) : mentions.references(for: s.id) }
+        catch { banner = error.localizedDescription; return }
+        if let remote = cloudSessions[s.id] {
+            let text = draft, model = modelChoices[s.id] ?? remote.model, choice = tuning(s)
+            preparingPrompts.insert(s.id)
+            Task {
+                defer { preparingPrompts.remove(s.id) }
+                do {
+                    guard references.allSatisfy({ $0.scope == cloud.scope?.key && $0.cloud != nil }) else { throw CampError.message("Share local sources with this Camp before attaching them to a shared request") }
+                    try mentions.record(references)
+                    try await cloud.queuePrompt(session: remote, text: text, model: model, tuning: choice, sources: references.compactMap(\.cloud))
+                    if selectedID == s.id && draft == text { draft = "" }
+                    try mentions.clear(references, for: s.id)
+                }
+                catch { banner = error.localizedDescription }
+            }
+            return
+        }
+        guard conversation(s) == nil else { return }
+        guard activityFor(s) == nil else { banner = "This session is open in \(s.provider). Close it there before sending from Camp."; return }
         let prompt = draft
-        draft = ""
-        start(s, prompt: prompt, model: modelChoices[s.id] ?? "", tuning: tuning(s))
+        let model = modelChoices[s.id] ?? (s.isPlan ? s.model : ""), choice = tuning(s)
+        if references.isEmpty { if start(s, prompt: prompt, model: model, tuning: choice) { draft = "" }; return }
+        preparingPrompts.insert(s.id)
+        Task {
+            defer { preparingPrompts.remove(s.id) }
+            do {
+                let contexts = try await resolveContexts(references, destination: s)
+                if start(s, prompt: prompt, model: model, tuning: choice, contexts: contexts, references: references) {
+                    if selectedID == s.id && draft == prompt { draft = "" }
+                    try mentions.clear(references, for: s.id)
+                }
+            } catch { banner = error.localizedDescription }
+        }
     }
-    func start(_ s: CampSession, prompt: String, model: String, tuning: ModelTuning, queuedID: String? = nil) {
-        let p: Process
-        do { p = try Bridge.process("conversation") } catch { draft = prompt; banner = error.localizedDescription; queuePaused = true; return }
-        drafts[s.id] = nil; liveText = ""; banner = ""; runningID = s.id
-        readyToSteer = false; runSucceeded = false; activeQueueID = queuedID
-        readGeneration = UUID(); loading = false; historyRequestID = nil; historyDirty = false
-        messages.append(Message(id: UUID().uuidString, role: "user", text: prompt))
-        let out = Pipe(), err = Pipe(), stdin = Pipe()
-        p.standardOutput = out; p.standardError = err; p.standardInput = stdin
-        process = p
-        Bridge.activeProcess = p
-        controlInput = stdin.fileHandleForWriting
+    func conversation(_ session: CampSession) -> LocalConversation? {
+        if session.isCloud, let binding = sharing.shares.first(where: { "camp:" + $0.id == session.id }) { return conversations[binding.local.id] }
+        return conversations[session.id]
+    }
+    private func pauseQueue(_ id: String, _ pause: Bool) {
+        if pause { enabledQueues.remove(id) } else { enabledQueues.insert(id) }
+    }
+    @discardableResult
+    func start(_ s: CampSession, prompt: String, model: String, tuning: ModelTuning, queuedID: String? = nil,
+               history: [Message]? = nil, contexts: [SessionContext] = [], references: [SessionReference] = [], notifyCompletion: Bool = true, localTools: Bool = true, completion: ((ConversationResult) -> Void)? = nil) -> Bool {
+        let s = planning.ticket(s.id)?.session ?? s
+        // Local tool grants belong to this Mac's owner. A teammate's shared
+        // request keeps the read-only chat runtime it was approved under.
+        let execution = localTools ? planning.ticket(s.id)?.implementation : nil
+        let grant = localTools ? sessionPermissions.grants[s.id] : nil
+        let permissions = grant?.settings ?? execution?.executor.permissions
+        let fingerprint = grant?.context.fingerprint ?? execution?.context.fingerprint ?? ""
+        guard sessionPermissions.error.isEmpty else { banner = sessionPermissions.error; return false }
+        if let queuedID, let queued = queuedPrompts.first(where: { $0.id == queuedID }), queued.permissionRevision != permissionRevision(s) {
+            banner = "Permissions changed after this prompt was queued. Review and queue it again."; return false
+        }
+        guard !s.isCloud, !s.isSharedPlan, s.provider != "Planning", conversations[s.id] == nil else { banner = "This session already has a running turn"; return false }
+        guard conversations.count + planning.activeCount + cloud.worker.activePlanningCount < 4, !planning.uses(s.provider), !cloud.worker.usesPlanningProvider(s.provider), !conversations.values.contains(where: { $0.session.provider == s.provider && $0.session.root == s.root }) else {
+            banner = "This profile is busy. Queue the prompt or wait for its current turn"; return false
+        }
+        guard activityFor(s) == nil else { banner = "Close this session in \(s.provider) before sending from Camp"; return false }
+        do { try mentions.record(references) } catch { banner = error.localizedDescription; return false }
+        let attempt = UUID().uuidString
+        let prior = history ?? (selectedID == s.id && !messages.isEmpty ? messages : execution.map { Array($0.messages.suffix(240)) } ?? [])
+        if execution != nil && !planning.beginImplementation(s.id, attempt: attempt, prompt: prompt, model: model, tuning: tuning, permissions: permissions, permissionFingerprint: fingerprint) {
+            banner = "Review the implementation before starting another turn"; return false
+        }
+        let run = LocalConversation(session: s, history: prior, prompt: prompt, queueID: queuedID, references: references, promptID: execution == nil ? nil : attempt)
+        if execution != nil {
+            run.sessionCreated = { [weak self, weak run] id in
+                guard let self else { return }
+                if !self.planning.bindImplementationSession(s.id, attempt: attempt, providerID: id) { run?.stop() }
+            }
+        }
+        var waitingForApproval = false
+        var notifiedApprovals = Set<String>()
+        run.changed = { [weak self, weak run] in
+            guard let self, let run, self.conversations[s.id]?.id == run.id else { return }
+            let waiting = !run.approvals.isEmpty
+            if waiting != waitingForApproval { waitingForApproval = waiting; self.filterRevision += 1; self.sharing.localChanged(); self.objectWillChange.send() }
+            for approval in run.approvals where notifiedApprovals.insert(approval.id).inserted {
+                self.notifications.record(key: "approval:" + approval.id, sessionID: s.id, title: s.title, kind: "attention")
+            }
+            notifiedApprovals.formIntersection(run.approvals.map(\.id))
+            if !run.steering, let restored = run.takePendingSteer() { self.restoreDraft(restored, for: s.id) }
+            if self.view == "Chat", let selected = self.selected, self.conversation(selected)?.id == run.id {
+                if self.messages != run.messages { self.messages = run.messages }
+                if self.banner != run.notice { self.banner = run.notice }
+                self.objectWillChange.send()
+            }
+        }
+        run.didAccept = { [weak self, weak run] in
+            guard let self else { return }
+            if execution != nil && !self.planning.startedImplementation(s.id, attempt: attempt) { run?.stop() }
+            guard let queuedID else { return }
+            if let index = self.queuedPrompts.firstIndex(where: { $0.id == queuedID }) {
+                self.queuedPrompts[index].state = "running"; self.saveQueue()
+            }
+        }
+        run.completed = { [weak self, weak run] result in
+            guard let self, let run, self.conversations[s.id]?.id == run.id else { return }
+            if !result.accepted, result.state != "completed", queuedID == nil, completion == nil {
+                self.restoreDraft(prompt, for: s.id)
+            }
+            if let restored = run.takePendingSteer() { self.restoreDraft(restored, for: s.id) }
+            let visible = self.selected.map { self.conversation($0)?.id == run.id } ?? false
+            if visible { self.messages = run.messages; self.banner = result.message }
+            if let execution, !self.planning.finishImplementation(s.id, executionID: execution.id, attempt: attempt, messages: run.messages, result: result) {
+                self.banner = self.planning.error
+            }
+            self.conversations.removeValue(forKey: s.id); self.filterRevision += 1
+            if result.state != "completed" { self.pauseQueue(s.id, true); self.markUncertainQueue(queuedID) }
+            else if let queuedID { self.queuedPrompts.removeAll { $0.id == queuedID }; self.saveQueue() }
+            self.move(s.id, .attention)
+            if notifyCompletion, result.state != "cancelled" {
+                self.notifications.record(key: "turn:" + attempt, sessionID: s.id, title: s.title,
+                    kind: result.state == "completed" ? "finished" : "attention", messageID: run.messages.last(where: { $0.role == "assistant" })?.id)
+            }
+            if visible { self.loadHistory() }
+            completion?(result)
+            self.sharing.localChanged()
+            self.cloud.worker.scan()
+            self.planning.drain()
+            if result.state == "completed" { self.runNextQueued(sessionID: s.id, history: Array(run.messages.suffix(240))) }
+        }
         do {
-            try p.run()
-        } catch { runningID = nil; process = nil; controlInput = nil; Bridge.activeProcess = nil; draft = prompt; banner = error.localizedDescription; queuePaused = true; markUncertainQueue(); return }
-        var input = (try? JSONSerialization.data(withJSONObject: ["session": object(s), "prompt": prompt, "model": model, "effort": tuning.effort, "speed": tuning.speed])) ?? Data()
-        input.append(10)
-        let payload = input
-        Task.detached { [weak self] in
-            let errors = Task.detached { err.fileHandleForReading.readDataToEndOfFile() }
-            let writer = Task.detached { try? stdin.fileHandleForWriting.write(contentsOf: payload) }
-            var buffer = Data()
-            var terminal = false
-            while let chunk = try? out.fileHandleForReading.read(upToCount: 4096), !chunk.isEmpty {
-                buffer.append(chunk)
-                while let end = buffer.firstIndex(of: 10) {
-                    let line = Data(buffer[..<end]); buffer.removeSubrange(...end)
-                    if let event = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] {
-                        let type = event["type"] as? String ?? ""
-                        if ["done", "error", "cancelled"].contains(type) { terminal = true }
-                        let text = event["text"] as? String ?? event["message"] as? String ?? ""
-                        await self?.receive(type, text: text, session: s, requestID: event["requestID"] as? String)
-                    }
-                }
-            }
-            p.waitUntilExit()
-            _ = await writer.value
-            let errorData = await errors.value
-            await self?.finished(s, code: p.terminationStatus, completed: terminal, diagnostics: String(data: errorData.suffix(4000), encoding: .utf8) ?? "")
+            try run.start(prompt: prompt, model: model, tuning: tuning, contexts: contexts,
+                mode: execution == nil && grant == nil ? .chat : .implementation, executionApproved: execution != nil || grant != nil,
+                newSession: execution.map { !$0.providerSessionCreated } ?? false,
+                executionContext: fingerprint, permissions: permissions, makeProcess: conversationProcess)
+            // Only a composer send consumed this session's draft; queued, worker
+            // and plan turns must not erase what the user is typing.
+            let composerSend = queuedID == nil && completion == nil
+            conversations[s.id] = run; if composerSend { drafts[s.id] = nil }; filterRevision += 1
+            sharing.localChanged()
+            if selectedID == s.id { readGeneration = UUID(); loading = false; historyRequestID = nil; historyDirty = false; messages = run.messages; banner = "" }
+            return true
+        } catch {
+            if let execution { _ = planning.finishImplementation(s.id, executionID: execution.id, attempt: attempt, messages: [], result: ConversationResult(state: "failed", message: error.localizedDescription, accepted: false)) }
+            pauseQueue(s.id, true)
+            let composerSend = queuedID == nil && completion == nil
+            if selectedID == s.id { if composerSend { draft = prompt }; banner = error.localizedDescription } else if composerSend { drafts[s.id] = prompt }
+            return false
         }
     }
-    func receive(_ type: String, text: String, session: CampSession, requestID: String? = nil) {
-        if type == "started" {
-            readyToSteer = true
-            if let activeQueueID { queuedPrompts.removeAll { $0.id == activeQueueID }; saveQueue() }
+    func stop() {
+        if let s = selected, controlsCloudTurn(s), let remote = cloudSessions[s.id], let head = cloud.live.head {
+            Task { await cloud.cancelRunning(session:remote,head:head) }; return
         }
-        if type == "text" {
-            pendingLiveText = text
-            if liveFlushTask == nil {
-                liveFlushTask = Task { [weak self] in
-                    try? await Task.sleep(for: .milliseconds(150))
-                    guard !Task.isCancelled else { return }
-                    self?.flushLiveText()
-                }
-            }
-        }
-        if type == "boundary" { finishLiveMessage() }
-        if type == "steerAccepted", let pending = pendingSteer, pending.id == requestID {
-            messages.append(Message(id: pending.id, role: "user", text: pending.text))
-            pendingSteer = nil; steering = false
-        }
-        if type == "steerRejected", pendingSteer?.id == requestID { restoreSteer(); banner = text }
-        if type == "done" { runSucceeded = true }
-        if type == "notice" { banner = text }
-        if type == "error" || type == "cancelled" { banner = text; stages[session.id] = .attention }
+        guard let s = selected, let run = conversation(s) else { return }
+        pauseQueue(run.session.id, true); run.stop()
     }
-    func finishLiveMessage() {
-        flushLiveText()
-        if !liveText.isEmpty { messages.append(Message(id: UUID().uuidString, role: "assistant", text: liveText)) }
-        liveText = ""
-    }
-    func flushLiveText() {
-        liveFlushTask?.cancel(); liveFlushTask = nil
-        if let pendingLiveText { liveText = pendingLiveText; self.pendingLiveText = nil }
-    }
-    func finished(_ session: CampSession, code: Int32, completed: Bool, diagnostics: String) {
-        finishLiveMessage(); restoreSteer()
-        runningID = nil; process = nil; readyToSteer = false; controlInput = nil; Bridge.activeProcess = nil
-        if (code != 0 || !completed) && banner.isEmpty { banner = diagnostics.isEmpty ? "The local CLI exited before finishing. Refresh history before retrying." : diagnostics }
-        if code != 0 || !runSucceeded { queuePaused = true; markUncertainQueue() }
-        activeQueueID = nil
-        move(session.id, .attention)
-        loadHistory()
-        if code == 0 && runSucceeded { runNextQueued() }
-    }
-    func stop() { queuePaused = true; if let process, process.isRunning { process.terminate() } }
     func steerDraft() {
-        guard let s = selected, runningID == s.id, readyToSteer, !steering, let input = controlInput, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        let pending = (id: UUID().uuidString, text: draft)
-        do {
-            var data = try JSONSerialization.data(withJSONObject: ["type": "steer", "id": pending.id, "text": pending.text])
-            data.append(10)
-            try input.write(contentsOf: data)
-            pendingSteer = pending; steering = true; draft = ""
-        } catch { banner = "Could not send steering: " + error.localizedDescription }
+        guard let s = selected, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard mentions.references(for: s.id).isEmpty else { banner = "Queue this prompt to attach new context after the current turn"; return }
+        if controlsCloudTurn(s), let remote = cloudSessions[s.id], let head = cloud.live.head {
+            let text = draft, id = UUID().uuidString.lowercased()
+            Task { do {
+                try await cloud.queueControl(session:remote,head:head,value:CloudControlEnvelope(id:id,control:.init(type:"steer",id:id,text:text)))
+                if selectedID == s.id, draft == text { draft = "" }
+                else if drafts[s.id] == text { drafts[s.id] = nil }
+            } catch { banner = error.localizedDescription } }
+            return
+        }
+        guard let run = conversation(s) else { return }
+        do { try run.steer(draft); draft = "" } catch { banner = error.localizedDescription }
     }
-    func restoreSteer() {
-        if let pending = pendingSteer { draft = draft.isEmpty ? pending.text : pending.text + "\n\n" + draft }
-        pendingSteer = nil; steering = false
+    func restoreControlDraft(_ text: String, for id: String) { restoreDraft(text,for:id) }
+    private func restoreDraft(_ value: String, for id: String) {
+        if selectedID == id { draft = draft.isEmpty ? value : value + "\n\n" + draft }
+        else { let previous = drafts[id] ?? ""; drafts[id] = previous.isEmpty ? value : value + "\n\n" + previous }
     }
     func enqueueDraft() {
         guard let s = selected, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if s.isCloud { send(); return }
         let choice = tuning(s)
-        queuedPrompts.append(QueuedPrompt(id: UUID().uuidString, sessionID: s.id, text: draft, model: modelChoices[s.id] ?? "", effort: choice.effort, speed: choice.speed))
+        let references = mentions.references(for: s.id)
+        queuedPrompts.append(QueuedPrompt(id: UUID().uuidString, sessionID: s.id, text: draft, model: modelChoices[s.id] ?? (s.isPlan ? s.model : ""), effort: choice.effort, speed: choice.speed, sources: references, permissionRevision: permissionRevision(s)))
+        guard saveQueue() else { queuedPrompts.removeLast(); return }
         draft = ""; queuePaused = runningID != s.id
-        saveQueue()
+        do { try mentions.clear(references, for: s.id) } catch { banner = error.localizedDescription }
     }
-    func queued(_ s: CampSession) -> [QueuedPrompt] { queuedPrompts.filter { $0.sessionID == s.id } }
-    func saveQueue() {
+    func queued(_ s: CampSession) -> [QueuedPrompt] { queuedPrompts.filter { $0.sessionID == s.id && $0.state != "running" } }
+    @discardableResult
+    func saveQueue() -> Bool {
         do {
             let url = stateDirectory.appendingPathComponent("queued-prompts.json")
             try JSONEncoder().encode(queuedPrompts).write(to: url, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        } catch { queuePaused = true; banner = "Could not save the prompt queue: " + error.localizedDescription }
+            return true
+        } catch { enabledQueues.removeAll(); banner = "Could not save the prompt queue: " + error.localizedDescription; return false }
     }
-    func markUncertainQueue() {
+    func markUncertainQueue(_ activeQueueID: String?) {
         if let activeQueueID, let index = queuedPrompts.firstIndex(where: { $0.id == activeQueueID }) { queuedPrompts[index].state = "needsReview"; saveQueue() }
     }
     func editQueued(_ item: QueuedPrompt) {
-        guard item.state != "sending" else { return }
+        guard !["sending", "running"].contains(item.state) else { return }
+        do {
+            var references = mentions.references(for: item.sessionID)
+            for ref in item.sources ?? [] { references.removeAll { $0.id == ref.id }; references.append(ref) }
+            try mentions.set(references, for: item.sessionID)
+        } catch { banner = error.localizedDescription; return }
         draft = draft.isEmpty ? item.text : draft + "\n\n" + item.text
         queuedPrompts.removeAll { $0.id == item.id }; saveQueue()
     }
     func removeQueued(_ item: QueuedPrompt) {
-        guard item.state != "sending" else { return }
+        guard !["sending", "running"].contains(item.state) else { return }
         queuedPrompts.removeAll { $0.id == item.id }; saveQueue()
     }
     func resumeQueue() { queuePaused = false; runNextQueued() }
-    func runNextQueued() {
-        guard !queuePaused, runningID == nil, let s = selected, let item = queued(s).first else { return }
-        guard item.state == "waiting" else { queuePaused = true; banner = "Check the transcript before editing and resubmitting the unconfirmed prompt"; return }
-        guard activity[s.id] == nil else { queuePaused = true; banner = "Close this session in \(s.provider) before resuming its Camp queue"; return }
-        if let index = queuedPrompts.firstIndex(where: { $0.id == item.id }) { queuedPrompts[index].state = "sending"; saveQueue() }
-        guard !queuePaused else { return }
-        start(s, prompt: item.text, model: item.model, tuning: ModelTuning(effort: item.effort, speed: item.speed), queuedID: item.id)
+    func runNextQueued(sessionID: String? = nil, history: [Message]? = nil) {
+        guard let id = sessionID ?? selectedID, enabledQueues.contains(id), let s = sessions.first(where: { $0.id == id }), conversation(s) == nil, let item = queued(s).first else { return }
+        guard item.state == "waiting" else { pauseQueue(s.id, true); banner = "Check the transcript before editing and resubmitting the unconfirmed prompt"; return }
+        guard item.permissionRevision == permissionRevision(s) else { pauseQueue(s.id, true); banner = "Permissions changed after this prompt was queued. Review and queue it again."; return }
+        guard activityFor(s) == nil else { pauseQueue(s.id, true); banner = "Close this session in \(s.provider) before resuming its Camp queue"; return }
+        if let index = queuedPrompts.firstIndex(where: { $0.id == item.id }) { queuedPrompts[index].state = "sending"; guard saveQueue() else { return } }
+        guard enabledQueues.contains(s.id) else { return }
+        let references: [SessionReference]
+        do { references = s.isPlan ? try implementationReferences(s, adding: item.sources ?? []) : item.sources ?? [] }
+        catch { markUncertainQueue(item.id); pauseQueue(s.id, true); banner = error.localizedDescription; return }
+        if !references.isEmpty {
+            Task {
+                do {
+                    let contexts = try await resolveContexts(references, destination: s)
+                    guard enabledQueues.contains(s.id), queuedPrompts.contains(where: { $0.id == item.id && $0.state == "sending" }) else {
+                        if let index = queuedPrompts.firstIndex(where: { $0.id == item.id }) { queuedPrompts[index].state = "waiting"; saveQueue() }; return
+                    }
+                    if !start(s, prompt: item.text, model: item.model, tuning: ModelTuning(effort: item.effort, speed: item.speed), queuedID: item.id, history: history, contexts: contexts, references: references), let index = queuedPrompts.firstIndex(where: { $0.id == item.id }) {
+                        queuedPrompts[index].state = "waiting"; pauseQueue(s.id, true); saveQueue()
+                    }
+                } catch { markUncertainQueue(item.id); pauseQueue(s.id, true); banner = error.localizedDescription }
+            }
+            return
+        }
+        if !start(s, prompt: item.text, model: item.model, tuning: ModelTuning(effort: item.effort, speed: item.speed), queuedID: item.id, history: history), let index = queuedPrompts.firstIndex(where: { $0.id == item.id }) {
+            queuedPrompts[index].state = "waiting"; pauseQueue(s.id, true); saveQueue()
+        }
     }
+    func pausePermissionQueue(_ id: String) { pauseQueue(id, true) }
     func addSource() {
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.showsHiddenFiles = true
         panel.message = "Choose a Codex home or Claude config folder containing saved sessions"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task { do { _ = try await Bridge.call("add-source", input: Data(url.path.utf8)); refresh() } catch { banner = error.localizedDescription } }
+        if banner == sourceError { banner = "" }
+        sourceError = ""
+        Task { do { _ = try await Bridge.call("add-source", input: Data(url.path.utf8)); refresh() } catch { sourceError = error.localizedDescription; banner = error.localizedDescription } }
     }
 }
 
@@ -619,7 +1406,12 @@ struct Mascot: View {
     }
 }
 struct RootView: View {
-    @StateObject var store = CampStore()
+    @ObservedObject var store: CampStore
+    @ObservedObject var onboarding: CampOnboarding
+    @Environment(\.openWindow) private var openWindow
+    @State private var showCamp = false
+    @FocusState private var notificationButtonFocused: Bool
+    init(store: CampStore) { self.store = store; self.onboarding = store.onboarding }
     var body: some View {
         HStack(spacing: 0) {
             sidebar
@@ -630,36 +1422,94 @@ struct RootView: View {
                     HStack(alignment: .top) { Image(systemName: "info.circle"); Text(store.banner).textSelection(.enabled); Spacer(); Button { store.banner = "" } label: { Image(systemName: "xmark") }.buttonStyle(.plain) }
                         .font(.system(size: 12)).padding(14).background(Color(hex: 0xF5E7D4))
                 }
-                if store.view == "Board" { BoardView(store: store) } else { ChatView(store: store) }
+                // Give every workspace the available content bounds. Intrinsic
+                // minimum-size probing must not expand nested planning panes.
+                GeometryReader { bounds in
+                    Group {
+                        if store.view == "Board" { BoardView(store: store) }
+                        else if let selected = store.selected, selected.isSharedPlan { SharedPlanningWorkspace(store: store, planning: store.sharedPlanning, id: String(selected.id.dropFirst(selected.id.hasPrefix("camp-plan-draft:") ? 16 : 10))) }
+                        else if let result = store.sharedPlanResult { SharedPlanningResultView(store: store, result: result) }
+                        else if let id = store.selectedID, let plan = store.planning.ticket(id), plan.implementation == nil || store.reviewingPlan == id { PlanningWorkspace(store: store, planning: store.planning, id: id) }
+                        else { ChatView(store: store) }
+                    }.frame(width: bounds.size.width, height: bounds.size.height)
+                }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.foregroundStyle(campInk).background(campCream)
+        }.disabled(store.notificationSheet).accessibilityHidden(store.notificationSheet)
+        .foregroundStyle(campInk).background(campCream).tint(campGreen)
         .frame(minWidth: 1060, minHeight: 720)
-        .onAppear { store.refresh() }
-        .task { while !Task.isCancelled { try? await Task.sleep(for: .seconds(5)); if !Task.isCancelled { store.pollUpdates() } } }
+        .onAppear {
+            store.refresh(); store.startBackgroundObservation()
+            AppDelegate.reopen = { openWindow(id: "camp") }
+            AppDelegate.prepareToQuit = { [weak store] in
+                AppDelegate.traceShutdown("stop observation"); store?.stopRuntimeObservation()
+                AppDelegate.traceShutdown("save notifications"); await store?.notifications.flush()
+                AppDelegate.traceShutdown("save shared planning"); await store?.sharedPlanning.flush()
+            }
+        }
+        .campWindowBehavior()
+        .overlay {
+            if store.notificationSheet {
+                ZStack(alignment: .topTrailing) {
+                    Button { store.notificationSheet = false } label: {
+                        campInk.opacity(0.08).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityHidden(true)
+                    CampNotificationsView(store: store, notices: store.notifications)
+                        .frame(width: 430).padding(.top, 90).padding(.bottom, 65).padding(.trailing, 24)
+                }.tint(campGreen).foregroundStyle(campInk)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if !store.notificationSheet { CampNotificationToast(store: store, notices: store.notifications).padding(.horizontal, 25).padding(.bottom, 43) }
+        }
+        .onChange(of: store.notificationSheet) { _, showing in
+            if showing { store.notifications.dismissToast() } else { notificationButtonFocused = true }
+        }
         .onChange(of: store.view) { _, value in store.observeHistory(); if value == "Chat" { store.loadHistory() } }
-        .sheet(isPresented: $store.sourceSheet) { SourcesView(store: store) }
-        .sheet(isPresented: $store.showSubagents) { SubagentsView(store: store) }
+        .sheet(isPresented: $store.sourceSheet) { SourcesView(store: store).campWindowBehavior() }
+        .sheet(isPresented: Binding(get: { onboarding.presented }, set: { if !$0 { onboarding.pause() } })) {
+            CampOnboardingView(store: store, setup: onboarding, cloud: store.cloud, accounts: store.cloud.providerAccounts, git: store.cloud.gitConnections, projects: store.projects, notices: store.notifications).campWindowBehavior()
+        }
+        .onChange(of: onboarding.presented) { _, showing in if !showing && !onboarding.error.isEmpty { store.banner = onboarding.error } }
+        .sheet(isPresented: $store.projectSheet) { CampProjectsView(store: store, local: store.projects, cloud: store.cloud).campWindowBehavior() }
+        .sheet(item: $store.permissionSheet) { SessionPermissionsView(store: store, session: $0).campWindowBehavior() }
+        .sheet(isPresented: $showCamp) { CampConnectionView(cloud: store.cloud).campWindowBehavior() }
+        .sheet(item: $store.shareSheet) { session in CampShareView(store: store, cloud: store.cloud, sharing: store.sharing, session: session).campWindowBehavior() }
+        .sheet(item: $store.planPromotionSheet) { session in PlanPromotionView(store: store, localID: session.id).campWindowBehavior() }
+        .sheet(item: $store.executionSheet) { session in RunLocationView(store:store,session:session).campWindowBehavior() }
+        .sheet(item: $store.contextInspection) { value in ContextInspectionView(store: store, inspection: value).campWindowBehavior() }
+        .onOpenURL { store.openContextLink($0) }
+        .environment(\.openURL, OpenURLAction { url in
+            if url.scheme == "capybara" { store.openContextLink(url); return .handled }
+            return .systemAction
+        })
     }
     var sidebar: some View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(spacing: 9) { Mascot(size: 46); VStack(alignment: .leading, spacing: 2) { Text("Capybara").font(.system(size: 17, weight: .semibold)); Text("CAMP").font(.system(size: 10, weight: .semibold)).tracking(3).foregroundStyle(campMuted) } }
+            ScrollView {
+            VStack(alignment:.leading,spacing:22) {
             VStack(alignment: .leading, spacing: 5) {
                 Text("YOUR CAMP").font(.system(size: 10, weight: .semibold)).tracking(1.4).foregroundStyle(campMuted).padding(.bottom, 8)
-                sourceButton("All sessions", id: "all", icon: "square.grid.2x2", count: store.sessions.count)
-                sourceButton("Active now", id: "active", icon: "waveform.path", count: store.sessions.filter { store.isBusy($0) }.count)
-                sourceButton("Codex", id: "Codex", icon: "terminal", count: store.sessions.filter { $0.provider == "Codex" }.count)
-                sourceButton("Claude", id: "Claude", icon: "asterisk", count: store.sessions.filter { $0.provider == "Claude" }.count)
+                sourceButton("All sessions", id: "all", icon: "square.grid.2x2", count: store.sessionCount("all"))
+                sourceButton("Active now", id: "active", icon: "waveform.path", count: store.sessionCount("active"))
+                sourceButton("Codex", id: "Codex", icon: "terminal", count: store.sessionCount("Codex"))
+                sourceButton("Claude", id: "Claude", icon: "asterisk", count: store.sessionCount("Claude"))
             }
             VStack(alignment: .leading, spacing: 10) {
-                HStack { Text("LOCAL PROFILES").font(.system(size: 10, weight: .semibold)).tracking(1.4).foregroundStyle(campMuted); Spacer(); Button { store.sourceSheet = true } label: { Image(systemName: "plus") }.buttonStyle(.plain) }
+                ProjectSidebar(store: store, local: store.projects, cloud: store.cloud)
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                HStack { Text("LOCAL PROFILES").font(.system(size: 10, weight: .semibold)).tracking(1.4).foregroundStyle(campMuted); Spacer(); Button { store.sourceSheet = true } label: { CampIconLabel(symbol: "plus") }.buttonStyle(.plain).accessibilityLabel("Add profile") }
                 ForEach(store.sources) { source in
                     Button { store.sourceFilter = source.id } label: {
                         HStack(alignment: .top, spacing: 7) { Circle().fill(source.provider == "Codex" ? campGreen : Color(hex: 0xBD815C)).frame(width: 6, height: 6).padding(.top, 5); VStack(alignment: .leading, spacing: 3) { Text(source.label).lineLimit(1); Text("\(source.count.formatted()) sessions").font(.system(size: 10)).foregroundStyle(campMuted) } }
                             .frame(maxWidth: .infinity, alignment: .leading).padding(7).background(store.sourceFilter == source.id ? campGreen.opacity(0.10) : .clear).clipShape(RoundedRectangle(cornerRadius: 7))
+                            .contentShape(Rectangle())
                     }.buttonStyle(.plain).font(.system(size: 12))
                 }
             }
-            Spacer()
+            }
+            }.frame(maxHeight:.infinity)
             VStack(alignment: .leading, spacing: 8) {
                 HStack { Circle().fill(campGreen).frame(width: 6, height: 6); Text("Local on this Mac").font(.system(size: 11, weight: .medium)) }
                 Text([store.importError, store.activityError].filter { !$0.isEmpty }.joined(separator: " · ").isEmpty ? "Live transcript updates · New sessions every 30s" : [store.importError, store.activityError].filter { !$0.isEmpty }.joined(separator: " · ")).font(.system(size: 11)).foregroundStyle(campMuted).fixedSize(horizontal: false, vertical: true)
@@ -669,23 +1519,50 @@ struct RootView: View {
     }
     func sourceButton(_ title: String, id: String, icon: String, count: Int) -> some View {
         Button { store.sourceFilter = id } label: {
-            HStack { Image(systemName: icon).frame(width: 18); Text(title); Spacer(); Text(count.formatted()).font(.system(size: 10)).foregroundStyle(campMuted) }
+            HStack {
+                if id == "Codex" || id == "Claude" { ProviderMark(provider: id, size: 18) }
+                else { Image(systemName: icon).frame(width: 18) }
+                Text(title); Spacer(); Text(count.formatted()).font(.system(size: 10)).foregroundStyle(campMuted)
+            }
                 .font(.system(size: 12, weight: .medium)).padding(10).background(store.sourceFilter == id ? .white.opacity(0.9) : .clear).clipShape(RoundedRectangle(cornerRadius: 8))
+                .contentShape(Rectangle())
         }.buttonStyle(.plain)
     }
     var header: some View {
         VStack(alignment: .leading, spacing: 19) {
             HStack {
-                VStack(alignment: .leading, spacing: 5) { Text(store.view == "Board" ? "Your Camp for big ideas" : store.selected?.title ?? "Choose a session").font(.system(size: 23, weight: .semibold)).lineLimit(1); Text(store.view == "Board" ? "\(store.filtered.count.formatted()) \(store.filtered.count == 1 ? "session" : "sessions") · Pick up where you left off" : "\(store.selected?.provider ?? "") · \(store.selected?.project ?? "")").font(.system(size: 12)).foregroundStyle(campMuted) }
+                VStack(alignment: .leading, spacing: 5) { Text(headerTitle).font(.system(size: 23, weight: .semibold)).lineLimit(1); Text(headerSubtitle).font(.system(size: 12)).foregroundStyle(campMuted) }
                 Spacer()
-                Button { store.refresh() } label: { if store.importing { ProgressView().controlSize(.small) } else { Label("Refresh", systemImage: "arrow.clockwise").font(.system(size: 12)) } }.disabled(store.importing)
+                if store.view == "Chat", let selected=store.selected { ProjectAssignmentMenu(store:store,session:selected) }
+                Menu {
+                    Button("Plan on this Mac", systemImage: "lightbulb") { store.newPlan(mode: .single, location: "Local") }
+                    Button("Plan with comparison", systemImage: "bubble.left.and.bubble.right") { store.newPlan(mode: .comparison) }
+                    Divider()
+                    Button("Plan in shared Camp", systemImage: "person.2") { store.newSharedPlan(mode: .single) }.disabled(!store.sharedPlanning.ready || store.cloud.projects.isEmpty)
+                    Button("Compare in shared Camp", systemImage: "person.2") { store.newSharedPlan(mode: .comparison) }.disabled(!store.sharedPlanning.ready || store.cloud.projects.isEmpty)
+                } label: { Text("Plan") } primaryAction: { store.newPlan(mode: .single) }
+                    .disabled(store.creatingPlan)
+                if store.creatingPlan { ProgressView().controlSize(.small).accessibilityLabel("Preparing planning defaults") }
+                CampConnectionButton(cloud: store.cloud) { showCamp = true }
+                CampNotificationButton(notices: store.notifications) { store.notificationSheet = true }.focusable().focused($notificationButtonFocused)
             }
             HStack {
-                Picker("View", selection: $store.view) { Text("Board").tag("Board"); Text("Chat").tag("Chat") }.pickerStyle(.segmented).frame(width: 180)
+                HStack(spacing: 9) {
+                    Text("View").font(.system(size: 12))
+                    CampSegmentedControl(options: [("Board", "Board"), ("Chat", "Chat")], selection: $store.view).frame(width: 114)
+                }
                 Spacer()
                 HStack { Image(systemName: "magnifyingglass"); TextField("Find a session or project", text: $store.search).textFieldStyle(.plain) }.font(.system(size: 12)).foregroundStyle(campMuted).padding(9).frame(width: 255).background(.white.opacity(0.8)).clipShape(RoundedRectangle(cornerRadius: 8))
             }
         }.padding(25)
+    }
+    private var headerTitle: String {
+        store.view == "Board" ? "Your Camp for big ideas" : store.selectedChild?.name ?? store.sharedPlanResult?.title ?? store.selected?.title ?? "Choose a session"
+    }
+    private var headerSubtitle: String {
+        if store.view == "Board" { return "\(store.filtered.count.formatted()) \(store.filtered.count == 1 ? "session" : "sessions") · Pick up where you left off" }
+        if store.selectedChild != nil { return "Subagent of \(store.selected?.title ?? "")" }
+        return store.sharedPlanResult != nil ? "Planning · Shared Camp" : "\(store.selected?.provider ?? "") · \(store.selected.map(store.projectSummary) ?? "")"
     }
 }
 
@@ -704,14 +1581,16 @@ struct BoardColumn: View {
     @ObservedObject var store: CampStore
     let stage: Stage
     @State private var count = 50
-    var items: [CampSession] { store.filtered.filter { store.stage($0) == stage } }
+    var items: [CampSession] { store.boardSessions(stage) }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack { Circle().fill(stage.color).frame(width: 7, height: 7); Text(stage.rawValue).font(.system(size: 12, weight: .semibold)); Text(items.count.formatted()).font(.system(size: 10)).foregroundStyle(campMuted); Spacer() }.padding(.horizontal, 4)
             ScrollView {
                 LazyVStack(spacing: 10) {
                     ForEach(items.prefix(count)) { s in
-                        SessionCard(store: store, session: s)
+                        if s.isSharedPlan { SharedPlanningCard(store: store, planning: store.sharedPlanning, session: s) }
+                        else if s.provider == "Planning" { PlanningCard(store: store, planning: store.planning, id: s.id) }
+                        else { SessionCard(store: store, session: s) }
                     }
                     if items.count > count { Button("Show 50 more") { count += 50 }.font(.system(size: 11)).padding(8) }
                     if items.isEmpty { VStack(spacing: 10) { Image(systemName: stage == .done ? "leaf" : "tray"); Text("Room for another capybara").font(.system(size: 11)) }.foregroundStyle(campMuted).padding(.vertical, 35).frame(maxWidth: .infinity) }
@@ -723,131 +1602,285 @@ struct BoardColumn: View {
 struct SessionCard: View {
     @ObservedObject var store: CampStore
     let session: CampSession
-    var live: LiveState? { store.activity[session.id] }
+    var live: LiveState? { store.activityFor(session) }
     var running: Bool { store.isBusy(session) }
+    var waiting: Bool { store.conversation(session)?.approvals.isEmpty == false || store.cloudSessions[session.id]?.state == "waiting" || live?.state == "waiting" }
     var statusText: String {
-        guard let live else { return "Running in Camp" }
+        if waiting { return session.isCloud && store.cloudSessions[session.id]?.ownerUserId != store.cloud.credential?.actor.userId ? "Waiting for the owner" : "Waiting for your approval" }
+        guard let live else { return store.executionSession(session)?.executionLocation == "cloud" ? "Running in Cloud" : "Running in Camp" }
         return live.state == "running" ? "Running in \(live.owner)" : live.state == "idle" ? "Open in \(live.owner)" : "\(live.owner) · \(live.state)"
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        CampTaskCard(store: store, session: session) {
             HStack {
-                Text(session.provider.uppercased()).font(.system(size: 9, weight: .semibold)).tracking(0.7).foregroundStyle(session.provider == "Codex" ? campGreen : Color(hex: 0xB57554))
+                CampCardProvider(provider: session.provider)
+                if session.isCloud && store.cloudSessions[session.id]?.shared == true { Image(systemName: "person.2").font(.system(size: 9)).foregroundStyle(campMuted).help("Shared Camp session") }
                 Spacer()
-                Menu { ForEach(Stage.allCases, id: \.self) { dest in Button("Move to \(dest.rawValue)") { store.move(session.id, dest) } } } label: { Image(systemName: "ellipsis").frame(width: 24, height: 20) }
+                Menu {
+                    ForEach(Stage.allCases, id: \.self) { dest in Button("Move to \(dest.rawValue)") { store.move(session.id, dest) } }
+                    ProjectAssignmentMenu(store:store,session:session)
+                    if store.planning.ticket(session.id) != nil { Button("Save to Camp", systemImage: "icloud.and.arrow.up") { store.planPromotionSheet = session } }
+                    if !session.isCloud && !session.isSharedPlan && session.provider != "Planning" { Button("Permissions…") { store.permissionSheet = session } }
+                    if let local = store.shareSource(session) { Divider(); Button("Share with Camp…") { store.shareSheet = local } }
+                } label: { CampIconLabel(symbol: "ellipsis").foregroundStyle(campMuted) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Move \(session.title)")
             }
-            Button { store.open(session) } label: {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(3).multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
-                    HStack(spacing: 4) { Image(systemName: "folder"); Text(session.project.isEmpty ? "No project" : session.project).lineLimit(1) }.font(.system(size: 10)).foregroundStyle(campMuted)
-                    HStack { Text(session.sourceLabel).lineLimit(1); Spacer(); Text(Date(timeIntervalSince1970: session.updated), style: .relative).lineLimit(1) }.font(.system(size: 9)).foregroundStyle(campMuted)
-                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain)
-            Divider().overlay(campInk.opacity(0.04))
+        } models: {
             ModelMenu(store: store, session: session).frame(maxWidth: .infinity, alignment: .leading)
-            Button { store.loadChildren(session) } label: {
-                HStack { Label("Subagents", systemImage: "person.2"); Spacer(); Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold)) }.contentShape(Rectangle())
-            }.buttonStyle(.plain).font(.system(size: 10)).foregroundStyle(campMuted).help("Show subagents")
-            if !store.queued(session).isEmpty {
-                Label("\(store.queued(session).count) queued", systemImage: "text.line.first.and.arrowtriangle.forward").font(.system(size: 10)).foregroundStyle(campGreen)
-            }
-            if running || live != nil {
-                VStack(alignment: .leading, spacing: 7) {
+        } status: {
+            HStack(alignment: .center, spacing: 6) {
+                if running || live != nil {
                     HStack(spacing: 7) {
-                        if running { ProgressView().controlSize(.mini).frame(width: 12, height: 12).accessibilityLabel("Session running") }
+                        if waiting { Image(systemName: "hand.raised").frame(width: 12, height: 12) }
+                        else if running { ProgressView().controlSize(.mini).frame(width: 12, height: 12).accessibilityLabel("Session running") }
                         else { Circle().fill(campGreen).frame(width: 5, height: 5) }
-                        Text(statusText).fixedSize(horizontal: false, vertical: true)
-                    }.foregroundStyle(campGreen)
-                    ForEach((live?.children ?? []).filter { $0.status == "running" }.prefix(3)) { child in
-                        Label("\(child.name) · \(child.phase)", systemImage: "arrow.turn.down.right").lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                    }
-                }.font(.system(size: 10)).frame(maxWidth: .infinity, alignment: .leading).padding(9).background(campGreen.opacity(0.07)).clipShape(RoundedRectangle(cornerRadius: 7))
+                        Text(statusText).lineLimit(1)
+                    }.foregroundStyle(campGreen).font(.system(size: 10))
+                } else {
+                    Image(systemName: store.stage(session) == .done ? "checkmark" : "circle").font(.system(size: 7))
+                    Text(store.stage(session).rawValue)
+                }
+                Spacer(minLength: 0)
+                if !store.queued(session).isEmpty { Text("\(store.queued(session).count) queued").font(.system(size: 9)).foregroundStyle(campMuted) }
             }
-        }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(.white).clipShape(RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(campInk.opacity(0.08)))
+        } actions: {
+            HStack { Button { store.open(session) } label: {
+                HStack { Label("Subagents", systemImage: "person.2"); Spacer() }.frame(minHeight: 28).contentShape(Rectangle())
+            }.buttonStyle(.plain).font(.system(size: 10)).foregroundStyle(campMuted).help("Show subagents")
+                ExecutionLocationButton(store:store,session:session)
+            }
+        }
             .contextMenu { ForEach(Stage.allCases, id: \.self) { dest in Button("Move to \(dest.rawValue)") { store.move(session.id, dest) } } }
     }
 }
 
-struct TranscriptBottomKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+struct RecentSessionsList: View {
+    @ObservedObject var store: CampStore
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Recent sessions").font(.system(size: 11)).foregroundStyle(campMuted)
+                    Spacer()
+                    Text("\(store.recentSessions.count)").font(.system(size: 10)).foregroundStyle(campMuted)
+                }.padding(.horizontal, 16).padding(.top, 10)
+                CampDropdown(title: store.recentType, accessibilityLabel: "Filter recent sessions", icon: "line.3.horizontal.decrease",
+                    entries: ["All types", "Planning", "Codex", "Claude"].map { value in
+                        CampMenuEntry(title: value, checked: store.recentType == value, action: { store.setRecentType(value) })
+                    }).padding(.horizontal, 14)
+                ScrollView {
+                LazyVStack(spacing: 5) {
+                    ForEach(store.recentSessions) { s in CampPlainButton { store.open(s) } label: {
+                        HStack(alignment: .top, spacing: 8) {
+                            ProviderMark(provider: s.provider, size: 15).frame(width: 25, height: 25)
+                                .background(ProviderMark.wash(s.provider)).clipShape(RoundedRectangle(cornerRadius: 6)).padding(.top, 1)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(s.title).font(.system(size: 12, weight: .medium)).lineLimit(2)
+                                Text("\(Text(s.provider).foregroundColor(ProviderMark.ink(s.provider)))\(Text(" · \(store.projectSummary(s))").foregroundColor(campMuted))")
+                                    .font(.system(size: 9)).lineLimit(1)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 7).padding(.vertical, 8)
+                            .background(store.selectedID == s.id ? Color(hex: 0xEEEEE7) : .clear).clipShape(RoundedRectangle(cornerRadius: 6))
+                            .contentShape(Rectangle())
+                    } }
+                    if store.recentSessions.isEmpty { Text("No recent \(store.recentType == "All types" ? "" : store.recentType.lowercased() + " ")sessions").font(.caption).foregroundStyle(campMuted).padding() }
+                }.padding(10)
+                }
+                Text("Find other sessions with @").font(.system(size: 10)).foregroundStyle(campMuted)
+                    .padding(.horizontal, 16).padding(.bottom, 12)
+        }
+    }
 }
 struct ChatView: View {
     @ObservedObject var store: CampStore
-    @State private var followsLatest = true
+    private var pickedChild: ChildSession? {
+        get { store.selectedChild }
+        nonmutating set { store.selectedChildID = newValue?.id }
+    }
+    @State private var subagentsExpanded = true
+    @State private var contextPicking = false
+    @State private var contextQuery = ""
+    var currentChild: ChildSession? { store.children.first { $0.id == pickedChild?.id } }
     var body: some View {
+        GeometryReader { bounds in
         HStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(spacing: 5) {
-                    ForEach(store.filtered.prefix(250)) { s in Button { store.open(s) } label: {
-                        VStack(alignment: .leading, spacing: 5) { Text(s.title).font(.system(size: 12, weight: .medium)).lineLimit(2); Text("\(s.provider) · \(s.project)").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1) }.frame(maxWidth: .infinity, alignment: .leading).padding(12).background(store.selectedID == s.id ? campGreen.opacity(0.10) : .clear).clipShape(RoundedRectangle(cornerRadius: 8))
-                    }.buttonStyle(.plain) }
-                    if store.filtered.count > 250 { Text("Search to narrow \(store.filtered.count.formatted()) sessions").font(.caption).foregroundStyle(campMuted).padding() }
-                }.padding(10)
+            VStack(alignment: .leading, spacing: 6) {
+                if let session = store.selected {
+                    VStack(alignment: .leading, spacing: 9) {
+                        ProviderBadge(provider: session.provider)
+                        Text(session.title).font(.system(size: 12, weight: .medium)).lineLimit(2)
+                    }.padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 4)
+                    CampPlainButton { pickedChild = nil } label: {
+                        HStack(spacing: 9) {
+                            ProviderMark(provider: session.provider, size: 15)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(session.isPlan ? "Implementation" : "Main chat").font(.system(size: 12, weight: .medium))
+                                Text("\(session.provider) · \(store.projectSummary(session))").font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
+                            }
+                            Spacer(minLength: 0)
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                            .background(pickedChild == nil ? Color(hex: 0xDFE5D8) : .clear).clipShape(RoundedRectangle(cornerRadius: 7))
+                            .contentShape(Rectangle())
+                    }.padding(.horizontal, 10).accessibilityLabel(session.isPlan ? "Implementation" : "Main chat")
+                    CampPlainButton { subagentsExpanded.toggle() } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: subagentsExpanded ? "chevron.down" : "chevron.right").font(.system(size: 8))
+                            Text("Subagents"); Spacer()
+                            if store.childrenLoading { ProgressView().controlSize(.mini) }
+                            Text("\(store.children.count)")
+                        }.font(.system(size: 10)).foregroundStyle(campMuted).frame(height: 26).contentShape(Rectangle())
+                    }.padding(.horizontal, 16).accessibilityLabel("Subagents, \(store.children.count)")
+                        .accessibilityValue(subagentsExpanded ? "Expanded" : "Collapsed")
+                    if subagentsExpanded {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 5) {
+                            ForEach(store.children) { child in
+                                CampPlainButton { pickedChild = child } label: {
+                                    HStack(alignment: .top, spacing: 8) {
+                                        if child.status == "running" || child.status == "syncing" { ProgressView().controlSize(.mini).frame(width: 13, height: 13) }
+                                        else { ProviderMark(provider: session.provider, size: 13) }
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(child.name).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                                            Text(child.phase.isEmpty ? child.workflow : child.phase).font(.system(size: 10)).foregroundStyle(campMuted).lineLimit(1)
+                                        }
+                                        Spacer(minLength: 0)
+                                        Text(child.status.capitalized).font(.system(size: 9)).foregroundStyle(campMuted).lineLimit(1)
+                                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 5).padding(.vertical, 8)
+                                        .background(pickedChild?.id == child.id ? Color(hex: 0xDFE5D8) : .clear).clipShape(RoundedRectangle(cornerRadius: 7))
+                                        .contentShape(Rectangle())
+                                }.disabled(child.status=="syncing")
+                            }
+                            if store.children.isEmpty && !store.childrenLoading {
+                                Text("No saved subagents").font(.system(size: 10)).foregroundStyle(campMuted).padding(10)
+                            }
+                        }.padding(.leading, 7)
+                    }.overlay(alignment: .leading) { Rectangle().fill(Color(hex: 0xCCD4C5)).frame(width: 1) }
+                        .padding(.leading, 23).padding(.trailing, 10)
+                        .frame(maxHeight: store.children.isEmpty ? 35 : min(CGFloat(store.children.count) * 54, 180))
+                    }
+                    if session.isPlan {
+                        CampPlainButton { store.reviewingPlan = session.id } label: {
+                            Label("Planning history", systemImage: "clock.arrow.circlepath").font(.system(size: 11)).foregroundStyle(campMuted)
+                                .frame(maxWidth: .infinity, alignment: .leading).frame(height: 28).contentShape(Rectangle())
+                        }.padding(.horizontal, 16)
+                    }
+                    Divider().padding(.horizontal, 14).padding(.top, 6)
+                }
+                RecentSessionsList(store: store)
             }.frame(width: 230)
             Rectangle().fill(campInk.opacity(0.08)).frame(width: 1)
             VStack(spacing: 0) {
-                if let s = store.selected {
-                    HStack { ModelMenu(store: store, session: s); Button { store.loadChildren(s) } label: { Label("Subagents", systemImage: "person.2") }.buttonStyle(.plain).font(.system(size: 11)); Spacer() }.padding(.horizontal, 22).padding(.vertical, 8)
-                    if let live = store.activity[s.id] { Text("\(live.owner) · \(live.state) · Model choice applies to the next Camp reply").font(.system(size: 11)).foregroundStyle(campGreen).padding(.bottom, 8) }
-                    HStack { Text(s.sourceLabel).font(.system(size: 10, weight: .medium)); if !s.accountID.isEmpty { Text("· author \(s.accountID.prefix(8))").font(.system(size: 10)).foregroundStyle(campMuted) }; Spacer(); Menu(store.stage(s).rawValue) { ForEach(Stage.allCases, id: \.self) { stage in Button(stage.rawValue) { store.move(s.id, stage) } } }.fixedSize() }.padding(.horizontal, 22).padding(.vertical, 10)
-                    GeometryReader { viewport in
+                if let child = currentChild, let parent = store.selected {
+                    ChildTranscriptView(store: store, parent: store.shareSource(parent) ?? parent, child: child, openMain: { pickedChild = nil }).id("\(parent.id):\(child.id)")
+                } else if let s = store.selected {
+                    chatHeader(s).padding(.horizontal, 22).padding(.vertical, 8)
+                    if store.planning.ticket(s.id)?.implementation != nil { ImplementationStatusView(store: store, planning: store.planning, id: s.id) }
+                    if let live = store.activityFor(s) { Text("\(live.owner) · \(live.state) · Model choice applies to the next Camp reply").font(.system(size: 11)).foregroundStyle(campGreen).padding(.bottom, 8) }
+                    HStack { Text(s.sourceLabel).font(.system(size: 10, weight: .medium)); if !s.accountID.isEmpty { Text("· author \(s.accountID.prefix(8))").font(.system(size: 10)).foregroundStyle(campMuted) }; ExecutionLocationButton(store:store,session:s); Spacer(); Menu(store.stage(s).rawValue) { ForEach(Stage.allCases, id: \.self) { stage in Button(stage.rawValue) { store.move(s.id, stage) } } }.fixedSize() }.padding(.horizontal, 22).padding(.vertical, 10)
+                    SessionContextChips(store: store, mentions: store.mentions, destination: s, transcriptStrip: true)
                       ScrollViewReader { proxy in
-                        ScrollView {
+                        CampTranscriptViewport(padding: 25, followBottom: { proxy.scrollTo("bottom", anchor: .bottom) }) {
                             // Pages are bounded to 120 messages; measure their real heights so
                             // scrolling to the end cannot land in a lazy stack's estimated gap.
                             VStack(alignment: .leading, spacing: 22) {
-                                if store.historyTotal > store.messages.count { Button("Load earlier messages (\(store.historyTotal - store.messages.count))") { store.loadHistory(more: true) }.font(.caption) }
+                                if s.isCloud ? store.remoteHasMore : store.historyTotal > store.messages.count { Button("Load earlier messages") { store.loadHistory(more: true) }.font(.caption) }
                                 if store.loading { ProgressView().controlSize(.small) }
-                                ForEach(store.messages) { m in MessageView(message: m) }
-                                if store.runningID == s.id { MessageView(message: Message(id: "live", role: "assistant", text: store.liveText.isEmpty ? "Thinking…" : store.liveText)) }
+                                ForEach(store.messages) { m in MessageView(message: m, provider: s.provider, attachmentAccess: store.attachmentAccess(session: s, message: m)).equatable().id(m.id) }
+                                if let run = store.conversation(s) { MessageView(message: run.streamedMessage, provider: s.provider) }
+                                if s.isCloud { CloudStreamMessages(live: store.cloud.live, provider: s.provider) }
                                 Color.clear.frame(height: 1).id("bottom")
-                                    .background(GeometryReader { geometry in
-                                        Color.clear.preference(key: TranscriptBottomKey.self, value: geometry.frame(in: .named("transcript")).maxY)
-                                    })
-                            }.padding(25)
-                        }.coordinateSpace(name: "transcript")
-                        .onPreferenceChange(TranscriptBottomKey.self) { bottom in followsLatest = bottom <= viewport.size.height + 60 }
+                            }
+                        }
                         .onReceive(store.$messages) { new in
-                            // Published sends before the new message changes the measured
-                            // bottom. Capture the reader's position before that layout pass.
-                            let old = store.messages
-                            if old.isEmpty || (followsLatest && old.first?.id == new.first?.id) {
-                                DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo("bottom", anchor: .bottom) } }
-                            }
+                            let target = store.notificationMessageID.flatMap { id in new.contains(where: { $0.id == id }) ? id : nil } ?? "bottom"
+                            DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo(target, anchor: .bottom) } }
                         }
-                        .onReceive(store.$liveText) { _ in
-                            if followsLatest {
-                                DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo("bottom", anchor: .bottom) } }
-                            }
+                        .onChange(of: store.notificationMessageID) { _, id in if let id, store.messages.contains(where: { $0.id == id }) { proxy.scrollTo(id, anchor: .bottom) } }
+                        .onChange(of: store.liveText) { _, _ in
+                            DispatchQueue.main.async { if store.selectedID == s.id { proxy.scrollTo("bottom", anchor: .bottom) } }
                         }
-                        .onChange(of: store.selectedID) { _, _ in followsLatest = true }
+                        .onAppear { proxy.scrollTo("bottom", anchor: .bottom); if s.isCloud { store.loadHistory(silent: true) } }
+                        .onDisappear { if s.isCloud { store.cloud.live.stop() } }
                       }
-                    }
                     VStack(alignment: .leading, spacing: 9) {
-                        PromptQueueView(store: store, session: s)
-                        TextEditor(text: $store.draft).font(.system(size: 13)).scrollContentBackground(.hidden).frame(minHeight: 55, maxHeight: 100).padding(8).background(.white).clipShape(RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(campInk.opacity(0.13)))
+                        if let conversation = store.conversation(s) { ConversationApprovalsView(conversation: conversation) }
+                        if let remote = store.cloudSessions[s.id] { CloudRequestQueueView(cloud: store.cloud, session: remote); SessionActivityView(cloud: store.cloud, session: remote) }
+                        else { PromptQueueView(store: store, session: s) }
+                        if let remote = store.cloudSessions[s.id] {
+                            CloudControlQueueView(cloud:store.cloud,sessionID:remote.id) { text in store.restoreControlDraft(text,for:s.id) }
+                        }
+                        TextEditor(text: $store.draft).font(.system(size: 13)).scrollContentBackground(.hidden).frame(minHeight: 64, maxHeight: 84).padding(8).background(.white).clipShape(RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(campInk.opacity(0.13)))
                         HStack(spacing: 10) {
-                            Text(store.runningID == s.id ? "Steer now or queue for after this turn" : store.activity[s.id] == nil ? "Uses \(s.sourceLabel) login · Chat-only local preview" : "Open in \(s.provider) · Camp queue waits until it is closed")
+                            Text(store.chatRunning(s) ? "Steer now or queue for after this turn" : s.isCloud ? (store.executionSession(s)?.executionLocation == "cloud" ? "Saved to Camp · Runs in Cloud with the selected account" : "Saved to Camp · Runs on the session owner's Mac after approval") : store.activityFor(s) != nil ? "Open in \(s.provider) · Camp queue waits until it is closed" : s.isPlan || store.sessionPermissions.grants[s.id] != nil ? "Uses \(s.sourceLabel) login · \(store.permissionSettings(s).summary)" : "Uses \(s.sourceLabel) login · Chat-only local preview")
                                 .font(.system(size: 10)).foregroundStyle(campMuted).fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 8)
-                            if store.runningID == s.id || store.activity[s.id] != nil {
+                            Button { contextQuery = ""; contextPicking = true } label: {
+                                Text("@ Context").padding(.horizontal, 6).frame(minHeight: 28).contentShape(Rectangle())
+                            }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(campGreen)
+                                .accessibilityLabel("Attach session context")
+                                .popover(isPresented: $contextPicking) { SessionContextPicker(store: store, destination: s, query: contextQuery) { contextPicking = false } }
+                            if store.chatRunning(s) || store.activityFor(s) != nil {
                                 Button("Queue") { store.enqueueDraft() }.disabled(store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).keyboardShortcut(.return, modifiers: [.command, .shift])
                             }
-                            if store.runningID == s.id {
+                            if store.chatRunning(s) {
                                 Button("Stop", role: .destructive) { store.stop() }
                                 Button(store.steering ? "Sending…" : "Steer") { store.steerDraft() }.buttonStyle(.borderedProminent).tint(campGreen)
                                     .disabled(!store.readyToSteer || store.steering || store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).keyboardShortcut(.return, modifiers: .command)
                                     .help(s.provider == "Codex" ? "Add input to the current turn" : "Interrupt the current response and send the new direction")
                             } else {
                                 Button { store.send() } label: { Label("Send", systemImage: "arrow.up") }.buttonStyle(.borderedProminent).tint(campGreen)
-                                    .disabled(store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.loading || store.activity[s.id] != nil).keyboardShortcut(.return, modifiers: .command)
+                                    .disabled(store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.loading || store.activityFor(s) != nil || store.preparingPrompts.contains(s.id)).keyboardShortcut(.return, modifiers: .command)
                             }
                         }
                     }.padding(20)
                 } else { Spacer(); Mascot(size: 120); Text("Choose a session to continue").foregroundStyle(campMuted); Spacer() }
             }.frame(maxWidth: .infinity)
+        }
+        .frame(width:bounds.size.width,height:bounds.size.height)
+        }
+        .task(id: store.selectedID) {
+            pickedChild = nil
+            contextPicking = false
+            if let session=store.selected,session.isCloud {store.loadChildren(session)}
+            else if let session = store.selected, let local = store.executionSource(session) { store.loadChildren(local) }
+            else { store.children = [] }
+        }
+        .onChange(of: store.draft) { _, text in
+            if !contextPicking, let query = sessionMentionQuery(text) { contextQuery = query; contextPicking = true }
+        }
+        .onChange(of: store.children.map(\.id)) { _, ids in
+            if let child = pickedChild, !ids.contains(child.id) { pickedChild = nil }
+        }
+    }
+    private func chatHeader(_ session: CampSession) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .bottom, spacing: 10) {
+                chatHeading(session).fixedSize().frame(height: 30)
+                Spacer(minLength: 8)
+                ModelMenu(store: store, session: session, expanded: true).frame(width: 396)
+                chatActions(session)
+            }
+            VStack(alignment: .trailing, spacing: 8) {
+                HStack { chatHeading(session); Spacer(); chatActions(session) }
+                ModelMenu(store: store, session: session, expanded: true).frame(maxWidth: 396)
+            }
+        }
+    }
+    private func chatHeading(_ session: CampSession) -> some View {
+        HStack(spacing: 7) {
+            ProviderMark(provider: session.provider, size: 16)
+            Text(session.isPlan ? "Implementation" : "Main chat")
+        }.font(.system(size: 11))
+    }
+    private func chatActions(_ session: CampSession) -> some View {
+        HStack(spacing: 4) {
+            if let local = store.shareSource(session) {
+                Button { store.shareSheet = local } label: { CampIconLabel(symbol: "person.2") }
+                    .buttonStyle(.plain).help("Share with Camp").accessibilityLabel("Share with Camp")
+            }
+            if !session.isCloud && !session.isSharedPlan && session.provider != "Planning" {
+                Button { store.permissionSheet = session } label: { CampIconLabel(symbol: "lock.shield") }
+                    .buttonStyle(.plain).help("Permissions").accessibilityLabel("Permissions")
+            }
         }
     }
 }
@@ -862,7 +1895,7 @@ struct PromptQueueView: View {
                     Text("Queued prompts · \(items.count)").font(.system(size: 11, weight: .semibold))
                     Spacer()
                     if store.queuePaused {
-                        Button("Resume queue") { store.resumeQueue() }.disabled(store.runningID != nil || store.activity[session.id] != nil)
+                        Button("Resume queue") { store.resumeQueue() }.disabled(store.runningID != nil || store.activityFor(session) != nil)
                     } else {
                         Button("Pause queue") { store.queuePaused = true }
                     }
@@ -877,8 +1910,8 @@ struct PromptQueueView: View {
                                     if item.state == "needsReview" { Text("Unconfirmed delivery · Check the transcript before resubmitting").foregroundStyle(Color.orange) }
                                     else if item.state == "sending" { Text("Starting…").foregroundStyle(campMuted) }
                                 }
-                                Button { store.editQueued(item) } label: { Image(systemName: "pencil") }.help("Edit queued prompt").disabled(item.state == "sending")
-                                Button { store.removeQueued(item) } label: { Image(systemName: "xmark") }.help("Remove queued prompt").disabled(item.state == "sending")
+                                Button { store.editQueued(item) } label: { CampIconLabel(symbol: "pencil") }.help("Edit queued prompt").disabled(item.state == "sending")
+                                Button { store.removeQueued(item) } label: { CampIconLabel(symbol: "xmark") }.help("Remove queued prompt").disabled(item.state == "sending")
                             }.font(.system(size: 11)).buttonStyle(.plain)
                         }
                     }
@@ -890,136 +1923,252 @@ struct PromptQueueView: View {
 struct ModelMenu: View {
     @ObservedObject var store: CampStore
     let session: CampSession
-    var caps: ModelOption { store.capabilities(session) }
-    var choice: ModelTuning { store.tuning(session) }
-    var effortTitle: String { Self.effortName(choice.effort) }
+    var expanded = false
+    static func effortName(_ value: String) -> String { ModelSettingsMenu.effortName(value) }
+    static func speedName(_ value: String) -> String { ModelSettingsMenu.speedName(value) }
+    var body: some View {
+        ModelSettingsMenu(provider: session.provider, title: session.title, sessionModel: session.model,
+            modelLabel: store.modelLabel(session), models: store.availableModels(session), caps: store.capabilities(session),
+            choice: store.tuning(session), locked: store.conversation(session) != nil, reported: store.reportedSettings(session), expanded: expanded,
+            selectModel: { store.selectModel(session, $0) }, tune: { store.tune(session, effort: $0, speed: $1) })
+    }
+}
+struct ModelSettingsMenu: View {
+    let provider: String
+    let title: String
+    let sessionModel: String
+    let modelLabel: String
+    let models: [ModelOption]
+    let caps: ModelOption
+    let choice: ModelTuning
+    let locked: Bool
+    var reported: ReportedModelSettings? = nil
+    var expanded = false
+    var planningRow = false
+    var context = "Model for the next Camp reply"
+    let selectModel: (String) -> Void
+    let tune: (String?, String?) -> Void
+    var effortTitle: String { reported.map { $0.effort.map(Self.effortName) ?? "Not reported" } ?? Self.effortName(choice.effort) }
+    var speedTitle: String { reported.map { $0.speed.map(Self.speedName) ?? "Speed not reported" } ?? Self.speedName(choice.speed) }
+    var displayedModel: String { reported == nil ? modelLabel : reported?.model ?? "Model not reported" }
     static func effortName(_ value: String) -> String {
         switch value { case "": return "Default"; case "xhigh": return "Extra high"; default: return value.capitalized }
     }
     static func speedName(_ value: String) -> String { value == "ultrafast" ? "Ultra Fast" : value.capitalized }
     var body: some View {
+        if expanded {
+            ViewThatFits(in: .horizontal) {
+                GeometryReader { geometry in
+                    let unit = max(0, geometry.size.width - 16) / 3.6
+                    HStack(alignment: .top, spacing: 8) {
+                        modelField.frame(width: unit * 1.6)
+                        effortField.frame(width: unit)
+                        speedField.frame(width: unit)
+                    }
+                }.frame(minWidth: 396).frame(height: 46)
+                VStack(alignment: .leading, spacing: 8) {
+                    modelField
+                    HStack(alignment: .top, spacing: 8) { effortField; speedField }
+                }.frame(minWidth: 220)
+            }
+        } else { compact }
+    }
+    private var compact: some View {
         VStack(alignment: .leading, spacing: 3) {
-            settingsMenu
-            Text("\(effortTitle) effort · \(Self.speedName(choice.speed))")
-                .font(.system(size: 9)).foregroundStyle(campMuted).lineLimit(1)
-        }
+            if locked {
+                modelLabelView.accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Model settings for \(title)")
+                    .accessibilityValue("\(displayedModel), \(effortTitle) effort, \(speedTitle), current run")
+            } else { settingsMenu }
+            if !planningRow {
+                Text("\(effortTitle) effort · \(speedTitle)")
+                    .font(.system(size: 9)).foregroundStyle(campMuted).lineLimit(1)
+            }
+        }.help("\(provider) · \(displayedModel) · \(effortTitle) effort · \(speedTitle)")
     }
     var settingsMenu: some View {
         Menu {
-            Text("Model for the next Camp reply")
-            Button("Use session model") { store.selectModel(session, "") }
-            if !session.model.isEmpty { Button(session.model) { store.selectModel(session, session.model) } }
-            ForEach((store.modelCatalogs[session.sourceID] ?? []).filter(\.showInPicker)) { option in
-                Button(option.label) { store.selectModel(session, option.id) }
-            }
+            Text(context)
+            modelOptions
             Divider()
-            Menu("Effort · \(effortTitle)") {
-                Text("More reasoning can take longer and use more tokens")
-                Button { store.tune(session, effort: "") } label: { row("Default", checked: choice.effort.isEmpty) }
-                ForEach(caps.efforts, id: \.self) { level in
-                    Button { store.tune(session, effort: level) } label: { row(Self.effortName(level), checked: choice.effort == level) }
-                }
-                if caps.efforts.isEmpty { Text("Effort is not advertised for this model") }
+            Menu("Effort · \(Self.effortName(choice.effort))") {
+                effortOptions
             }
             Menu("Speed · \(Self.speedName(choice.speed))") {
-                Text("Faster modes can use more allowance or credits")
-                ForEach(caps.speeds, id: \.self) { speed in
-                    Button { store.tune(session, speed: speed) } label: { row(Self.speedName(speed), checked: choice.speed == speed) }
-                }
-                if session.provider == "Claude" && !caps.speeds.contains("fast") { Text("Fast requires a supported Opus model") }
+                speedOptions
             }
         } label: {
-            Label(store.modelLabel(session), systemImage: "cpu").font(.system(size: 10)).lineLimit(1)
+            modelLabelView
         }
         .menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true)
-        .disabled(store.runningID == session.id).accessibilityLabel("Model settings for \(session.title)")
-        .accessibilityValue("\(store.modelLabel(session)), \(effortTitle) effort, \(Self.speedName(choice.speed)) speed")
+        .disabled(locked).accessibilityLabel("Model settings for \(title)")
+        .accessibilityValue("\(displayedModel), \(effortTitle) effort, \(speedTitle)")
     }
-    @ViewBuilder func row(_ title: String, checked: Bool) -> some View {
-        if checked { Label(title, systemImage: "checkmark") } else { Text(title) }
+    private var modelEntries: [CampMenuEntry] {
+        var result = [CampMenuEntry(title: "Use session model", action: { selectModel("") })]
+        if !sessionModel.isEmpty && !models.contains(where: { $0.id == sessionModel && ($0.showInPicker || provider == "Claude") }) {
+            result.append(CampMenuEntry(title: sessionModel, action: { selectModel(sessionModel) }))
+        }
+        if provider == "Claude" {
+            result.append(CampMenuEntry(title: "Latest aliases"))
+            result += models.filter { !$0.id.hasPrefix("claude-") && $0.showInPicker }.map(modelEntry)
+            result.append(CampMenuEntry(title: "Model versions"))
+            result += models.filter { $0.id.hasPrefix("claude-") }.map(modelEntry)
+        } else {
+            result.append(CampMenuEntry(title: "Model versions"))
+            result += models.filter(\.showInPicker).map(modelEntry)
+        }
+        return result
     }
-}
-struct SubagentsView: View {
-    @ObservedObject var store: CampStore
-    @State private var picked: ChildSession?
-    @State private var messages: [Message] = []
-    @State private var error = ""
-    var currentChild: ChildSession? { store.children.first { $0.id == picked?.id } ?? picked }
-    var loadKey: String { "\(currentChild?.id ?? ""):\(currentChild?.updated ?? 0)" }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("Subagents (\(store.children.count))").font(.title2); Spacer(); if store.childrenLoading { ProgressView().controlSize(.small) }; Button("Done") { store.showSubagents = false } }
-            Text("\(store.subagentsParent?.title ?? "Session") · Read-only transcripts").foregroundStyle(campMuted).lineLimit(1)
-            HStack(alignment: .top) {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(store.children) { child in
-                            Button { picked = child } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(child.name).fontWeight(.medium)
-                                    Text("\(child.status) · \(child.phase)").foregroundStyle(child.status == "running" ? campGreen : campMuted)
-                                    Text(child.model).font(.caption).foregroundStyle(campMuted)
-                                    Text(child.workflow).font(.caption).foregroundStyle(campMuted)
-                                }.frame(maxWidth: .infinity, alignment: .leading).padding(10).background(picked?.id == child.id ? campGreen.opacity(0.1) : .white).clipShape(RoundedRectangle(cornerRadius: 8))
-                            }.buttonStyle(.plain)
-                        }
-                        if store.children.isEmpty && !store.childrenLoading { Text("No saved subagents for this session").foregroundStyle(campMuted) }
-                    }
-                }.frame(width: 245)
-                Divider()
-                ScrollView { VStack(alignment: .leading, spacing: 18) {
-                    if picked == nil { Text("Select a subagent to read its latest messages").foregroundStyle(campMuted) }
-                    if !error.isEmpty { Text(error) }
-                    ForEach(messages) { MessageView(message: $0) }
-                }.padding(12).frame(maxWidth: .infinity, alignment: .leading) }
-            }
-        }.padding(22).frame(width: 880, height: 620).background(campCream)
-        .task(id: loadKey) {
-            messages = []; error = ""
-            guard let child = currentChild, let parent = store.subagentsParent else { return }
-            do {
-                var value = store.object(parent); value["path"] = child.path; value["sessionID"] = child.sessionID; value["isSubagent"] = true
-                let input = try JSONSerialization.data(withJSONObject: ["session": value, "limit": 120])
-                let result = try JSONDecoder().decode(Transcript.self, from: await Bridge.call("transcript", input: input))
-                if picked?.id == child.id { messages = result.messages }
-            } catch { self.error = error.localizedDescription }
+    private func modelEntry(_ option: ModelOption) -> CampMenuEntry {
+        CampMenuEntry(title: option.label, checked: option.id == modelLabel, action: { selectModel(option.id) })
+    }
+    private var effortEntries: [CampMenuEntry] {
+        var result = [CampMenuEntry(title: "More reasoning can take longer and use more tokens"),
+            CampMenuEntry(title: "Default", checked: choice.effort.isEmpty, action: { tune("", nil) })]
+        result += caps.efforts.map { level in
+            CampMenuEntry(title: Self.effortName(level), checked: choice.effort == level, action: { tune(level, nil) })
+        }
+        if caps.efforts.isEmpty { result.append(CampMenuEntry(title: "Effort is not advertised for this model")) }
+        return result
+    }
+    private var speedEntries: [CampMenuEntry] {
+        var result = [CampMenuEntry(title: "Faster modes can use more allowance or credits")]
+        result += caps.speeds.map { speed in
+            CampMenuEntry(title: Self.speedName(speed), checked: choice.speed == speed, action: { tune(nil, speed) })
+        }
+        if provider == "Claude" && !caps.speeds.contains("fast") { result.append(CampMenuEntry(title: "Fast requires a supported Opus model")) }
+        return result
+    }
+    private var modelOptions: some View { CampMenuEntries(entries: modelEntries) }
+    private var effortOptions: some View { CampMenuEntries(entries: effortEntries) }
+    private var speedOptions: some View { CampMenuEntries(entries: speedEntries) }
+    private var modelField: some View {
+        field("Model") {
+            CampDropdown(title: displayedModel, accessibilityLabel: "Model settings for \(title)", entries: modelEntries)
         }
     }
+    private var effortField: some View {
+        field("Effort") {
+            CampDropdown(title: effortTitle, accessibilityLabel: "Effort for \(title)", entries: effortEntries)
+        }
+    }
+    private var speedField: some View {
+        field("Speed") {
+            CampDropdown(title: speedTitle, accessibilityLabel: "Speed for \(title)", entries: speedEntries)
+        }
+    }
+    private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        CampSettingsField(label, locked: locked) { content() }
+    }
+    private var modelLabelView: some View {
+        HStack(spacing: 5) {
+            if !planningRow { ProviderMark(provider: provider, size: 13, muted: true) }
+            Text(displayedModel).font(.system(size: planningRow ? 9 : 10)).foregroundStyle(campInk).lineLimit(1)
+        }.frame(minHeight: 24)
+    }
 }
-struct MessageView: View {
+// Equatable so a streaming flush redraws only rows whose content changed;
+// each row's attachment closure is new on every pass, so compare its identity.
+struct MessageView: View, Equatable {
     let message: Message
+    var metadata: String? = nil
+    var provider: String? = nil
+    var fontSize: CGFloat = 13
+    var attachmentAccess: AttachmentAccess? = nil
+    nonisolated static func == (a: MessageView, b: MessageView) -> Bool {
+        a.message == b.message && a.metadata == b.metadata && a.provider == b.provider && a.fontSize == b.fontSize && a.attachmentAccess?.id == b.attachmentAccess?.id
+    }
+    private var responseMetadata: String? {
+        guard message.role == "assistant" else { return nil }
+        if let metadata { return metadata }
+        let parts = [provider, message.settingsDescription].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 7) { Image(systemName: message.role == "user" ? "person.crop.circle" : "sparkle"); Text(message.role == "user" ? "You" : "Assistant").fontWeight(.semibold) }.font(.system(size: 11)).foregroundStyle(message.role == "user" ? campMuted : campGreen)
-            Text(verbatim: message.text).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled)
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Image(systemName: message.role == "user" ? "person.crop.circle" : "sparkle")
+                Text("\(Text(message.role == "user" ? message.author ?? "You" : "Assistant").fontWeight(.semibold))\(Text(responseMetadata.map { " · " + $0 } ?? "").font(.system(size: 10)).foregroundColor(campMuted))")
+            }.font(.system(size: 11)).foregroundStyle(message.role == "user" ? campMuted : campGreen)
+            Text((try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text)).font(.system(size: fontSize)).lineSpacing(4).textSelection(.enabled)
                 .lineLimit(nil).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+            if let attachments = message.attachments, !attachments.isEmpty {
+                TranscriptAttachmentList(attachments: attachments, access: attachmentAccess)
+                    .id(attachmentAccess?.id ?? "unavailable")
+            }
         }.padding(message.role == "user" ? 15 : 0).background(message.role == "user" ? Color.white.opacity(0.7) : .clear).clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }
 struct SourcesView: View {
     @ObservedObject var store: CampStore
+    private var location: String { store.sourceTab }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            HStack { Mascot(); VStack(alignment: .leading, spacing: 4) { Text("Bring your sessions to camp").font(.title2); Text("Local folders only · Credentials stay with each CLI").foregroundStyle(campMuted).font(.caption) } }
-            ScrollView { VStack(spacing: 10) { ForEach(store.sources) { s in VStack(alignment: .leading, spacing: 5) { HStack { Text(s.provider + " · " + s.label).fontWeight(.medium); Spacer(); Text(s.count.formatted()).foregroundStyle(campMuted) }; Text(s.root).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).foregroundStyle(campMuted) }.padding(13).background(campCream).clipShape(RoundedRectangle(cornerRadius: 10)) } } }.frame(maxHeight: 280)
-            Text("Add another account’s CODEX_HOME or CLAUDE_CONFIG_DIR folder. Cloud-only chats and unreadable macOS user folders are not imported. A saved chat’s author may differ from the account currently logged into that profile.").font(.system(size: 12)).foregroundStyle(campMuted)
-            HStack { Button("Add profile folder") { store.addSource() }; Spacer(); Button("Done") { store.sourceSheet = false }.keyboardShortcut(.defaultAction) }
-        }.padding(28).frame(width: 600)
+            HStack { Mascot(); VStack(alignment: .leading, spacing: 4) { Text("Bring your sessions to camp").font(.title2); Text(location == "Local" ? "Local folders only · Credentials stay with each CLI" : location == "GitHub" ? "Your GitHub account and repository access" : location == "Defaults" ? "Where new plans run" : "Separate provider sign-ins on your Camp server").foregroundStyle(campMuted).font(.caption) } }
+            CampSegmentedControl(options: [("Local", "Local profiles"), ("Cloud", "Cloud accounts"), ("GitHub", "GitHub"), ("Defaults", "Defaults")], selection: $store.sourceTab).accessibilityLabel("Source location")
+            ScrollView {
+                if location == "Local" {
+                    VStack(alignment: .leading, spacing: 14) {
+                        LocalProfileList(sources: store.sources)
+                        Text("Add another account’s CODEX_HOME or CLAUDE_CONFIG_DIR folder. Cloud-only chats and unreadable macOS user folders are not imported. A saved chat’s author may differ from the account currently logged into that profile.").font(.system(size: 12)).foregroundStyle(campMuted)
+                        if !store.sourceError.isEmpty { Text(store.sourceError).font(.system(size: 12)).foregroundStyle(.orange) }
+                    }
+                } else if location == "Defaults" { ExecutionDefaultsEditor(store: store) }
+                else if location == "Cloud" { CampProviderAccountsView(cloud: store.cloud) }
+                else { CampGitConnectionsView(cloud: store.cloud) }
+            }.frame(maxHeight: .infinity)
+            HStack { if location == "Local" { Button("Add profile folder") { store.addSource() } }; Spacer(); Button("Done") { store.sourceSheet = false }.keyboardShortcut(.defaultAction) }
+        }.padding(28).frame(width: 640, height: 640).background(campCream).foregroundStyle(campInk).tint(campGreen)
     }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    @MainActor static var reopen: (() -> Void)?
+    @MainActor static var prepareToQuit: (() async -> Void)?
+    private var quitting = false
+    @MainActor static func traceShutdown(_ stage: String) {
+        #if CAMP_DEVELOPMENT
+        if ProcessInfo.processInfo.environment["CAMP_DEV_SHUTDOWN_TRACE"] == "1" {
+            try? FileHandle.standardError.write(contentsOf: Data("Camp shutdown: \(stage)\n".utf8))
+        }
+        #endif
+    }
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        MacNoticeDelivery.shared.install()
+        Self.traceShutdown("installed")
+    }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { if !flag { Self.reopen?() }; return true }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        Self.traceShutdown("termination requested")
+        guard !quitting else { return .terminateLater }
+        guard let prepare = Self.prepareToQuit else { return .terminateNow }
+        quitting = true
+        Task {
+            await prepare()
+            Self.traceShutdown("prepared")
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
     func applicationWillTerminate(_ notification: Notification) {
-        if let process = Bridge.activeProcess, process.isRunning { process.terminate() }
+        Self.traceShutdown("terminated")
+        for process in Bridge.activeProcesses.values where process.isRunning { process.terminate() }
     }
 }
 #if !CAMP_TESTING
 @main struct CapybaraCampApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
+    @StateObject private var store = CampStore()
     var body: some Scene {
-        Window("Capybara Camp", id: "camp") { RootView().preferredColorScheme(.light) }
+        Window("Capybara Camp", id: "camp") { RootView(store: store).preferredColorScheme(.light) }
             .windowStyle(.hiddenTitleBar).defaultSize(width: 1370, height: 860)
+            .commands {
+                CommandGroup(after: .appSettings) {
+                    Button("Set up Capybara Camp…") { AppDelegate.reopen?(); store.onboarding.open() }
+                }
+            }
     }
 }
 #endif

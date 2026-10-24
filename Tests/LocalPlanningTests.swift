@@ -1,0 +1,152 @@
+import Foundation
+
+@main struct LocalPlanningTests {
+    @MainActor static func until(_ condition: () -> Bool, line: Int = #line) async throws {
+        for _ in 0..<1000 { if condition() { return }; try await Task.sleep(for: .milliseconds(10)) }
+        preconditionFailure("Planning timed out at line \(line)")
+    }
+    static func source(_ provider: String, root: URL) -> CampSession {
+        CampSession(id: provider, sessionID: provider, provider: provider, sourceID: provider, sourceLabel: provider,
+            root: root.path, title: provider, cwd: root.path, updated: 1, path: "", accountID: "", archived: false, model: provider + "-model")
+    }
+    @MainActor static func configured(_ directory: URL, scenario: String = "planning", trace: URL) -> LocalPlanning {
+        let engine = LocalPlanning(directory: directory, makeProcess: { fixtureProcess(scenario, [trace.path]) })
+        engine.prepare = { _, _ in [SessionContext(id: "context", title: "Context", revision: "1", messages: [Message(id: "m", role: "assistant", text: "Pinned context")])] }
+        return engine
+    }
+    @MainActor static func main() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("camp-plan-tests-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let planners = [LocalPlanner(session: source("Codex", root: root), model: "first", tuning: ModelTuning(effort: "high", speed: "fast")),
+                        LocalPlanner(session: source("Claude", root: root), model: "second", tuning: ModelTuning(effort: "low", speed: "standard"))]
+        let trace = root.appendingPathComponent("trace")
+        let engine = configured(root.appendingPathComponent("state"), trace: trace)
+        let id = engine.create(planners: planners)!
+        let unchanged = engine.ticket(id)
+        precondition(engine.edit(id) { _ in })
+        precondition(engine.modifyTicket(id) { _ in })
+        precondition(engine.ticket(id) == unchanged, "Opening an unchanged draft changed its saved identity")
+        engine.edit(id) { $0.brief = "A bounded plan" }
+        precondition(!engine.edit(id) { $0.brief = String(repeating: "x", count: 8193) })
+        precondition(engine.ticket(id)?.current.brief == "A bounded plan")
+        precondition(engine.edit(id) { $0.brief = "A bounded plan" })
+        precondition(engine.error.isEmpty, "A valid unchanged draft retained a stale error")
+        engine.start(id)
+        precondition(engine.ticket(id)?.current.state == "draft")
+        precondition(!FileManager.default.fileExists(atPath: trace.path), "Strict token limits must fail before launching")
+        engine.edit(id) { $0.budgetPolicy = "calls" }
+        engine.start(id)
+        try await until { engine.ticket(id)?.current.steps.prefix(2).allSatisfy { $0.state == "running" } == true }
+        engine.edit(id) { $0.planners[0].model = "must-not-change" }
+        engine.pause(id)
+        try await until { engine.activeCount == 0 }
+        precondition(engine.ticket(id)?.current.completedCount == 2)
+        precondition(engine.ticket(id)?.current.state == "paused")
+        engine.start(id)
+        try await until { engine.ticket(id)?.current.state == "ready" }
+        let result = engine.ticket(id)!.current
+        precondition(result.steps.count == 5 && result.completedCount == 5)
+        precondition(result.planners[0].model == "first")
+        precondition(result.steps.allSatisfy { $0.usage.inputTokens == 123 && $0.usage.outputTokens == 45 })
+        let records = try String(contentsOf: trace, encoding: .utf8).split(separator: "\n").map { try JSONSerialization.jsonObject(with: Data($0.utf8)) as! [String: String] }
+        precondition(records.count == 5)
+        precondition(records.filter { $0["phase"] == "draft" }.allSatisfy { !$0["prompt"]!.contains("Codex draft first") })
+        precondition(records.filter { $0["phase"] == "review" }.allSatisfy { $0["prompt"]!.contains("Codex draft first") && $0["prompt"]!.contains("Claude draft second") })
+        precondition(records.first { $0["phase"] == "combined" }!["prompt"]!.contains("Preserve unresolved disagreements"))
+        precondition(Bridge.activeProcesses.isEmpty)
+        let restored = configured(root.appendingPathComponent("state"), trace: trace)
+        precondition(restored.ticket(id) == engine.ticket(id))
+        let permissions = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("state/local-plans.json").path)
+        precondition(permissions[.posixPermissions] as? Int == 0o600)
+
+        // A restart fences old callbacks without erasing the original version.
+        let restartID = engine.create(planners: planners)!
+        engine.edit(restartID) { $0.brief = "Restart test"; $0.budgetPolicy = "calls" }
+        engine.start(restartID)
+        try await until { engine.ticket(restartID)?.current.steps.prefix(2).allSatisfy { $0.state == "running" } == true }
+        engine.restart(restartID)
+        try await until { engine.activeCount == 0 }
+        precondition(engine.ticket(restartID)?.versions.count == 2)
+        precondition(engine.ticket(restartID)?.current.state == "draft")
+        precondition(engine.ticket(restartID)?.current.steps.isEmpty == true)
+        precondition(engine.ticket(restartID)?.versions[0].state == "cancelled")
+        engine.start(restartID)
+        try await until { engine.ticket(restartID)?.current.state == "ready" }
+        precondition(engine.ticket(restartID)?.versions[0].state == "cancelled")
+        precondition(engine.ticket(restartID)?.versions[1].completedCount == 5)
+
+        // A started process that closes without a terminal event is not retried.
+        let unknown = configured(root.appendingPathComponent("unknown"), scenario: "started-only", trace: trace)
+        let uncertainID = unknown.create(planners: planners)!
+        unknown.edit(uncertainID) { $0.brief = "Unknown outcome"; $0.budgetPolicy = "calls" }
+        unknown.start(uncertainID)
+        try await until { unknown.activeCount == 0 && unknown.ticket(uncertainID)?.current.state == "needs_review" }
+        let old = unknown.ticket(uncertainID)
+        unknown.start(uncertainID)
+        precondition(unknown.ticket(uncertainID) == old && unknown.activeCount == 0)
+        unknown.restart(uncertainID)
+        precondition(unknown.ticket(uncertainID) == old)
+        unknown.restart(uncertainID, reviewedUnknown: true)
+        precondition(unknown.ticket(uncertainID)?.current.number == 2)
+
+        // Crash recovery treats reserved and started work conservatively.
+        var crashed = engine.ticket(id)!
+        crashed.versions[0].state = "running"
+        crashed.versions[0].steps[0].state = "starting"
+        let crashDirectory = root.appendingPathComponent("crash")
+        try FileManager.default.createDirectory(at: crashDirectory, withIntermediateDirectories: true)
+        try JSONEncoder().encode([crashed]).write(to: crashDirectory.appendingPathComponent("local-plans.json"))
+        let recovery = configured(crashDirectory, trace: trace)
+        precondition(recovery.ticket(id)?.current.state == "needs_review")
+        precondition(recovery.ticket(id)?.current.steps[0].state == "unknown")
+
+        let store = CampStore(stateDirectory: root.appendingPathComponent("store"))
+        store.sessions = planners.map(\.session)
+        store.newPlan()
+        let created = store.selectedID!
+        store.applyImport(ImportResult(sessions: planners.map(\.session), sources: [], errors: []))
+        precondition(store.sessions.contains { $0.id == created && $0.provider == "Planning" })
+        store.setRecentType("Planning")
+        precondition(store.recentSessions.map(\.id) == [created])
+        for (index, planner) in planners.enumerated() {
+            let singleTrace = root.appendingPathComponent("single-\(index)-trace")
+            let single = configured(root.appendingPathComponent("single-\(index)"), trace: singleTrace)
+            let singleID = single.create(planners: [planner], mode: .single)!
+            single.edit(singleID) { $0.brief = "One provider plan"; $0.budgetPolicy = "calls" }
+            single.start(singleID)
+            try await until { single.ticket(singleID)?.current.state == "ready" }
+            let ready = single.ticket(singleID)!
+            precondition(ready.current.steps.count == 1 && ready.current.completedCount == 1 && ready.current.workflow == .single)
+            let calls = try String(contentsOf: singleTrace, encoding: .utf8).split(separator: "\n")
+            precondition(calls.count == 1, "Single planning made an extra provider call")
+            let restoredSingle = configured(root.appendingPathComponent("single-\(index)"), trace: singleTrace)
+            precondition(restoredSingle.ticket(singleID) == ready)
+            let executor = planners[1-index]
+            single.configureExecutor(singleID, source: executor.session, model: executor.model, tuning: executor.tuning)
+            let choice = single.ticket(singleID)!.executorChoices![executor.session.id]!
+            let context = ExecutionContext(fingerprint: String(repeating: "a", count: 64), cwd: choice.session.cwd, profile: choice.session.root, provider: choice.session.provider, permissionSummary: "Fixture")
+            precondition(single.approveImplementation(singleID, expectedVersion: 1, executor: choice, context: context))
+            precondition(single.ticket(singleID)!.implementation!.initialPrompt.contains(ready.current.steps[0].output))
+            precondition(single.ticket(singleID)!.implementation!.executor.session.provider != planner.session.provider)
+            single.restart(singleID)
+            single.edit(singleID) { $0.mode = .comparison; $0.planners = planners }
+            precondition(single.ticket(singleID)!.current.workflow == .comparison)
+            precondition(single.ticket(singleID)!.versions[0].workflow == .single && single.ticket(singleID)!.versions[0].steps.count == 1)
+            single.start(singleID)
+            try await until { single.ticket(singleID)?.current.state == "ready" }
+            precondition(single.ticket(singleID)!.current.completedCount == 5 && single.ticket(singleID)!.versions[0].steps.count == 1)
+        }
+        // Missing mode in old data retains comparison behavior and its output.
+        let legacyFolder = root.appendingPathComponent("legacy")
+        try FileManager.default.createDirectory(at: legacyFolder, withIntermediateDirectories: true)
+        var legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode([engine.ticket(id)!])) as! [[String: Any]]
+        var versions = legacy[0]["versions"] as! [[String: Any]]
+        versions[0].removeValue(forKey: "mode"); legacy[0]["versions"] = versions
+        try JSONSerialization.data(withJSONObject: legacy).write(to: legacyFolder.appendingPathComponent("local-plans.json"))
+        let migrated = configured(legacyFolder, trace: trace)
+        precondition(migrated.ticket(id)?.current.workflow == .comparison && migrated.ticket(id)?.current.steps == result.steps)
+        precondition(Bridge.activeProcesses.isEmpty)
+        print("PASS: single and comparison planning, independent implementation choice, preserved old history, settings, cancellation and recovery")
+    }
+}

@@ -1,0 +1,84 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: camp-api
+spec:
+  selector:
+    app: camp-api
+  ports:
+    - name: http
+      port: 8096
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: camp-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: camp-api
+  template:
+    metadata:
+      labels:
+        app: camp-api
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: camp-server
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          envFrom:
+            - configMapRef:
+                name: camp-config
+          env:
+            # Collect before the 256Mi container limit rather than being OOM-killed.
+            - name: GOMEMLIMIT
+              value: 200MiB
+            - name: CAMP_DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_DATABASE_URL}
+            - name: CAMP_AUTH_SECRET
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_AUTH_SECRET}
+            - name: CAMP_RESEND_API_KEY
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_RESEND_API_KEY}
+            - name: CAMP_PROVIDER_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_PROVIDER_ENCRYPTION_KEY, optional: true}
+            - name: CAMP_GITHUB_CLIENT_ID
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_GITHUB_CLIENT_ID, optional: true}
+            - name: CAMP_GITHUB_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_GITHUB_CLIENT_SECRET, optional: true}
+            - name: CAMP_GITHUB_APP_SLUG
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_GITHUB_APP_SLUG, optional: true}
+            - name: CAMP_GITHUB_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_GITHUB_ENCRYPTION_KEY, optional: true}
+            - name: CAMP_GITHUB_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef: {name: camp-secrets, key: CAMP_GITHUB_WEBHOOK_SECRET, optional: true}
+          ports:
+            - name: http
+              containerPort: 8096
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+          readinessProbe:
+            httpGet: {path: /ready, port: http}
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {cpu: "1", memory: 256Mi}

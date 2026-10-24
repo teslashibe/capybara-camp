@@ -1,0 +1,535 @@
+package database
+
+import (
+	"bytes"
+	"context"
+	"io/fs"
+	"net/url"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
+)
+
+func TestMigrationPreservesExistingIdentityData(t *testing.T) {
+	raw := os.Getenv("CAMP_TEST_DATABASE_URL")
+	if raw == "" {
+		t.Skip("CAMP_TEST_DATABASE_URL required")
+	}
+	ctx := context.Background()
+	admin, err := Open(ctx, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := "camp_upgrade_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err = admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		admin.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, err := admin.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE")
+		admin.Close()
+		if err != nil {
+			t.Error(err)
+		}
+	})
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Set("search_path", schema)
+	u.RawQuery = q.Encode()
+	pool, err := Open(ctx, u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	db := stdlib.OpenDBFromPool(pool)
+	defer db.Close()
+	files, err := fs.Sub(migrations, "migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := goose.NewProvider(goose.DialectPostgres, db, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.UpTo(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO users(id,email,display_name) VALUES($1,'upgrade@example.com','Preserved user')`, id); err != nil {
+		t.Fatal(err)
+	}
+	if Ready(ctx, pool) == nil {
+		t.Fatal("old schema declared compatible")
+	}
+	if _, err = provider.UpTo(ctx, 6); err != nil {
+		t.Fatal(err)
+	}
+	camp, project, plan := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO camps(id,name) VALUES($1,'Migration fixture')`, camp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO projects(id,camp_id,name) VALUES($1,$2,'Preserved project')`, project, camp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO planning_tickets(id,camp_id,project_id,creator_user_id,title) VALUES($1,$2,$3,$4,'Saved plan')`, plan, camp, project, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO planning_versions(plan_id,version,state,brief,sources,budget_policy) VALUES($1,1,'ready','Retain the old comparison','[]','calls')`, plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.UpTo(ctx, 12); err != nil {
+		t.Fatal(err)
+	}
+	account, installation, connection := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	credentialFixture := []byte("encrypted-fixture-preserved-by-upgrade")
+	if _, err = pool.Exec(ctx, `INSERT INTO provider_accounts(id,owner_user_id,provider,label) VALUES($1,$2,'Codex','Preserved account')`, account, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO provider_installations(id,account_id,owner_user_id,location,state,epoch,credential_revision,encrypted_credentials) VALUES($1,$2,$3,'cloud','connected',3,4,$4)`, installation, account, id, credentialFixture); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO git_connections(id,owner_user_id,github_user_id,github_login,state,epoch,encrypted_credentials) VALUES($1,$2,123,'preserved-user','connected',5,$3)`, connection, id, credentialFixture); err != nil {
+		t.Fatal(err)
+	}
+	device, profile, session, request := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO devices(id,user_id,name,token_hash,expires_at) VALUES($1,$2,'Preserved Mac',$3,now()+interval '1 day')`, device, id, bytes.Repeat([]byte{17}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO profiles(id,owner_user_id,owner_device_id,provider,local_id,label) VALUES($1,$2,$3,'Codex',$4,'Preserved profile')`, profile, id, device, strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO sessions(id,camp_id,project_id,profile_id,owner_user_id,owner_device_id,local_session_id,title,state,stage,shared) VALUES($1,$2,$3,$4,$5,$6,'preserved-session','Preserved session','idle','Ready',false)`, session, camp, project, profile, id, device); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO planning_participants(plan_id,version,slot,session_id,profile_id,owner_user_id,owner_device_id,permission_revision,provider,model,effort,speed) VALUES($1,1,0,$2,$3,$4,$5,1,'Codex','fixture','high','standard')`, plan, session, profile, id, device); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO prompt_requests(id,camp_id,session_id,requester_user_id,owner_user_id,owner_device_id,permission_revision,prompt,model,effort,speed,state) VALUES($1,$2,$3,$4,$4,$5,1,'Preserved queued prompt','fixture-model','high','standard','queued')`, request, camp, session, id, device); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.UpTo(ctx, 16); err != nil {
+		t.Fatal(err)
+	}
+	workspace := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO ticket_workspaces(id,camp_id,session_id,project_id,owner_user_id,provider_account_id,provider_installation_id,provider_epoch,git_connection_id,git_epoch,github_user_id,github_login,github_installation_id,repository_id,repository_name,requested_ref,base_commit,branch,purpose,source_revision,project_revision,state)
+ VALUES($1,$2,$3,$4,$5,$6,$7,3,$8,5,123,'preserved-user',7,5,'fixture/repo','main',$9,$10,'planning',1,1,'ready')`, workspace, camp, session, project, id, account, installation, connection, strings.Repeat("a", 40), "camp/"+session+"/"+workspace); err != nil {
+		t.Fatal(err)
+	}
+	controlID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO request_controls(id,request_id,provider_id,kind,input_hash,accepted_text,state) VALUES($1,$2,$4,'steer',$3,'Preserved direction','resolved')`, controlID, request, bytes.Repeat([]byte{19}, 32), controlID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.UpTo(ctx, 20); err != nil {
+		t.Fatal(err)
+	}
+	transfer := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO session_transfers(id,camp_id,session_id,owner_user_id,source_location,source_epoch,source_revision,source_transcript_revision,source_permission_revision,target_location,target_device_id,payload_sha256,review_sha256,payload_bytes,uploaded_bytes,state) VALUES($1,$2,$3,$4,'local',1,1,0,1,'local',$5,$6,$7,2,2,'ready')`, transfer, camp, session, id, device, strings.Repeat("a", 64), strings.Repeat("b", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO transfer_chunks(transfer_id,ordinal,sha256,size,encrypted_data) VALUES($1,0,$2,2,$3)`, transfer, strings.Repeat("c", 64), bytes.Repeat([]byte{18}, 30)); err != nil {
+		t.Fatal(err)
+	}
+	if Ready(ctx, pool) == nil {
+		t.Fatal("schema 20 accepted without transfer workspace bindings")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal("repeated migration failed", err)
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 39); err != nil {
+		t.Fatal(err)
+	}
+	// Schema 39 cannot be removed while bytes or message references survive.
+	if _, err = pool.Exec(ctx, `INSERT INTO transcript_attachment_blobs(camp_id,parent_session_id,session_id,sha256,byte_count,encrypted_body,created_at) VALUES($1,$2,$2,$3,1,$4,now()-interval '30 days')`, camp, session, strings.Repeat("e", 64), bytes.Repeat([]byte{1}, 29)); err != nil {
+		t.Fatal(err)
+	}
+	// Schema 41 backfills publication from retained message references.
+	published := strings.Repeat("f", 64)
+	if _, err = pool.Exec(ctx, `INSERT INTO transcript_attachment_blobs(camp_id,parent_session_id,session_id,sha256,byte_count,encrypted_body) VALUES($1,$2,$2,$3,1,$4)`, camp, session, published, bytes.Repeat([]byte{1}, 29)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO messages(session_id,local_id,ordinal) VALUES($1,'published-probe',9998)`, session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO message_revisions(session_id,local_id,revision,role,text,attachments) VALUES($1,'published-probe',1,'user','',jsonb_build_array(jsonb_build_object('id','a:0','state','embedded','sha256',$2::text)))`, session, published); err != nil {
+		t.Fatal(err)
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
+	var unreferencedPublished, referencedPublished bool
+	if err = pool.QueryRow(ctx, `SELECT bool_or(published) FILTER(WHERE sha256=$1),bool_or(published) FILTER(WHERE sha256=$2) FROM transcript_attachment_blobs`, strings.Repeat("e", 64), published).Scan(&unreferencedPublished, &referencedPublished); err != nil || unreferencedPublished || !referencedPublished {
+		t.Fatal("Publication backfill was wrong", unreferencedPublished, referencedPublished, err)
+	}
+	for _, sql := range []string{`DELETE FROM message_revisions WHERE local_id='published-probe'`, `DELETE FROM messages WHERE local_id='published-probe'`} {
+		if _, err = pool.Exec(ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var freshUploadWindow bool
+	if err = pool.QueryRow(ctx, `SELECT bool_and(last_uploaded_at > now()-interval '1 minute') FROM transcript_attachment_blobs`).Scan(&freshUploadWindow); err != nil || !freshUploadWindow {
+		t.Fatal("Existing upload did not receive a new retention window", err)
+	}
+	if _, err = provider.DownTo(ctx, 38); err == nil {
+		t.Fatal("Downgrade discarded attachment bytes")
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM transcript_attachment_blobs`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO messages(session_id,local_id,ordinal) VALUES($1,'attachment-probe',9999);`, session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO message_revisions(session_id,local_id,revision,role,text,attachments) VALUES($1,'attachment-probe',1,'user','', '[{"id":"a:0"}]')`, session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 38); err == nil {
+		t.Fatal("Downgrade discarded attachment provenance")
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM message_revisions WHERE local_id='attachment-probe'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM messages WHERE local_id='attachment-probe'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 38); err != nil {
+		t.Fatal("Empty attachment schema could not downgrade", err)
+	}
+	if Ready(ctx, pool) == nil {
+		t.Fatal("Schema 38 declared ready for attachment-aware writers")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
+	var transferCount int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM session_transfers WHERE id=$1 AND state='ready' AND base_commit IS NULL AND source_branch IS NULL AND file_count IS NULL`, transfer).Scan(&transferCount); err != nil || transferCount != 1 {
+		t.Fatal("migration lost or invented transfer review metadata", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE session_transfers SET base_commit=$2,remote_base_commit=$3,source_branch='fixture',file_count=0 WHERE id=$1`, transfer, strings.Repeat("a", 40), strings.Repeat("b", 40)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 37); err == nil {
+		t.Fatal("Downgrade discarded unpublished commit ancestry")
+	}
+	if Ready(ctx, pool) == nil {
+		t.Fatal("Partially downgraded attachment schema declared ready")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var remoteBase string
+	if err = pool.QueryRow(ctx, `SELECT remote_base_commit FROM session_transfers WHERE id=$1`, transfer).Scan(&remoteBase); err != nil || remoteBase != strings.Repeat("b", 40) {
+		t.Fatal("Remote ancestry lost", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE session_transfers SET base_commit=NULL,remote_base_commit=NULL,source_branch=NULL,file_count=NULL WHERE id=$1`, transfer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE ticket_workspaces SET transfer_id=$2,remote_base_commit=$3 WHERE id=$1`, workspace, transfer, strings.Repeat("b", 40)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 37); err == nil {
+		t.Fatal("Downgrade discarded retained workspace ancestry")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE ticket_workspaces SET transfer_id=NULL,remote_base_commit=NULL WHERE id=$1`, workspace); err != nil {
+		t.Fatal(err)
+	}
+	var chunk []byte
+	if err = pool.QueryRow(ctx, `SELECT encrypted_data FROM transfer_chunks WHERE transfer_id=$1`, transfer).Scan(&chunk); err != nil || !bytes.Equal(chunk, bytes.Repeat([]byte{18}, 30)) {
+		t.Fatal("migration changed stored chunks", err)
+	}
+	var unrecorded bool
+	if err = pool.QueryRow(ctx, `SELECT execution_location IS NULL AND execution_epoch IS NULL AND execution_workspace_id IS NULL FROM planning_participants WHERE plan_id=$1`, plan).Scan(&unrecorded); err != nil || !unrecorded {
+		t.Fatal("migration invented a historical execution location", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE planning_participants SET execution_epoch=1 WHERE plan_id=$1`, plan); err == nil {
+		t.Fatal("partial execution binding passed its constraint")
+	}
+	var resolution string
+	if err = pool.QueryRow(ctx, `SELECT resolution FROM request_controls WHERE id=$1`, controlID).Scan(&resolution); err != nil || resolution != "accepted" {
+		t.Fatal("control resolution migration lost accepted direction", resolution, err)
+	}
+	var preparedState, preparedCommit string
+	if err = pool.QueryRow(ctx, `SELECT state,base_commit FROM ticket_workspaces WHERE id=$1`, workspace).Scan(&preparedState, &preparedCommit); err != nil || preparedState != "ready" || preparedCommit != strings.Repeat("a", 40) {
+		t.Fatal("scheduling migration lost prepared checkout", err)
+	}
+	var name string
+	if err = pool.QueryRow(ctx, `SELECT display_name FROM users WHERE id=$1`, id).Scan(&name); err != nil || name != "Preserved user" {
+		t.Fatal("identity data lost", err)
+	}
+	var mode, brief string
+	var limit int
+	if err = pool.QueryRow(ctx, `SELECT mode,brief,call_limit FROM planning_versions WHERE plan_id=$1 AND version=1`, plan).Scan(&mode, &brief, &limit); err != nil || mode != "comparison" || limit != 5 || brief != "Retain the old comparison" {
+		t.Fatal("planning migration lost existing history", err)
+	}
+	var credentials []byte
+	var epoch, revision int64
+	if err = pool.QueryRow(ctx, `SELECT encrypted_credentials,epoch,credential_revision FROM provider_installations WHERE id=$1`, installation).Scan(&credentials, &epoch, &revision); err != nil || !bytes.Equal(credentials, credentialFixture) || epoch != 3 || revision != 4 {
+		t.Fatal("workspace migration changed provider credentials", err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT encrypted_credentials,epoch FROM git_connections WHERE id=$1`, connection).Scan(&credentials, &epoch); err != nil || !bytes.Equal(credentials, credentialFixture) || epoch != 5 {
+		t.Fatal("workspace migration changed Git credentials", err)
+	}
+	var location, requestMode, prompt string
+	if err = pool.QueryRow(ctx, `SELECT execution_location,execution_epoch FROM sessions WHERE id=$1`, session).Scan(&location, &epoch); err != nil || location != "local" || epoch != 1 {
+		t.Fatal("session migrated away from Local", err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT execution_location,execution_epoch,execution_mode,prompt FROM prompt_requests WHERE id=$1`, request).Scan(&location, &epoch, &requestMode, &prompt); err != nil || location != "local" || epoch != 1 || requestMode != "chat" || prompt != "Preserved queued prompt" {
+		t.Fatal("queued request changed during migration", err)
+	}
+	var unbound bool
+	if err = pool.QueryRow(ctx, `SELECT history_sha256 IS NULL FROM session_transfers WHERE id=$1`, transfer).Scan(&unbound); err != nil || !unbound {
+		t.Fatal("Migration invented a history verification", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE session_transfers SET history_sha256=$2 WHERE id=$1`, transfer, strings.Repeat("d", 64)); err != nil {
+		t.Fatal(err)
+	}
+	exportID := uuid.NewString()
+	localHandoff := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO transfer_handoffs(id,transfer_id,camp_id,session_id,owner_user_id,source_device_id,local_profile_id,local_session_id,local_purpose,local_receipt_sha256,local_transcript_revision)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,'planning',$9,0)`, localHandoff, transfer, camp, session, id, device, profile, uuid.NewString(), strings.Repeat("f", 64)); err != nil {
+		t.Fatal(err)
+	}
+	continuedID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `UPDATE transfer_handoffs SET state='committed',claim_id=$2,claim_device_id=$3,ack_hash=$4,
+        commit_nonce=$2,commit_permissions='{}',commit_approved=false,commit_requested_at=now(),commit_hash=$4,execution_epoch=2,
+        local_provider_session_id=$5 WHERE id=$1`, localHandoff, uuid.NewString(), device, bytes.Repeat([]byte{25}, 32), continuedID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 36); err == nil {
+		t.Fatal("Downgrade discarded provider continuation identity")
+	}
+	// Empty newer migrations may have rolled back before the retained identity.
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal("Refused continuation downgrade changed readiness", err)
+	}
+	var continued string
+	if err = pool.QueryRow(ctx, `SELECT local_provider_session_id FROM transfer_handoffs WHERE id=$1`, localHandoff).Scan(&continued); err != nil || continued != continuedID {
+		t.Fatal("Continuation identity lost", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE transfer_handoffs SET local_provider_session_id=NULL WHERE id=$1`, localHandoff); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE prompt_requests SET execution_epoch=2,stream_seq=1 WHERE id=$1`, request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 36); err == nil {
+		t.Fatal("Downgrade discarded unbound continuation stream")
+	}
+	if _, err = pool.Exec(ctx, `UPDATE prompt_requests SET execution_epoch=1,stream_seq=0 WHERE id=$1`, request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 34); err == nil {
+		t.Fatal("Downgrade discarded local destination receipt")
+	}
+	// Newer empty migrations can roll back before the retained receipt refuses.
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal("Refused local destination downgrade changed readiness", err)
+	}
+	var receipt string
+	if err = pool.QueryRow(ctx, `SELECT local_receipt_sha256 FROM transfer_handoffs WHERE id=$1`, localHandoff).Scan(&receipt); err != nil || receipt != strings.Repeat("f", 64) {
+		t.Fatal("Local receipt lost", err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM transfer_handoffs WHERE id=$1`, localHandoff); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 34); err != nil {
+		t.Fatal("Empty local handoff downgrade", err)
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal("Local handoff reapply", err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO workspace_exports(id,camp_id,session_id,owner_user_id,device_id,workspace_id,workspace_revision,source_epoch,source_revision,transcript_revision,permission_revision,kind,paths) VALUES($1,$2,$3,$4,$5,$6,1,1,1,0,1,'inspect','[]')`, exportID, camp, session, id, device, workspace); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO workspace_export_git_grants(export_id,device_id,state) VALUES($1,$2,'closed')`, exportID, device); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 35); err == nil {
+		t.Fatal("Downgrade discarded export grant replay fence")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal("Reapply empty continuation migration", err)
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal("Refused grant downgrade changed readiness", err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM workspace_export_git_grants WHERE export_id=$1`, exportID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 33); err == nil {
+		t.Fatal("Downgrade discarded workspace exports")
+	}
+	var exportState string
+	if err = pool.QueryRow(ctx, `SELECT state FROM workspace_exports WHERE id=$1`, exportID).Scan(&exportState); err != nil || exportState != "pending" {
+		t.Fatal("Export changed on refused downgrade", err)
+	}
+	// Newer empty migrations may have rolled back before the retained export
+	// blocked schema 34. Reapply them before checking this binary's readiness.
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal("Rejected export downgrade changed readiness", err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM workspace_exports WHERE id=$1`, exportID); err != nil {
+		t.Fatal(err)
+	}
+	// An approval remains durable even when an older build is restored.
+	approval := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO planning_execution_approvals(id,camp_id,plan_id,plan_version,plan_revision,plan_sha256,creator_user_id,owner_user_id,owner_device_id,session_id,profile_id,session_revision,transcript_revision,permission_revision,provider,model,effort,speed,execution_location,execution_epoch,permissions,prompt) VALUES($1,$2,$3,1,1,$4,$5,$5,$6,$7,$8,1,0,1,'Codex','fixture','high','standard','local',1,'{}','Preserved execution approval')`, approval, camp, plan, strings.Repeat("a", 64), id, device, session, profile); err != nil {
+		t.Fatal(err)
+	}
+	implementation := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO planning_implementations(id,approval_id,camp_id,plan_id,plan_version,provider_session_id) VALUES($1,$2,$3,$4,1,'retained-provider-session')`, implementation, approval, camp, plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE planning_execution_approvals SET state='dispatched' WHERE id=$1`, approval); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 32); err == nil {
+		t.Fatal("Downgrade discarded an implementation conversation")
+	}
+	var retainedIdentity string
+	if err = pool.QueryRow(ctx, `SELECT provider_session_id FROM planning_implementations WHERE id=$1`, implementation).Scan(&retainedIdentity); err != nil || retainedIdentity != "retained-provider-session" {
+		t.Fatal("Implementation identity changed on refused downgrade", err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM planning_implementations WHERE id=$1`, implementation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE planning_execution_approvals SET state='pending' WHERE id=$1`, approval); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 31); err == nil {
+		t.Fatal("Downgrade discarded implementation approval")
+	}
+	var retainedPrompt string
+	if err = pool.QueryRow(ctx, `SELECT prompt FROM planning_execution_approvals WHERE id=$1`, approval).Scan(&retainedPrompt); err != nil || retainedPrompt != "Preserved execution approval" {
+		t.Fatal("Approval changed during refused downgrade", err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM planning_execution_approvals WHERE id=$1`, approval); err != nil {
+		t.Fatal(err)
+	}
+	// Empty implementation tables can roll back without affecting prior histories.
+
+	space, observation := uuid.NewString(), uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO memory_spaces(id,camp_id,project_id,owner_user_id) VALUES($1,$2,$3,$4)`, space, camp, project, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO memory_observations(id,camp_id,space_id,creator_user_id,source_session_id,transcript_revision,permission_revision,message_ids,title,content,content_hash) VALUES($1,$2,$3,$4,$5,1,1,ARRAY['fixture'],'Saved memory','Retained content',$6)`, observation, camp, space, id, session, strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
+	job := uuid.NewString()
+	if _, err = pool.Exec(ctx, `INSERT INTO memory_jobs(id,camp_id,space_id,creator_user_id,provider,model,effort,speed,location,profile_id,owner_device_id,observation_ids,memory_refs) VALUES($1,$2,$3,$4,'Codex','fixture','','standard','local',$5,$6,ARRAY[$7]::uuid[],'[]')`, job, camp, space, id, profile, device, observation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 30); err == nil {
+		t.Fatal("Downgrade discarded memory jobs")
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM memory_jobs WHERE id=$1`, job); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 29); err == nil {
+		t.Fatal("Downgrade discarded memory observations")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal("Rejected memory downgrade changed schema readiness", err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM memory_observations WHERE id=$1`, observation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM memory_spaces WHERE id=$1`, space); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 25); err != nil {
+		t.Fatal("Empty planning-import downgrade failed", err)
+	}
+	if _, err = provider.Down(ctx); err == nil {
+		t.Fatal("Downgrade discarded verified transfer history")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal("Planning-import migration could not be reapplied", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE planning_versions SET import_snapshot='{"state":"ready","local_sources":[],"steps":[]}' WHERE plan_id=$1`, plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO planning_imports(camp_id,owner_user_id,source_id,plan_id,input_sha256) VALUES($1,$2,$3,$4,$5)`, camp, id, strings.Repeat("e", 64), plan, bytes.Repeat([]byte{21}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 26); err != nil {
+		t.Fatal("Empty quoted-context rollback failed", err)
+	}
+	if _, err = provider.Down(ctx); err == nil {
+		t.Fatal("Downgrade discarded imported planning history")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE planning_versions SET quoted_sources='[{}]' WHERE plan_id=$1`, plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 26); err == nil {
+		t.Fatal("Downgrade discarded carried quoted context")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO planning_imported_implementations(id,camp_id,plan_id,plan_version,ordinal,source_id,session_id,transcript_revision,message_count,provider,state,details,attempt_count) VALUES($1,$2,$3,1,1,$4,$5,0,0,'Codex','approved','{}',0)`, uuid.NewString(), camp, plan, strings.Repeat("f", 64), session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE sessions SET history_only=true,state='idle',allow_requests=false,external_owner=false WHERE id=$1`, session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 28); err == nil {
+		t.Fatal("Downgrade discarded read-only history protections")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal("Rejected history downgrade changed schema readiness", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE sessions SET history_only=false WHERE id=$1`, session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.DownTo(ctx, 28); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = provider.Down(ctx); err == nil {
+		t.Fatal("Downgrade discarded imported implementation history")
+	}
+	if err = Migrate(ctx, u.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err = Ready(ctx, pool); err != nil {
+		t.Fatal("Rejected downgrade changed schema readiness", err)
+	}
+}
